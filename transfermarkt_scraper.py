@@ -46,13 +46,13 @@ EQUIPOS_LALIGA = [
     ("rcd-mallorca",           237,  "RCD Mallorca"),
     ("sevilla-fc",             368,  "Sevilla FC"),
     ("girona-fc",              12321,"Girona FC"),
-    ("ud-las-palmas",          472,  "UD Las Palmas"),
+    ("real-oviedo",          2497,  "Real Oviedo"),
     ("deportivo-alaves",       1108, "Deportivo Alaves"),
     ("rayo-vallecano",         367,  "Rayo Vallecano"),
     ("getafe-cf",              3709, "Getafe CF"),
     ("osasuna",                331,  "Osasuna"),
-    ("cd-leganes",             1244, "CD Leganes"),
-    ("real-valladolid-cf",     366,  "Real Valladolid"),
+    ("ud-levante",             3368, "Levante UD"),
+    ("fc-elche",     1531,  "Elche FC"),
     ("rcd-espanyol-barcelona", 714,  "RCD Espanyol"),
     ("valencia-cf",            1049, "Valencia CF"),
 ]
@@ -67,9 +67,9 @@ POSICIONES = {
     "Lateral izquierdo":        "DEF",
     "Libero":                   "DEF",
     # Centrocampistas
-    "Centrocampista defensivo": "MED",
-    "Centrocampista":           "MED",
-    "Centrocampista ofensivo":  "MED",
+    "Mediocentro": "MED",
+    "Mediocentro ofensivo":           "MED",
+    "Pivote":  "MED",
     "Interior derecho":         "MED",
     "Interior izquierdo":       "MED",
     # Delanteros
@@ -88,7 +88,7 @@ def scrape_equipo(slug: str, tm_id: int, nombre: str) -> list[dict]:
     """Descarga la plantilla de un equipo desde Transfermarkt."""
     url = (
         f"https://www.transfermarkt.es/{slug}/kader/verein/{tm_id}"
-        f"/saison_id/2024/plus/1"
+        f"/saison_id/2025/plus/1"
     )
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20)

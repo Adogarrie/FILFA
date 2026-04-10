@@ -387,10 +387,11 @@ function Plantilla({ participanteId, participanteNombre }) {
 
 // ── MERCADO ────────────────────────────────────────────────────
 function Mercado({ participanteId, onFichaje }) {
-  const [jugadores, setJugadores] = useState(null);
-  const [busqueda, setBusqueda]   = useState('');
-  const [filtroPOS, setFiltroPOS] = useState('');
-  const [modal, setModal]         = useState(null);
+  const [jugadores, setJugadores]   = useState(null);
+  const [busqueda, setBusqueda]     = useState('');
+  const [filtroPOS, setFiltroPOS]   = useState('');
+  const [filtroEquipo, setFiltroEquipo] = useState('');
+  const [modal, setModal]           = useState(null);
 
   const cargar = () => {
     if (!sb) { setJugadores(DEMO_MERCADO); return; }
@@ -403,16 +404,22 @@ function Mercado({ participanteId, onFichaje }) {
 
   useEffect(() => { cargar(); }, []);
 
+  const equiposLista = useMemo(() => {
+    if (!jugadores || jugadores === 'demo') return [];
+    return [...new Set(jugadores.map(j => j.equipo).filter(Boolean))].sort();
+  }, [jugadores]);
+
   const lista = useMemo(() => {
     if (!jugadores || jugadores === null) return [];
     return jugadores.filter(j => {
-      const okPos = !filtroPOS || j.posicion === filtroPOS;
-      const okBus = !busqueda ||
+      const okPos    = !filtroPOS    || j.posicion === filtroPOS;
+      const okEquipo = !filtroEquipo || j.equipo   === filtroEquipo;
+      const okBus    = !busqueda ||
         (j.nombre||'').toLowerCase().includes(busqueda.toLowerCase()) ||
         (j.equipo||'').toLowerCase().includes(busqueda.toLowerCase());
-      return okPos && okBus;
+      return okPos && okEquipo && okBus;
     });
-  }, [jugadores, busqueda, filtroPOS]);
+  }, [jugadores, busqueda, filtroPOS, filtroEquipo]);
 
   const confirmarFichaje = async () => {
     if (!sb || !participanteId || !modal) { setModal(null); return; }
@@ -462,6 +469,10 @@ function Mercado({ participanteId, onFichaje }) {
             <option value="DEF">Defensa</option>
             <option value="MED">Centrocampista</option>
             <option value="DEL">Delantero</option>
+          </select>
+          <select value={filtroEquipo} onChange={e => setFiltroEquipo(e.target.value)}>
+            <option value="">Todos los equipos</option>
+            {equiposLista.map(eq => <option key={eq} value={eq}>{eq}</option>)}
           </select>
         </div>
         <table>
@@ -1106,6 +1117,186 @@ function Equipos({ participantes, miParticipanteId }) {
   );
 }
 
+// ── COPA DE LA LIGA ────────────────────────────────────────────
+function Copa({ participantes }) {
+  const [grupos, setGrupos]         = useState(null);
+  const [calendario, setCalendario] = useState(null);
+  const [clasMap, setClasMap]       = useState(null);
+  const [grupoActivo, setGrupoActivo] = useState('');
+
+  const idNombre = useMemo(
+    () => Object.fromEntries(participantes.map(p => [p.id, p.nombre])),
+    [participantes]
+  );
+
+  useEffect(() => {
+    if (!sb) return;
+    Promise.all([
+      sb.from('copa_grupos').select('grupo, participante_id').order('grupo'),
+      sb.from('copa_calendario').select('*').order('jornada'),
+      sb.from('clasificacion').select('participante_id, jornada, puntos_jornada'),
+    ]).then(([{ data: grs }, { data: cal }, { data: clas }]) => {
+      setGrupos(grs || []);
+      setCalendario(cal || []);
+      const mapa = {};
+      (clas || []).forEach(r => {
+        if (!mapa[r.participante_id]) mapa[r.participante_id] = {};
+        mapa[r.participante_id][r.jornada] = r.puntos_jornada;
+      });
+      setClasMap(mapa);
+      const nombresGrupos = [...new Set((grs || []).map(g => g.grupo))].sort();
+      if (nombresGrupos.length > 0) setGrupoActivo(nombresGrupos[0]);
+    });
+  }, []);
+
+  const computarGrupo = (grupo) => {
+    const equiposIds = (grupos || []).filter(g => g.grupo === grupo).map(g => g.participante_id);
+    const fixtures   = (calendario || []).filter(f => f.grupo === grupo);
+    const tabla = {};
+    equiposIds.forEach(pid => {
+      tabla[pid] = { nombre: idNombre[pid] || '?', pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+    });
+    fixtures.forEach(f => {
+      const ptsLRec = (clasMap[f.local_id]     || {})[f.jornada];
+      const ptsVRec = (clasMap[f.visitante_id] || {})[f.jornada];
+      if (ptsLRec === undefined && ptsVRec === undefined) return;
+      const ptsL = ptsLRec ?? 0, ptsV = ptsVRec ?? 0;
+      const efL  = f.es_neutral ? ptsL : ptsL + 5;
+      const gL   = ptsAGoles(efL), gV = ptsAGoles(ptsV);
+      if (!tabla[f.local_id] || !tabla[f.visitante_id]) return;
+      tabla[f.local_id].pj++;  tabla[f.visitante_id].pj++;
+      tabla[f.local_id].gf     += gL;  tabla[f.local_id].gc     += gV;
+      tabla[f.visitante_id].gf += gV;  tabla[f.visitante_id].gc += gL;
+      if      (gL > gV) { tabla[f.local_id].pg++;     tabla[f.local_id].pts     += 3; tabla[f.visitante_id].pp++; }
+      else if (gL < gV) { tabla[f.visitante_id].pg++; tabla[f.visitante_id].pts += 3; tabla[f.local_id].pp++; }
+      else { tabla[f.local_id].pe++; tabla[f.local_id].pts++; tabla[f.visitante_id].pe++; tabla[f.visitante_id].pts++; }
+    });
+    return Object.values(tabla).sort((a,b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      if ((b.gf-b.gc) !== (a.gf-a.gc)) return (b.gf-b.gc) - (a.gf-a.gc);
+      return b.gf - a.gf;
+    });
+  };
+
+  if (grupos === null || calendario === null || clasMap === null) return <Spinner />;
+
+  const nombresGrupos = [...new Set((grupos || []).map(g => g.grupo))].sort();
+
+  if (nombresGrupos.length === 0) return (
+    <div className="card">
+      <div className="empty">
+        Sin grupos configurados.<br/>
+        Ejecuta: <code>python generar_copa.py --grupos ejemplo_grupos_copa.csv --jornada-inicio 1</code>
+      </div>
+    </div>
+  );
+
+  const tablaGrupo    = computarGrupo(grupoActivo);
+  const partidosGrupo = (calendario || []).filter(f => f.grupo === grupoActivo);
+
+  return (
+    <div>
+      {/* Selector de grupo */}
+      <div className="tabs">
+        {nombresGrupos.map(g => (
+          <button key={g} className={`tab ${grupoActivo === g ? 'active' : ''}`}
+                  onClick={() => setGrupoActivo(g)}>
+            Grupo {g}
+          </button>
+        ))}
+      </div>
+
+      {/* Tabla del grupo */}
+      <div className="card">
+        <h2>Copa de la Liga — Grupo {grupoActivo}</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Pos</th><th>Equipo</th>
+              <th style={{textAlign:'center'}}>PJ</th>
+              <th style={{textAlign:'center'}}>G</th>
+              <th style={{textAlign:'center'}}>E</th>
+              <th style={{textAlign:'center'}}>P</th>
+              <th style={{textAlign:'center'}}>GF</th>
+              <th style={{textAlign:'center'}}>GC</th>
+              <th style={{textAlign:'center'}}>DIF</th>
+              <th style={{textAlign:'right'}}>PTS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tablaGrupo.map((e, i) => {
+              const dif = e.gf - e.gc;
+              return (
+                <tr key={e.nombre}
+                    style={{background: i === 0 ? 'rgba(26,127,55,.06)' : undefined}}>
+                  <td><Medalla pos={i + 1} /></td>
+                  <td style={{fontWeight:600}}>{e.nombre}</td>
+                  <td style={{textAlign:'center', color:'var(--texto2)'}}>{e.pj}</td>
+                  <td style={{textAlign:'center', color:'var(--verde)', fontWeight:600}}>{e.pg}</td>
+                  <td style={{textAlign:'center', color:'var(--texto2)'}}>{e.pe}</td>
+                  <td style={{textAlign:'center', color:'#d93025'}}>{e.pp}</td>
+                  <td style={{textAlign:'center'}}>{e.gf}</td>
+                  <td style={{textAlign:'center'}}>{e.gc}</td>
+                  <td style={{textAlign:'center'}} className={dif>=0?'valor-positivo':'valor-negativo'}>
+                    {dif>=0?'+':''}{dif}
+                  </td>
+                  <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Partidos del grupo */}
+      {partidosGrupo.length > 0 && (
+        <div className="card">
+          <h2>Partidos — Grupo {grupoActivo}</h2>
+          {partidosGrupo.map(f => {
+            const ptsLRec = (clasMap[f.local_id]     || {})[f.jornada];
+            const ptsVRec = (clasMap[f.visitante_id] || {})[f.jornada];
+            const jugado  = ptsLRec !== undefined || ptsVRec !== undefined;
+            const ptsL = ptsLRec ?? 0, ptsV = ptsVRec ?? 0;
+            const efL  = f.es_neutral ? ptsL : ptsL + 5;
+            const gL   = ptsAGoles(efL), gV = ptsAGoles(ptsV);
+            const nomL = idNombre[f.local_id]     || '?';
+            const nomV = idNombre[f.visitante_id] || '?';
+            let cL = 'var(--texto)', cV = 'var(--texto)';
+            if (jugado) {
+              if      (gL > gV) { cL = 'var(--verde)'; cV = '#d93025'; }
+              else if (gL < gV) { cL = '#d93025'; cV = 'var(--verde)'; }
+              else              { cL = cV = '#856404'; }
+            }
+            return (
+              <div key={f.id} style={{display:'flex', alignItems:'center', gap:'.5rem',
+                                      padding:'.9rem 0', borderBottom:'1px solid var(--gris)'}}>
+                <div style={{flex:1, textAlign:'right'}}>
+                  <div style={{fontWeight:700, fontSize:'.95rem', color:cL}}>{nomL}</div>
+                  {jugado && <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.1rem'}}>
+                    {f.es_neutral ? ptsL : `${ptsL}+5`}={efL} pts → <strong>{gL}</strong> {gL===1?'gol':'goles'}
+                  </div>}
+                </div>
+                <div style={{width:'80px', textAlign:'center', flexShrink:0, lineHeight:1.1,
+                             fontWeight:800, fontSize:jugado?'1.35rem':'.9rem',
+                             color:jugado?'var(--texto)':'var(--texto2)'}}>
+                  {jugado ? `${gL} – ${gV}` : '—'}
+                  <div style={{fontSize:'.7rem', color:'var(--texto2)', fontWeight:400}}>J{f.jornada}</div>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700, fontSize:'.95rem', color:cV}}>{nomV}</div>
+                  {jugado && <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.1rem'}}>
+                    {ptsV} pts → <strong>{gV}</strong> {gV===1?'gol':'goles'}
+                  </div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── LOGIN ──────────────────────────────────────────────────────
 function Login({ onLogin }) {
   const [user, setUser]       = useState('');
@@ -1437,7 +1628,7 @@ function App() {
   if (!session) return <Login onLogin={handleLogin} />;
 
   const isAdmin  = !!session.is_admin;
-  const VISTAS   = ['Clasificacion', 'Mi Plantilla', 'Mercado', 'Equipos', 'Liga',
+  const VISTAS   = ['Mi Plantilla', 'Mercado', 'Equipos', 'Liga', 'Copa',
                     ...(isAdmin ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -1482,7 +1673,6 @@ function App() {
       )}
 
       <main>
-        {vista === 'Clasificacion' && <Clasificacion />}
         {vista === 'Mi Plantilla'  && (
           <Plantilla participanteId={participanteId}
                      participanteNombre={participanteActual?.nombre} />
@@ -1494,6 +1684,7 @@ function App() {
           <Equipos participantes={participantes} miParticipanteId={participanteId} />
         )}
         {vista === 'Liga'  && <Liga participantes={participantes} />}
+        {vista === 'Copa'  && <Copa participantes={participantes} />}
         {vista === 'Admin' && isAdmin && <AdminPanel participantes={participantes} />}
       </main>
     </>

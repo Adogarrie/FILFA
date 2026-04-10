@@ -108,6 +108,38 @@
     .empty   { text-align: center; padding: 2rem; color: var(--texto2); font-size: .9rem; }
     .aviso   { background: #fff3cd; color: #856404; padding: .6rem 1.5rem;
                font-size: .85rem; text-align: center; border-bottom: 1px solid #ffc107; }
+
+    /* Login */
+    .login-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; }
+    .login-card { background:#fff; border-radius:16px; border:1px solid var(--borde);
+                  padding:2.5rem 2rem; width:100%; max-width:360px;
+                  box-shadow:0 4px 24px rgba(0,0,0,.08); }
+    .login-logo { text-align:center; margin-bottom:1.75rem; }
+    .login-logo h1 { color:var(--verde); font-size:1.65rem; margin-bottom:.25rem; }
+    .login-logo p  { color:var(--texto2); font-size:.88rem; }
+    .campo { margin-bottom:1rem; }
+    .campo label { display:block; font-size:.82rem; font-weight:600;
+                   color:var(--texto2); margin-bottom:.3rem; }
+    .campo input  { width:100%; padding:.55rem .85rem; border:1.5px solid var(--borde);
+                    border-radius:8px; font-size:.95rem; }
+    .campo input:focus { outline:none; border-color:var(--verde); }
+    .login-error  { background:#fde8e8; color:#d93025; padding:.5rem .85rem;
+                    border-radius:8px; font-size:.84rem; margin-bottom:1rem; }
+    .btn-full { width:100%; padding:.7rem; background:var(--verde); color:#fff;
+                border:none; border-radius:10px; font-size:1rem; font-weight:700;
+                cursor:pointer; margin-top:.25rem; }
+    .btn-full:hover    { background:var(--verde2); }
+    .btn-full:disabled { opacity:.6; cursor:wait; }
+
+    /* Nav — usuario y logout */
+    .nav-user { display:flex; align-items:center; gap:.5rem;
+                border-left:1px solid rgba(255,255,255,.3);
+                padding-left:.75rem; margin-left:.25rem; font-size:.82rem; }
+    .nav-user span  { color:#fff; opacity:.9; white-space:nowrap; }
+    .btn-logout { background:rgba(255,255,255,.15); border:1.5px solid rgba(255,255,255,.4);
+                  color:#fff; padding:.28rem .7rem; border-radius:20px;
+                  cursor:pointer; font-size:.78rem; white-space:nowrap; }
+    .btn-logout:hover { background:rgba(255,255,255,.3); }
   </style>
 </head>
 <body>
@@ -1074,13 +1106,309 @@ function Equipos({ participantes, miParticipanteId }) {
   );
 }
 
+// ── LOGIN ──────────────────────────────────────────────────────
+function Login({ onLogin }) {
+  const [user, setUser]       = useState('');
+  const [pass, setPass]       = useState('');
+  const [error, setError]     = useState('');
+  const [cargando, setCargando] = useState(false);
+
+  const entrar = async () => {
+    if (!user.trim() || !pass.trim()) { setError('Introduce usuario y contraseña'); return; }
+    if (!sb) { setError('Sin conexión con la base de datos'); return; }
+    setCargando(true); setError('');
+    const { data, error: err } = await sb.from('usuarios')
+      .select('id, username, password, participante_id, is_admin')
+      .ilike('username', user.trim())
+      .single();
+    setCargando(false);
+    if (err || !data)       { setError('Usuario no encontrado'); return; }
+    if (data.password !== pass) { setError('Contraseña incorrecta'); return; }
+    onLogin(data);
+  };
+
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <div className="login-logo">
+          <h1>Fantasy LaLiga</h1>
+          <p>Inicia sesión con tu equipo</p>
+        </div>
+        {error && <div className="login-error">{error}</div>}
+        <div className="campo">
+          <label>Usuario</label>
+          <input value={user} onChange={e => setUser(e.target.value)}
+                 placeholder="Nombre de tu equipo"
+                 autoFocus
+                 onKeyDown={e => e.key === 'Enter' && entrar()} />
+        </div>
+        <div className="campo">
+          <label>Contraseña</label>
+          <input type="password" value={pass} onChange={e => setPass(e.target.value)}
+                 placeholder="Contraseña"
+                 onKeyDown={e => e.key === 'Enter' && entrar()} />
+        </div>
+        <button className="btn-full" onClick={entrar} disabled={cargando}>
+          {cargando ? 'Entrando…' : 'Entrar'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── ADMIN — PRESUPUESTOS ───────────────────────────────────────
+function AdminPresupuestos({ participantes }) {
+  const [valores, setValores]   = useState({});
+  const [guardado, setGuardado] = useState(null);
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('participantes').select('id, presupuesto').then(({ data }) => {
+      const m = {};
+      (data || []).forEach(p => { m[p.id] = String(p.presupuesto ?? 100000000); });
+      setValores(m);
+    });
+  }, []);
+
+  const guardar = async (pid) => {
+    const val = parseFloat(valores[pid]);
+    if (isNaN(val)) return;
+    const { error } = await sb.from('participantes').update({ presupuesto: val }).eq('id', pid);
+    if (error) { alert('Error: ' + error.message); return; }
+    setGuardado(pid);
+    setTimeout(() => setGuardado(null), 2000);
+  };
+
+  const Seccion = ({ lista, titulo }) => (
+    <div className="card">
+      <h2>{titulo}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Equipo</th>
+            <th style={{textAlign:'right'}}>Presupuesto (€)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {lista.map(p => (
+            <tr key={p.id}>
+              <td style={{fontWeight:600}}>{p.nombre}</td>
+              <td style={{textAlign:'right'}}>
+                <input type="number" value={valores[p.id] ?? ''}
+                  onChange={e => setValores(prev => ({...prev, [p.id]: e.target.value}))}
+                  style={{width:'150px', textAlign:'right', padding:'.3rem .5rem',
+                          border:'1.5px solid var(--borde)', borderRadius:'8px', fontSize:'.9rem'}} />
+              </td>
+              <td style={{paddingLeft:'.5rem'}}>
+                <button onClick={() => guardar(p.id)} className="btn-fichar"
+                  style={{background: guardado === p.id ? 'var(--verde)' : undefined,
+                          minWidth:'90px'}}>
+                  {guardado === p.id ? 'Guardado ✓' : 'Guardar'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div>
+      <Seccion lista={participantes.filter(p => p.division_id === 1)} titulo="Primera División" />
+      <Seccion lista={participantes.filter(p => p.division_id === 2)} titulo="Segunda División" />
+    </div>
+  );
+}
+
+// ── ADMIN — CALENDARIO ─────────────────────────────────────────
+function AdminCalendario({ participantes }) {
+  const [fixtures, setFixtures]     = useState(null);
+  const [divisiones, setDivisiones] = useState([]);
+  const [filtrDiv, setFiltrDiv]     = useState('');
+  const [filtrJ, setFiltrJ]         = useState('');
+  const [nuevo, setNuevo]           = useState({
+    jornada:'', division_id:'', local_id:'', visitante_id:'', es_neutral: false
+  });
+  const [msg, setMsg] = useState('');
+
+  const cargar = () => {
+    sb.from('calendario').select('*').order('jornada').then(({ data }) => setFixtures(data || []));
+    sb.from('divisiones').select('*').then(({ data }) => setDivisiones(data || []));
+  };
+  useEffect(() => { if (sb) cargar(); }, []);
+
+  const eliminar = async (id) => {
+    if (!confirm('¿Eliminar este partido del calendario?')) return;
+    await sb.from('calendario').delete().eq('id', id);
+    cargar();
+  };
+
+  const añadir = async () => {
+    const { jornada, division_id, local_id, visitante_id, es_neutral } = nuevo;
+    if (!jornada || !division_id || !local_id || !visitante_id) {
+      setMsg('Rellena todos los campos'); return;
+    }
+    if (local_id === visitante_id) {
+      setMsg('Local y visitante no pueden ser el mismo equipo'); return;
+    }
+    const { error } = await sb.from('calendario').insert({
+      jornada: parseInt(jornada), division_id: parseInt(division_id),
+      local_id, visitante_id, es_neutral,
+    });
+    if (error) { setMsg('Error: ' + error.message); return; }
+    setMsg('Partido añadido correctamente');
+    setNuevo({ jornada:'', division_id:'', local_id:'', visitante_id:'', es_neutral: false });
+    cargar();
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  if (fixtures === null) return <Spinner />;
+
+  const idNombre = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
+  const maxJ     = fixtures.length > 0 ? Math.max(...fixtures.map(f => f.jornada)) : 0;
+
+  const lista = fixtures.filter(f => {
+    if (filtrDiv && f.division_id !== parseInt(filtrDiv)) return false;
+    if (filtrJ   && f.jornada    !== parseInt(filtrJ))   return false;
+    return true;
+  });
+
+  const partsFiltrados = participantes.filter(p =>
+    !nuevo.division_id || p.division_id === parseInt(nuevo.division_id)
+  );
+
+  return (
+    <div>
+      <div className="card">
+        <h2>Partidos en el calendario</h2>
+        <div className="filtros" style={{marginBottom:'1rem'}}>
+          <select value={filtrDiv} onChange={e => setFiltrDiv(e.target.value)}>
+            <option value="">Todas las divisiones</option>
+            {divisiones.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+          </select>
+          <select value={filtrJ} onChange={e => setFiltrJ(e.target.value)}>
+            <option value="">Todas las jornadas</option>
+            {Array.from({length: maxJ}, (_, i) => i + 1).map(j =>
+              <option key={j} value={j}>Jornada {j}</option>
+            )}
+          </select>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>J</th><th>División</th><th>Local</th>
+              <th style={{textAlign:'center'}}>vs</th>
+              <th>Visitante</th><th style={{textAlign:'center'}}>Neutral</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {lista.map(f => {
+              const div = divisiones.find(d => d.id === f.division_id);
+              return (
+                <tr key={f.id}>
+                  <td style={{fontWeight:600}}>{f.jornada}</td>
+                  <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>{div?.nombre}</td>
+                  <td style={{fontWeight:600}}>{idNombre[f.local_id] || '?'}</td>
+                  <td style={{textAlign:'center', color:'var(--texto2)'}}>vs</td>
+                  <td style={{fontWeight:600}}>{idNombre[f.visitante_id] || '?'}</td>
+                  <td style={{textAlign:'center'}}>{f.es_neutral ? '✓' : ''}</td>
+                  <td>
+                    <button onClick={() => eliminar(f.id)}
+                      style={{background:'#d93025', color:'#fff', border:'none',
+                              padding:'.25rem .6rem', borderRadius:'6px',
+                              cursor:'pointer', fontSize:'.78rem', fontWeight:600}}>
+                      Eliminar
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {lista.length === 0 && (
+              <tr><td colSpan={7} className="empty">Sin partidos con estos filtros</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <h2>Añadir partido</h2>
+        {msg && (
+          <div style={{color: msg.includes('Error') ? '#d93025' : 'var(--verde)',
+                       fontWeight:600, marginBottom:'.75rem'}}>
+            {msg}
+          </div>
+        )}
+        <div className="filtros" style={{flexWrap:'wrap'}}>
+          <input type="number" min="1" max="99" placeholder="Jornada"
+            value={nuevo.jornada}
+            onChange={e => setNuevo(p => ({...p, jornada: e.target.value}))}
+            style={{width:'90px'}} />
+          <select value={nuevo.division_id}
+            onChange={e => setNuevo(p => ({...p, division_id: e.target.value, local_id:'', visitante_id:''}))}>
+            <option value="">División…</option>
+            {divisiones.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+          </select>
+          <select value={nuevo.local_id}
+            onChange={e => setNuevo(p => ({...p, local_id: e.target.value}))}>
+            <option value="">Local…</option>
+            {partsFiltrados.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          <select value={nuevo.visitante_id}
+            onChange={e => setNuevo(p => ({...p, visitante_id: e.target.value}))}>
+            <option value="">Visitante…</option>
+            {partsFiltrados.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          <label style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.88rem', cursor:'pointer'}}>
+            <input type="checkbox" checked={nuevo.es_neutral}
+              onChange={e => setNuevo(p => ({...p, es_neutral: e.target.checked}))} />
+            Neutral
+          </label>
+          <button className="btn-fichar" onClick={añadir}>Añadir partido</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
+function AdminPanel({ participantes }) {
+  const [subtab, setSubtab] = useState('puntos');
+
+  return (
+    <div>
+      <div className="tabs">
+        {[
+          ['puntos',       'Clasificación'],
+          ['presupuestos', 'Presupuestos'],
+          ['calendario',   'Calendario'],
+        ].map(([k, l]) => (
+          <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
+                  onClick={() => setSubtab(k)}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {subtab === 'puntos'        && <Puntos participantes={participantes} />}
+      {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
+      {subtab === 'calendario'    && <AdminCalendario participantes={participantes} />}
+    </div>
+  );
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────
-const VISTAS = ['Clasificacion', 'Mi Plantilla', 'Mercado', 'Equipos', 'Liga', 'Puntos'];
 
 function App() {
-  const [vista, setVista] = useState('Clasificacion');
+  const [vista, setVista]               = useState('Clasificacion');
   const [participantes, setParticipantes] = useState([]);
   const [participanteId, setParticipanteId] = useState('');
+
+  // Sesión persistida en localStorage
+  const [session, setSession] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('filfa_session') || 'null'); }
+    catch { return null; }
+  });
 
   useEffect(() => {
     if (!sb) return;
@@ -1089,11 +1417,28 @@ function App() {
       .then(({ data }) => {
         if (data && data.length > 0) {
           setParticipantes(data);
-          setParticipanteId(data[0].id);
+          const pid = session?.participante_id;
+          setParticipanteId(pid && data.find(p => p.id === pid) ? pid : data[0].id);
         }
       });
   }, []);
 
+  const handleLogin = (userData) => {
+    localStorage.setItem('filfa_session', JSON.stringify(userData));
+    setSession(userData);
+    if (userData.participante_id) setParticipanteId(userData.participante_id);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('filfa_session');
+    setSession(null);
+  };
+
+  if (!session) return <Login onLogin={handleLogin} />;
+
+  const isAdmin  = !!session.is_admin;
+  const VISTAS   = ['Clasificacion', 'Mi Plantilla', 'Mercado', 'Equipos', 'Liga',
+                    ...(isAdmin ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
   return (
@@ -1101,20 +1446,33 @@ function App() {
       <nav>
         <h1>Fantasy LaLiga</h1>
         {VISTAS.map(v => (
-          <button key={v} className={vista===v?'active':''} onClick={() => setVista(v)}>
+          <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}>
             {v}
           </button>
         ))}
+
+        {/* Selector de equipo: admin puede cambiar, usuario ve solo el suyo */}
         {participantes.length > 0 && (
-          <div className="nav-selector">
-            <label>Participante:</label>
-            <select value={participanteId} onChange={e => setParticipanteId(e.target.value)}>
-              {participantes.map(p => (
-                <option key={p.id} value={p.id}>{p.nombre}</option>
-              ))}
-            </select>
-          </div>
+          isAdmin
+            ? <div className="nav-selector">
+                <label>Ver equipo:</label>
+                <select value={participanteId} onChange={e => setParticipanteId(e.target.value)}>
+                  {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                </select>
+              </div>
+            : <div className="nav-selector">
+                <label>Equipo:</label>
+                <span style={{color:'#fff', fontSize:'.85rem', fontWeight:600}}>
+                  {participanteActual?.nombre || ''}
+                </span>
+              </div>
         )}
+
+        {/* Usuario y botón logout */}
+        <div className="nav-user">
+          <span>{isAdmin ? '⚙ Admin' : session.username}</span>
+          <button className="btn-logout" onClick={handleLogout}>Salir</button>
+        </div>
       </nav>
 
       {esDemo && (
@@ -1126,26 +1484,17 @@ function App() {
       <main>
         {vista === 'Clasificacion' && <Clasificacion />}
         {vista === 'Mi Plantilla'  && (
-          <Plantilla
-            participanteId={participanteId}
-            participanteNombre={participanteActual?.nombre}
-          />
+          <Plantilla participanteId={participanteId}
+                     participanteNombre={participanteActual?.nombre} />
         )}
         {vista === 'Mercado' && (
-          <Mercado
-            participanteId={participanteId}
-            onFichaje={() => {}}
-          />
+          <Mercado participanteId={participanteId} onFichaje={() => {}} />
         )}
         {vista === 'Equipos' && (
           <Equipos participantes={participantes} miParticipanteId={participanteId} />
         )}
-        {vista === 'Liga' && (
-          <Liga participantes={participantes} />
-        )}
-        {vista === 'Puntos' && (
-          <Puntos participantes={participantes} />
-        )}
+        {vista === 'Liga'  && <Liga participantes={participantes} />}
+        {vista === 'Admin' && isAdmin && <AdminPanel participantes={participantes} />}
       </main>
     </>
   );

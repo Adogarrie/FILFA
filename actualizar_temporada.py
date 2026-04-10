@@ -32,24 +32,32 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 CACHE = "jugadores_cache.json"
 
+POSICIONES_VALIDAS = {"POR", "DEF", "MED", "DEL"}
+
 POSICIONES_MAP = {
-    "Portero":                "POR",
-    "Portero suplente":       "POR",
-    "Defensa central":        "DEF",
-    "Lateral derecho":        "DEF",
-    "Lateral izquierdo":      "DEF",
-    "Defensa":                "DEF",
-    "Centrocampista":         "MED",
+    "Portero":                  "POR",
+    "Portero suplente":         "POR",
+    "Defensa central":          "DEF",
+    "Lateral derecho":          "DEF",
+    "Lateral izquierdo":        "DEF",
+    "Defensa":                  "DEF",
+    "Centrocampista":           "MED",
     "Centrocampista defensivo": "MED",
     "Centrocampista ofensivo":  "MED",
-    "Pivote":                 "MED",
-    "Mediapunta":             "MED",
-    "Extremo derecho":        "DEL",
-    "Extremo izquierdo":      "DEL",
-    "Delantero centro":       "DEL",
-    "Delantero":              "DEL",
-    "Segunda punta":          "DEL",
+    "Pivote":                   "MED",
+    "Mediapunta":               "MED",
+    "Extremo derecho":          "DEL",
+    "Extremo izquierdo":        "DEL",
+    "Delantero centro":         "DEL",
+    "Delantero":                "DEL",
+    "Segunda punta":            "DEL",
 }
+
+def mapear_posicion(pos_raw):
+    """Acepta códigos ya mapeados (POR/DEF/MED/DEL) o nombres en español."""
+    if pos_raw in POSICIONES_VALIDAS:
+        return pos_raw
+    return POSICIONES_MAP.get(pos_raw)
 
 
 def get_supabase():
@@ -75,12 +83,13 @@ def main():
     sin_pos    = []
     for j in cache:
         pos_raw = j.get("posicion", "")
-        pos = POSICIONES_MAP.get(pos_raw)
+        pos = mapear_posicion(pos_raw)
         if not pos:
             sin_pos.append(f"  {j.get('nombre','?')} ({pos_raw})")
             continue
         try:
-            valor = float(str(j.get("valor_mercado", 0)).replace(".", "").replace(",", "."))
+            valor_raw = str(j.get("valor", "0")).replace(" EUR", "").replace(".", "").replace(",", ".").strip()
+            valor = float(valor_raw) if valor_raw else 0.0
         except ValueError:
             valor = 0.0
         registros.append({

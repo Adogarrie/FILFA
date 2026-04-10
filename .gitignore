@@ -1,0 +1,17 @@
+# ── Secretos — NUNCA subir ─────────────────────────
+.env
+credentials.json
+
+# ── Python ─────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Caché / datos locales ───────────────────────────
+jugadores_cache.json
+
+# ── Sistema ────────────────────────────────────────
+.DS_Store
+Thumbs.db

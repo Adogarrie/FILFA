@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fantasy LaLiga</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --verde:   #1a7f37;
+      --verde2:  #2ea84e;
+      --gris:    #f4f6f8;
+      --borde:   #dde1e7;
+      --texto:   #1c1e21;
+      --texto2:  #606770;
+      --oro:     #f5a623;
+      --plata:   #a8a9ad;
+      --bronce:  #cd7f32;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: var(--gris); color: var(--texto); }
+
+    /* Nav */
+    nav { background: var(--verde); color: #fff; display: flex; flex-wrap: wrap;
+          align-items: center; padding: 0 1.25rem; min-height: 56px; gap: .25rem;
+          box-shadow: 0 2px 8px rgba(0,0,0,.25); position: sticky; top: 0; z-index: 100; }
+    nav h1 { font-size: 1.05rem; font-weight: 700; flex: 1; padding: .5rem 0; }
+    nav button { background: transparent; border: 1.5px solid rgba(255,255,255,.5);
+                 color: #fff; padding: .32rem .85rem; border-radius: 20px;
+                 cursor: pointer; font-size: .83rem; transition: background .15s; }
+    nav button:hover, nav button.active { background: rgba(255,255,255,.2); border-color: #fff; }
+    .nav-selector { display: flex; align-items: center; gap: .5rem;
+                    border-left: 1px solid rgba(255,255,255,.3); padding-left: .75rem; margin-left: .25rem; }
+    .nav-selector label { font-size: .8rem; opacity: .85; white-space: nowrap; }
+    .nav-selector select { background: rgba(255,255,255,.15); border: 1.5px solid rgba(255,255,255,.4);
+                           color: #fff; padding: .3rem .6rem; border-radius: 8px;
+                           font-size: .82rem; cursor: pointer; max-width: 140px; }
+    .nav-selector select option { background: var(--verde); color: #fff; }
+
+    /* Layout */
+    main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
+
+    /* Tarjeta */
+    .card { background: #fff; border-radius: 12px; border: 1px solid var(--borde);
+            padding: 1.25rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--verde); }
+
+    /* Tabs */
+    .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tab  { padding: .4rem 1.1rem; border-radius: 20px; border: 1.5px solid var(--borde);
+            background: #fff; cursor: pointer; font-size: .85rem; transition: all .15s; }
+    .tab.active { background: var(--verde); color: #fff; border-color: var(--verde); }
+
+    /* Tabla */
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    th    { text-align: left; padding: .6rem .75rem; border-bottom: 2px solid var(--borde);
+            color: var(--texto2); font-weight: 600; font-size: .8rem; text-transform: uppercase; }
+    td    { padding: .6rem .75rem; border-bottom: 1px solid var(--gris); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--gris); }
+
+    /* Badges posicion */
+    .badge { display: inline-block; padding: .18rem .55rem; border-radius: 10px;
+             font-size: .75rem; font-weight: 700; }
+    .POR { background: #fff3cd; color: #856404; }
+    .DEF { background: #d1e7dd; color: #0a3622; }
+    .MED { background: #cfe2ff; color: #0a3276; }
+    .DEL { background: #f8d7da; color: #58151c; }
+
+    /* Mercado */
+    .filtros { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .filtros input  { flex: 1; min-width: 180px; padding: .45rem .8rem;
+                      border: 1.5px solid var(--borde); border-radius: 8px; font-size: .88rem; }
+    .filtros select { padding: .45rem .8rem; border: 1.5px solid var(--borde);
+                      border-radius: 8px; font-size: .88rem; background: #fff; }
+    .btn-fichar { background: var(--verde); color: #fff; border: none; padding: .35rem .8rem;
+                  border-radius: 8px; cursor: pointer; font-size: .82rem; font-weight: 600; }
+    .btn-fichar:hover { background: var(--verde2); }
+
+    /* Modal */
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5);
+               display: flex; align-items: center; justify-content: center; z-index: 200; }
+    .modal   { background: #fff; border-radius: 14px; padding: 1.75rem;
+               max-width: 380px; width: 90%; }
+    .modal h3  { margin-bottom: .75rem; }
+    .modal p   { color: var(--texto2); font-size: .9rem; margin-bottom: 1.25rem; }
+    .modal-btns { display: flex; gap: .75rem; justify-content: flex-end; }
+    .btn-cancel { padding: .45rem 1rem; border-radius: 8px; border: 1.5px solid var(--borde);
+                  background: #fff; cursor: pointer; }
+    .btn-ok     { padding: .45rem 1rem; border-radius: 8px; border: none;
+                  background: var(--verde); color: #fff; cursor: pointer; font-weight: 600; }
+
+    /* Medallas */
+    .medalla-1 { color: var(--oro); }
+    .medalla-2 { color: var(--plata); }
+    .medalla-3 { color: var(--bronce); }
+
+    /* Valores */
+    .valor-positivo { color: #1a7f37; font-weight: 600; }
+    .valor-negativo { color: #d93025; font-weight: 600; }
+
+    /* Estados */
+    .loading { text-align: center; padding: 2.5rem; color: var(--texto2); font-size: .9rem; }
+    .empty   { text-align: center; padding: 2rem; color: var(--texto2); font-size: .9rem; }
+    .aviso   { background: #fff3cd; color: #856404; padding: .6rem 1.5rem;
+               font-size: .85rem; text-align: center; border-bottom: 1px solid #ffc107; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+// ── CONFIGURACION ──────────────────────────────────────────────
+const SUPABASE_URL = 'https://gqdbrzwetwcjrkiygaua.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdxZGJyendldHdjanJraXlnYXVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjAzNzgsImV4cCI6MjA5MTM5NjM3OH0.LhmBH8yrxYh_Bfh74YoK5IvazaeYTRrSw8xXVx7upHs';
+// ──────────────────────────────────────────────────────────────
+
+const { useState, useEffect, useMemo } = React;
+
+const esDemo = SUPABASE_URL.includes('TU_');
+let sb = null;
+if (!esDemo) {
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+}
+
+// ── UTILIDADES ─────────────────────────────────────────────────
+const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
+
+function Medalla({ pos }) {
+  if (pos === 1) return <span className="medalla-1">🥇</span>;
+  if (pos === 2) return <span className="medalla-2">🥈</span>;
+  if (pos === 3) return <span className="medalla-3">🥉</span>;
+  return <span style={{color:'var(--texto2)'}}>{pos}</span>;
+}
+
+function Spinner() {
+  return <div className="loading">Cargando...</div>;
+}
+
+// ── CLASIFICACION ──────────────────────────────────────────────
+function Clasificacion() {
+  const [div, setDiv] = useState('Primera');
+  const [datos, setDatos] = useState(null);
+
+  useEffect(() => {
+    if (!sb) { setDatos('demo'); return; }
+    sb.from('vista_clasificacion').select('*')
+      .then(({ data, error }) => {
+        if (error) { console.error(error); setDatos([]); }
+        else setDatos(data || []);
+      });
+  }, []);
+
+  if (datos === null) return <Spinner />;
+
+  // Datos demo si no hay Supabase o BD vacia
+  const filasPrimera = datos === 'demo' ? DEMO_CLASIFICACION.Primera :
+    (datos.filter(r => r.division === 'Primera').sort((a,b) => a.posicion - b.posicion));
+  const filasSegunda = datos === 'demo' ? DEMO_CLASIFICACION.Segunda :
+    (datos.filter(r => r.division === 'Segunda').sort((a,b) => a.posicion - b.posicion));
+
+  const filas = div === 'Primera' ? filasPrimera : filasSegunda;
+
+  return (
+    <div>
+      <div className="tabs">
+        {['Primera','Segunda'].map(d => (
+          <button key={d} className={`tab ${div===d?'active':''}`} onClick={() => setDiv(d)}>
+            Division {d}
+          </button>
+        ))}
+      </div>
+      <div className="card">
+        <h2>Clasificacion — {div} Division</h2>
+        {filas.length === 0
+          ? <div className="empty">Sin participantes en esta division.<br/>Ejecuta el SQL de insercion de participantes.</div>
+          : <table>
+              <thead>
+                <tr>
+                  <th>Pos</th>
+                  <th>Participante</th>
+                  <th style={{textAlign:'right'}}>Pts Totales</th>
+                  <th style={{textAlign:'right'}}>Mejor Jornada</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map((f, i) => (
+                  <tr key={f.id || i}>
+                    <td><Medalla pos={f.posicion || i+1} /></td>
+                    <td style={{fontWeight: 600}}>{f.nombre}</td>
+                    <td style={{textAlign:'right', fontWeight:700}}>{f.puntos_totales ?? 0}</td>
+                    <td style={{textAlign:'right', color:'var(--texto2)'}}>{f.mejor_jornada ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+        }
+      </div>
+    </div>
+  );
+}
+
+// ── PLANTILLA ──────────────────────────────────────────────────
+function Plantilla({ participanteId, participanteNombre }) {
+  const [jugadores, setJugadores] = useState(null);
+  const [presupuesto, setPresupuesto] = useState(null);
+  const [modalVenta, setModalVenta] = useState(null);
+
+  const cargar = () => {
+    if (!participanteId) { setJugadores([]); return; }
+    if (!sb) { setJugadores('demo'); return; }
+    sb.from('plantillas')
+      .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado)')
+      .eq('participante_id', participanteId)
+      .then(({ data, error }) => {
+        if (error) { console.error(error); setJugadores([]); }
+        else setJugadores(data || []);
+      });
+    sb.from('participantes').select('presupuesto').eq('id', participanteId).single()
+      .then(({ data }) => { if (data) setPresupuesto(data.presupuesto); });
+  };
+
+  useEffect(() => { cargar(); }, [participanteId]);
+
+  const confirmarVenta = async () => {
+    if (!modalVenta) return;
+    const { error } = await sb.from('plantillas')
+      .delete()
+      .eq('id', modalVenta.id)
+      .eq('participante_id', participanteId);
+    if (error) {
+      alert('Error al vender: ' + error.message);
+    } else {
+      // Devolver valor actual de mercado al presupuesto
+      const valorVenta = modalVenta.valor || 0;
+      const nuevo = (presupuesto || 0) + valorVenta;
+      const { error: errPres } = await sb.from('participantes')
+        .update({ presupuesto: nuevo })
+        .eq('id', participanteId);
+      if (errPres) console.error('Error actualizando presupuesto:', errPres);
+      else setPresupuesto(nuevo);
+      cargar();
+    }
+    setModalVenta(null);
+  };
+
+  if (jugadores === null) return <Spinner />;
+
+  const lista = jugadores === 'demo' ? DEMO_PLANTILLA : jugadores.map(p => ({
+    id:         p.id,
+    jugador_id: p.jugador_id,
+    nombre:     p.jugadores?.nombre || '',
+    equipo:     p.jugadores?.equipo || '',
+    posicion:   p.jugadores?.posicion || '',
+    valor:      p.jugadores?.valor_mercado || 0,
+    compra:     p.precio_compra || 0,
+  }));
+
+  // Usa presupuesto de BD; fallback calculado solo en demo
+  const presupuestoDisplay = jugadores === 'demo'
+    ? 100_000_000 - lista.reduce((s, j) => s + (j.compra || 0), 0)
+    : (presupuesto ?? null);
+
+  return (
+    <div>
+      <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
+          <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
+            {presupuestoDisplay !== null ? fmt(presupuestoDisplay) : '…'}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
+          <div style={{fontSize:'1.4rem', fontWeight:800}}>{lista.length}</div>
+        </div>
+      </div>
+      <div className="card">
+        <h2>Plantilla de {participanteNombre || '—'}</h2>
+        {!participanteId
+          ? <div className="empty">Selecciona un participante en el menu superior.</div>
+          : lista.length === 0
+          ? <div className="empty">Esta plantilla esta vacia.</div>
+          : <table>
+              <thead>
+                <tr>
+                  <th>Jugador</th><th>Pos</th><th>Equipo</th>
+                  <th style={{textAlign:'right'}}>Valor actual</th>
+                  <th style={{textAlign:'right'}}>Dif. compra</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {lista.map((j, i) => {
+                  const dif = (j.valor || 0) - (j.compra || 0);
+                  return (
+                    <tr key={i}>
+                      <td style={{fontWeight:600}}>{j.nombre}</td>
+                      <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td style={{color:'var(--texto2)'}}>{j.equipo}</td>
+                      <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
+                      <td style={{textAlign:'right'}}
+                          className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
+                        {dif >= 0 ? '+' : ''}{fmt(dif)}
+                      </td>
+                      <td>
+                        <button onClick={() => setModalVenta(j)}
+                          style={{background:'#d93025', color:'#fff', border:'none',
+                                  padding:'.3rem .7rem', borderRadius:'8px',
+                                  cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                          Vender
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+        }
+
+        {modalVenta && (
+          <div className="overlay" onClick={() => setModalVenta(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h3>Vender al mercado</h3>
+              <p>
+                Vendes a <strong>{modalVenta.nombre}</strong> ({modalVenta.equipo})<br/>
+                Precio de compra: <strong>{fmt(modalVenta.compra || 0)}</strong><br/>
+                Valor actual de mercado: <strong>{fmt(modalVenta.valor || 0)}</strong><br/>
+                {(() => {
+                  const dif = (modalVenta.valor || 0) - (modalVenta.compra || 0);
+                  return <span className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
+                    {dif >= 0 ? 'Ganancia: +' : 'Pérdida: '}{fmt(Math.abs(dif))}
+                  </span>;
+                })()}
+              </p>
+              <div className="modal-btns">
+                <button className="btn-cancel" onClick={() => setModalVenta(null)}>Cancelar</button>
+                <button className="btn-ok"
+                  style={{background:'#d93025'}}
+                  onClick={confirmarVenta}>
+                  Confirmar venta
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── MERCADO ────────────────────────────────────────────────────
+function Mercado({ participanteId, onFichaje }) {
+  const [jugadores, setJugadores] = useState(null);
+  const [busqueda, setBusqueda]   = useState('');
+  const [filtroPOS, setFiltroPOS] = useState('');
+  const [modal, setModal]         = useState(null);
+
+  const cargar = () => {
+    if (!sb) { setJugadores(DEMO_MERCADO); return; }
+    sb.from('vista_jugadores_libres').select('*')
+      .then(({ data, error }) => {
+        if (error) { console.error(error); setJugadores([]); }
+        else setJugadores(data || []);
+      });
+  };
+
+  useEffect(() => { cargar(); }, []);
+
+  const lista = useMemo(() => {
+    if (!jugadores || jugadores === null) return [];
+    return jugadores.filter(j => {
+      const okPos = !filtroPOS || j.posicion === filtroPOS;
+      const okBus = !busqueda ||
+        (j.nombre||'').toLowerCase().includes(busqueda.toLowerCase()) ||
+        (j.equipo||'').toLowerCase().includes(busqueda.toLowerCase());
+      return okPos && okBus;
+    });
+  }, [jugadores, busqueda, filtroPOS]);
+
+  const confirmarFichaje = async () => {
+    if (!sb || !participanteId || !modal) { setModal(null); return; }
+
+    // Comprobar presupuesto disponible
+    const { data: partData } = await sb.from('participantes')
+      .select('presupuesto').eq('id', participanteId).single();
+    const presupuestoActual = partData?.presupuesto ?? 0;
+    const coste = modal.valor_mercado || 0;
+    if (coste > presupuestoActual) {
+      alert(`Presupuesto insuficiente.\nDisponible: ${fmt(presupuestoActual)}\nCoste: ${fmt(coste)}`);
+      setModal(null);
+      return;
+    }
+
+    const { error } = await sb.from('plantillas').insert({
+      participante_id: participanteId,
+      jugador_id:      modal.id,
+      precio_compra:   coste,
+    });
+    if (error) {
+      alert('Error al fichar: ' + error.message);
+    } else {
+      // Descontar del presupuesto real
+      const { error: errPres } = await sb.from('participantes')
+        .update({ presupuesto: presupuestoActual - coste })
+        .eq('id', participanteId);
+      if (errPres) console.error('Error actualizando presupuesto:', errPres);
+      onFichaje && onFichaje();
+      cargar();
+    }
+    setModal(null);
+  };
+
+  if (jugadores === null) return <Spinner />;
+
+  return (
+    <div>
+      <div className="card">
+        <h2>Mercado de jugadores libres</h2>
+        <div className="filtros">
+          <input placeholder="Buscar jugador o equipo..."
+                 value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+          <select value={filtroPOS} onChange={e => setFiltroPOS(e.target.value)}>
+            <option value="">Todas las posiciones</option>
+            <option value="POR">Portero</option>
+            <option value="DEF">Defensa</option>
+            <option value="MED">Centrocampista</option>
+            <option value="DEL">Delantero</option>
+          </select>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Jugador</th><th>Pos</th><th>Equipo</th>
+              <th style={{textAlign:'right'}}>Valor</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {lista.map(j => (
+              <tr key={j.id}>
+                <td style={{fontWeight:600}}>{j.nombre}</td>
+                <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                <td style={{color:'var(--texto2)'}}>{j.equipo}</td>
+                <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || j.valor || 0)}</td>
+                <td>
+                  <button className="btn-fichar" onClick={() => setModal(j)}
+                          disabled={!participanteId}
+                          title={!participanteId ? 'Selecciona un participante primero' : ''}>
+                    Fichar
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {lista.length === 0 && (
+              <tr><td colSpan={5} className="empty">
+                {jugadores.length === 0
+                  ? 'No hay jugadores en la base de datos. Ejecuta cargar_jugadores.py'
+                  : 'No hay jugadores que coincidan con la busqueda'}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {modal && (
+        <div className="overlay" onClick={() => setModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Confirmar fichaje</h3>
+            <p>
+              Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})<br/>
+              Coste: <strong>{fmt(modal.valor_mercado || 0)}</strong>
+            </p>
+            <div className="modal-btns">
+              <button className="btn-cancel" onClick={() => setModal(null)}>Cancelar</button>
+              <button className="btn-ok" onClick={confirmarFichaje}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PUNTOS ─────────────────────────────────────────────────────
+function Puntos({ participantes }) {
+  const [jornada, setJornada]   = useState(1);
+  const [puntos, setPuntos]     = useState({});   // { participante_id: valor_string }
+  const [guardando, setGuardando] = useState(false);
+  const [guardado, setGuardado]   = useState(false);
+
+  // Cargar puntos existentes cuando cambia la jornada
+  useEffect(() => {
+    if (!sb || participantes.length === 0) return;
+    sb.from('clasificacion')
+      .select('participante_id, puntos_jornada')
+      .eq('jornada', jornada)
+      .then(({ data }) => {
+        const mapa = {};
+        (data || []).forEach(r => { mapa[r.participante_id] = String(r.puntos_jornada); });
+        setPuntos(mapa);
+        setGuardado(false);
+      });
+  }, [jornada, participantes]);
+
+  const guardar = async () => {
+    if (!sb) return;
+    setGuardando(true);
+
+    const registros = participantes
+      .filter(p => puntos[p.id] !== undefined && puntos[p.id] !== '')
+      .map(p => ({
+        participante_id: p.id,
+        jornada,
+        puntos_jornada: parseInt(puntos[p.id]) || 0,
+      }));
+
+    const { error } = await sb.from('clasificacion')
+      .upsert(registros, { onConflict: 'participante_id,jornada' });
+
+    setGuardando(false);
+    if (error) alert('Error al guardar: ' + error.message);
+    else setGuardado(true);
+  };
+
+  const setPts = (id, val) => {
+    setPuntos(prev => ({ ...prev, [id]: val }));
+    setGuardado(false);
+  };
+
+  const primera = participantes.filter(p => p.division_id === 1);
+  const segunda = participantes.filter(p => p.division_id === 2);
+
+  const TablaDiv = ({ lista, titulo }) => (
+    <div className="card">
+      <h2>{titulo}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Equipo</th>
+            <th style={{textAlign:'right', width:'140px'}}>Puntos jornada {jornada}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lista.map(p => (
+            <tr key={p.id}>
+              <td style={{fontWeight:600}}>{p.nombre}</td>
+              <td style={{textAlign:'right'}}>
+                <input
+                  type="number"
+                  min="0"
+                  value={puntos[p.id] ?? ''}
+                  onChange={e => setPts(p.id, e.target.value)}
+                  placeholder="—"
+                  style={{
+                    width:'80px', textAlign:'right', padding:'.3rem .5rem',
+                    border:'1.5px solid var(--borde)', borderRadius:'8px',
+                    fontSize:'.95rem', fontWeight:600,
+                  }}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="card" style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+        <span style={{fontWeight:600}}>Jornada:</span>
+        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
+          {Array.from({length: 38}, (_, i) => i + 1).map(j => (
+            <button key={j} onClick={() => setJornada(j)}
+              style={{
+                padding:'.3rem .6rem', borderRadius:'8px', fontSize:'.82rem',
+                border:'1.5px solid var(--borde)', cursor:'pointer',
+                background: jornada === j ? 'var(--verde)' : '#fff',
+                color: jornada === j ? '#fff' : 'var(--texto)',
+                fontWeight: jornada === j ? 700 : 400,
+              }}>
+              {j}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {participantes.length === 0
+        ? <div className="card"><div className="empty">Cargando participantes...</div></div>
+        : <>
+            <TablaDiv lista={primera} titulo="Primera Division" />
+            <TablaDiv lista={segunda} titulo="Segunda Division" />
+            <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>
+              {guardado && <span style={{color:'var(--verde)', fontWeight:600}}>Guardado correctamente</span>}
+              <button onClick={guardar} disabled={guardando}
+                style={{
+                  background:'var(--verde)', color:'#fff', border:'none',
+                  padding:'.6rem 1.5rem', borderRadius:'10px', fontSize:'1rem',
+                  fontWeight:700, cursor: guardando ? 'wait' : 'pointer',
+                  opacity: guardando ? .7 : 1,
+                }}>
+                {guardando ? 'Guardando...' : 'Guardar jornada ' + jornada}
+              </button>
+            </div>
+          </>
+      }
+    </div>
+  );
+}
+
+// ── DATOS DEMO (fallback si Supabase no responde) ──────────────
+const DEMO_CLASIFICACION = {
+  Primera: [
+    { id:'p1', nombre:'Tú',      puntos_totales:387, mejor_jornada:52, posicion:1 },
+    { id:'p2', nombre:'Marcos',  puntos_totales:361, mejor_jornada:48, posicion:2 },
+    { id:'p3', nombre:'Luisa',   puntos_totales:349, mejor_jornada:45, posicion:3 },
+    { id:'p4', nombre:'Adrian',  puntos_totales:320, mejor_jornada:41, posicion:4 },
+  ],
+  Segunda: [
+    { id:'p5', nombre:'Marta',   puntos_totales:310, mejor_jornada:44, posicion:1 },
+    { id:'p6', nombre:'Pablo',   puntos_totales:289, mejor_jornada:40, posicion:2 },
+  ],
+};
+const DEMO_PLANTILLA = [
+  { nombre:'Bellingham', equipo:'Real Madrid',  posicion:'MED', valor:180000000, compra:150000000 },
+  { nombre:'Vinicius',   equipo:'Real Madrid',  posicion:'DEL', valor:180000000, compra:160000000 },
+  { nombre:'Pedri',      equipo:'FC Barcelona', posicion:'MED', valor:100000000, compra:90000000  },
+];
+const DEMO_MERCADO = [
+  { id:'m1', nombre:'Aleix Garcia',  equipo:'Girona FC',    posicion:'MED', valor_mercado:35000000 },
+  { id:'m2', nombre:'Budimir',       equipo:'Osasuna',      posicion:'DEL', valor_mercado:12000000 },
+  { id:'m3', nombre:'Kubo',          equipo:'Real Sociedad',posicion:'MED', valor_mercado:55000000 },
+];
+
+// ── UTILIDAD GOLES ─────────────────────────────────────────────
+function ptsAGoles(pts) {
+  if (pts < 36) return 0;
+  return Math.floor((pts - 36) / 9) + 1;
+}
+
+// ── LIGA ───────────────────────────────────────────────────────
+function Liga({ participantes }) {
+  const [subtab, setSubtab]         = useState('global');
+  const [calendario, setCalendario] = useState(null);
+  const [clasMap, setClasMap]       = useState(null);   // {pid: {jornada: pts}}
+  const [divisiones, setDivisiones] = useState([]);
+  const [jornadaP, setJornadaP]     = useState(1);
+
+  const idNombre = useMemo(
+    () => Object.fromEntries(participantes.map(p => [p.id, p.nombre])),
+    [participantes]
+  );
+
+  useEffect(() => {
+    if (!sb) return;
+    Promise.all([
+      sb.from('calendario').select('id, jornada, division_id, local_id, visitante_id, es_neutral'),
+      sb.from('clasificacion').select('participante_id, jornada, puntos_jornada'),
+      sb.from('divisiones').select('id, nombre'),
+    ]).then(([{ data: cal }, { data: clas }, { data: divs }]) => {
+      setCalendario(cal || []);
+      const mapa = {};
+      (clas || []).forEach(r => {
+        if (!mapa[r.participante_id]) mapa[r.participante_id] = {};
+        mapa[r.participante_id][r.jornada] = r.puntos_jornada;
+      });
+      setClasMap(mapa);
+      setDivisiones(divs || []);
+    });
+  }, []);
+
+  const computarTabla = (divisionId) => {
+    const fixtures = (calendario || []).filter(f => f.division_id === divisionId);
+    const tabla = {};
+    participantes.filter(p => p.division_id === divisionId).forEach(p => {
+      tabla[p.id] = { nombre: p.nombre, pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, pts: 0 };
+    });
+
+    fixtures.forEach(f => {
+      const ptsLRec = (clasMap[f.local_id]     || {})[f.jornada];
+      const ptsVRec = (clasMap[f.visitante_id] || {})[f.jornada];
+      if (ptsLRec === undefined && ptsVRec === undefined) return; // jornada no jugada
+
+      const ptsL = ptsLRec ?? 0;
+      const ptsV = ptsVRec ?? 0;
+      const efL  = f.es_neutral ? ptsL : ptsL + 5;  // bono local
+      const gL   = ptsAGoles(efL);
+      const gV   = ptsAGoles(ptsV);
+
+      if (!tabla[f.local_id] || !tabla[f.visitante_id]) return;
+
+      tabla[f.local_id].pj++;
+      tabla[f.visitante_id].pj++;
+      tabla[f.local_id].gf     += gL;
+      tabla[f.local_id].gc     += gV;
+      tabla[f.visitante_id].gf += gV;
+      tabla[f.visitante_id].gc += gL;
+
+      if (gL > gV) {
+        tabla[f.local_id].pg++;
+        tabla[f.local_id].pts += 3;
+        tabla[f.visitante_id].pp++;
+      } else if (gL < gV) {
+        tabla[f.visitante_id].pg++;
+        tabla[f.visitante_id].pts += 3;
+        tabla[f.local_id].pp++;
+      } else {
+        tabla[f.local_id].pe++;     tabla[f.local_id].pts++;
+        tabla[f.visitante_id].pe++; tabla[f.visitante_id].pts++;
+      }
+    });
+
+    return Object.values(tabla).sort((a, b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      const difA = a.gf - a.gc, difB = b.gf - b.gc;
+      if (difB !== difA) return difB - difA;
+      return b.gf - a.gf;
+    });
+  };
+
+  const globalRanking = () => {
+    if (!clasMap) return [];
+    return participantes.map(p => ({
+      nombre: p.nombre,
+      pts: Object.values(clasMap[p.id] || {}).reduce((s, v) => s + v, 0),
+    })).sort((a, b) => b.pts - a.pts);
+  };
+
+  if (calendario === null || clasMap === null) return <Spinner />;
+
+  const divPrimera  = divisiones.find(d => d.nombre === 'Primera');
+  const divSegunda  = divisiones.find(d => d.nombre === 'Segunda');
+  const maxJornada  = calendario.length > 0 ? Math.max(...calendario.map(f => f.jornada)) : 38;
+
+  const TablaLiga = ({ datos, titulo }) => (
+    <div className="card">
+      <h2>{titulo}</h2>
+      {datos.length === 0
+        ? <div className="empty">
+            Sin calendario generado.<br/>
+            Ejecuta: <code>python generar_calendario.py</code>
+          </div>
+        : <table>
+            <thead>
+              <tr>
+                <th>Pos</th><th>Equipo</th>
+                <th style={{textAlign:'center'}}>PJ</th>
+                <th style={{textAlign:'center'}}>G</th>
+                <th style={{textAlign:'center'}}>E</th>
+                <th style={{textAlign:'center'}}>P</th>
+                <th style={{textAlign:'center'}}>GF</th>
+                <th style={{textAlign:'center'}}>GC</th>
+                <th style={{textAlign:'center'}}>DIF</th>
+                <th style={{textAlign:'right'}}>PTS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {datos.map((e, i) => {
+                const dif = e.gf - e.gc;
+                return (
+                  <tr key={e.nombre}>
+                    <td><Medalla pos={i + 1} /></td>
+                    <td style={{fontWeight:600}}>{e.nombre}</td>
+                    <td style={{textAlign:'center', color:'var(--texto2)'}}>{e.pj}</td>
+                    <td style={{textAlign:'center', color:'var(--verde)', fontWeight:600}}>{e.pg}</td>
+                    <td style={{textAlign:'center', color:'var(--texto2)'}}>{e.pe}</td>
+                    <td style={{textAlign:'center', color:'#d93025'}}>{e.pp}</td>
+                    <td style={{textAlign:'center'}}>{e.gf}</td>
+                    <td style={{textAlign:'center'}}>{e.gc}</td>
+                    <td style={{textAlign:'center'}}
+                        className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
+                      {dif >= 0 ? '+' : ''}{dif}
+                    </td>
+                    <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+      }
+    </div>
+  );
+
+  const global = globalRanking();
+
+  return (
+    <div>
+      <div className="tabs">
+        {[
+          ['global',   'Liga Fantástica'],
+          ['primera',  'Primera División'],
+          ['segunda',  'Segunda División'],
+          ['partidos', 'Partidos'],
+        ].map(([key, label]) => (
+          <button key={key} className={`tab ${subtab === key ? 'active' : ''}`}
+                  onClick={() => setSubtab(key)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {subtab === 'global' && (
+        <div className="card">
+          <h2>Liga Fantástica — Clasificación Global</h2>
+          <p style={{color:'var(--texto2)', fontSize:'.85rem', marginBottom:'1rem'}}>
+            Todos los equipos de ambas divisiones ordenados por puntos fantasy totales.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Pos</th>
+                <th>Equipo</th>
+                <th style={{textAlign:'right'}}>Puntos Fantasy</th>
+              </tr>
+            </thead>
+            <tbody>
+              {global.length === 0
+                ? <tr><td colSpan={3} className="empty">Sin puntos registrados aún.</td></tr>
+                : global.map((e, i) => (
+                    <tr key={e.nombre}>
+                      <td><Medalla pos={i + 1} /></td>
+                      <td style={{fontWeight:600}}>{e.nombre}</td>
+                      <td style={{textAlign:'right', fontWeight:700}}>{e.pts}</td>
+                    </tr>
+                  ))
+              }
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {subtab === 'primera' && (
+        <TablaLiga
+          datos={divPrimera ? computarTabla(divPrimera.id) : []}
+          titulo="Primera División — Tabla de Liga"
+        />
+      )}
+      {subtab === 'segunda' && (
+        <TablaLiga
+          datos={divSegunda ? computarTabla(divSegunda.id) : []}
+          titulo="Segunda División — Tabla de Liga"
+        />
+      )}
+
+      {subtab === 'partidos' && (() => {
+        if (calendario.length === 0) return (
+          <div className="card">
+            <div className="empty">
+              Sin calendario generado.<br/>
+              Ejecuta: <code>python generar_calendario.py</code>
+            </div>
+          </div>
+        );
+
+        return (
+          <div>
+            {/* Selector de jornada */}
+            <div className="card" style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+              <span style={{fontWeight:600, whiteSpace:'nowrap'}}>Jornada:</span>
+              <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap'}}>
+                {Array.from({length: maxJornada}, (_, i) => i + 1).map(j => (
+                  <button key={j} onClick={() => setJornadaP(j)}
+                    style={{
+                      padding:'.28rem .6rem', borderRadius:'8px', fontSize:'.8rem',
+                      border:'1.5px solid var(--borde)', cursor:'pointer',
+                      background: jornadaP === j ? 'var(--verde)' : '#fff',
+                      color:      jornadaP === j ? '#fff' : 'var(--texto)',
+                      fontWeight: jornadaP === j ? 700 : 400,
+                    }}>
+                    {j}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Partidos de cada división */}
+            {[divPrimera, divSegunda].filter(Boolean).map(div => {
+              const fixtures = calendario.filter(
+                f => f.division_id === div.id && f.jornada === jornadaP
+              );
+              if (fixtures.length === 0) return null;
+
+              return (
+                <div className="card" key={div.id}>
+                  <h2>{div.nombre} División — Jornada {jornadaP}</h2>
+                  {fixtures.map(f => {
+                    const ptsLRec = (clasMap[f.local_id]     || {})[jornadaP];
+                    const ptsVRec = (clasMap[f.visitante_id] || {})[jornadaP];
+                    const jugado  = ptsLRec !== undefined || ptsVRec !== undefined;
+                    const ptsL    = ptsLRec ?? 0;
+                    const ptsV    = ptsVRec ?? 0;
+                    const efL     = f.es_neutral ? ptsL : ptsL + 5;
+                    const gL      = ptsAGoles(efL);
+                    const gV      = ptsAGoles(ptsV);
+                    const nomL    = idNombre[f.local_id]     || '?';
+                    const nomV    = idNombre[f.visitante_id] || '?';
+
+                    let cL = 'var(--texto)', cV = 'var(--texto)';
+                    if (jugado) {
+                      if      (gL > gV) { cL = 'var(--verde)'; cV = '#d93025'; }
+                      else if (gL < gV) { cL = '#d93025';      cV = 'var(--verde)'; }
+                      else              { cL = cV = '#856404'; }   // empate: ocre
+                    }
+
+                    return (
+                      <div key={f.id} style={{
+                        display:'flex', alignItems:'center', gap:'.5rem',
+                        padding:'.9rem 0', borderBottom:'1px solid var(--gris)',
+                      }}>
+                        {/* Local */}
+                        <div style={{flex:1, textAlign:'right'}}>
+                          <div style={{fontWeight:700, fontSize:'.95rem', color:cL}}>
+                            {nomL}
+                          </div>
+                          {jugado && (
+                            <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.15rem'}}>
+                              {f.es_neutral ? ptsL : `${ptsL}+5`} = {efL} pts
+                              &nbsp;→&nbsp;<strong>{gL}</strong> {gL === 1 ? 'gol' : 'goles'}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Marcador */}
+                        <div style={{
+                          width:'80px', textAlign:'center', flexShrink:0,
+                          fontWeight:800, fontSize: jugado ? '1.35rem' : '.9rem',
+                          color: jugado ? 'var(--texto)' : 'var(--texto2)',
+                          lineHeight:1.1,
+                        }}>
+                          {jugado ? `${gL} – ${gV}` : '—'}
+                          {f.es_neutral && (
+                            <div style={{fontSize:'.62rem', fontWeight:500,
+                                         color:'var(--texto2)', marginTop:'.15rem',
+                                         textTransform:'uppercase', letterSpacing:'.04em'}}>
+                              neutral
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Visitante */}
+                        <div style={{flex:1}}>
+                          <div style={{fontWeight:700, fontSize:'.95rem', color:cV}}>
+                            {nomV}
+                          </div>
+                          {jugado && (
+                            <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.15rem'}}>
+                              {ptsV} pts&nbsp;→&nbsp;<strong>{gV}</strong> {gV === 1 ? 'gol' : 'goles'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            {/* Si no hay partidos en esta jornada */}
+            {[divPrimera, divSegunda].filter(Boolean).every(
+              div => calendario.filter(f => f.division_id === div.id && f.jornada === jornadaP).length === 0
+            ) && (
+              <div className="card">
+                <div className="empty">No hay partidos programados para la jornada {jornadaP}.</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ── EQUIPOS ────────────────────────────────────────────────────
+function Equipos({ participantes, miParticipanteId }) {
+  const [equipoId, setEquipoId] = useState('');
+  const [jugadores, setJugadores] = useState(null);
+  const [presupuesto, setPresupuesto] = useState(null);
+
+  useEffect(() => {
+    if (participantes.length > 0 && !equipoId) {
+      setEquipoId(participantes[0].id);
+    }
+  }, [participantes]);
+
+  useEffect(() => {
+    if (!equipoId || !sb) return;
+    setJugadores(null);
+    setPresupuesto(null);
+    sb.from('plantillas')
+      .select('id, precio_compra, jugadores(nombre, equipo, posicion, valor_mercado)')
+      .eq('participante_id', equipoId)
+      .then(({ data, error }) => setJugadores(error ? [] : (data || [])));
+    sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
+      .then(({ data }) => setPresupuesto(data?.presupuesto ?? null));
+  }, [equipoId]);
+
+  const equipo = participantes.find(p => p.id === equipoId);
+  const lista = (jugadores || []).map(p => ({
+    nombre:   p.jugadores?.nombre || '',
+    equipo:   p.jugadores?.equipo || '',
+    posicion: p.jugadores?.posicion || '',
+    valor:    p.jugadores?.valor_mercado || 0,
+    compra:   p.precio_compra || 0,
+  }));
+
+  return (
+    <div>
+      <div className="card">
+        <div className="tabs" style={{marginBottom: 0}}>
+          {participantes.map(p => (
+            <button key={p.id}
+              className={`tab ${equipoId === p.id ? 'active' : ''}`}
+              onClick={() => setEquipoId(p.id)}>
+              {p.nombre}{p.id === miParticipanteId ? ' (tú)' : ''}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {equipo && (
+        <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap'}}>
+          <div>
+            <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
+            <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
+              {presupuesto !== null ? fmt(presupuesto) : '…'}
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
+            <div style={{fontSize:'1.4rem', fontWeight:800}}>{jugadores ? lista.length : '…'}</div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <h2>Plantilla de {equipo?.nombre || '—'}</h2>
+        {jugadores === null
+          ? <Spinner />
+          : lista.length === 0
+          ? <div className="empty">Esta plantilla está vacía.</div>
+          : <table>
+              <thead>
+                <tr>
+                  <th>Jugador</th><th>Pos</th><th>Equipo</th>
+                  <th style={{textAlign:'right'}}>Valor actual</th>
+                  <th style={{textAlign:'right'}}>Dif. compra</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lista.map((j, i) => {
+                  const dif = (j.valor || 0) - (j.compra || 0);
+                  return (
+                    <tr key={i}>
+                      <td style={{fontWeight:600}}>{j.nombre}</td>
+                      <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td style={{color:'var(--texto2)'}}>{j.equipo}</td>
+                      <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
+                      <td style={{textAlign:'right'}}
+                          className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
+                        {dif >= 0 ? '+' : ''}{fmt(dif)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+        }
+      </div>
+    </div>
+  );
+}
+
+// ── APP PRINCIPAL ──────────────────────────────────────────────
+const VISTAS = ['Clasificacion', 'Mi Plantilla', 'Mercado', 'Equipos', 'Liga', 'Puntos'];
+
+function App() {
+  const [vista, setVista] = useState('Clasificacion');
+  const [participantes, setParticipantes] = useState([]);
+  const [participanteId, setParticipanteId] = useState('');
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('participantes').select('id, nombre, division_id')
+      .order('nombre')
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          setParticipantes(data);
+          setParticipanteId(data[0].id);
+        }
+      });
+  }, []);
+
+  const participanteActual = participantes.find(p => p.id === participanteId);
+
+  return (
+    <>
+      <nav>
+        <h1>Fantasy LaLiga</h1>
+        {VISTAS.map(v => (
+          <button key={v} className={vista===v?'active':''} onClick={() => setVista(v)}>
+            {v}
+          </button>
+        ))}
+        {participantes.length > 0 && (
+          <div className="nav-selector">
+            <label>Participante:</label>
+            <select value={participanteId} onChange={e => setParticipanteId(e.target.value)}>
+              {participantes.map(p => (
+                <option key={p.id} value={p.id}>{p.nombre}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </nav>
+
+      {esDemo && (
+        <div className="aviso">
+          Modo demo — edita <code>SUPABASE_URL</code> y <code>SUPABASE_KEY</code> en index.html
+        </div>
+      )}
+
+      <main>
+        {vista === 'Clasificacion' && <Clasificacion />}
+        {vista === 'Mi Plantilla'  && (
+          <Plantilla
+            participanteId={participanteId}
+            participanteNombre={participanteActual?.nombre}
+          />
+        )}
+        {vista === 'Mercado' && (
+          <Mercado
+            participanteId={participanteId}
+            onFichaje={() => {}}
+          />
+        )}
+        {vista === 'Equipos' && (
+          <Equipos participantes={participantes} miParticipanteId={participanteId} />
+        )}
+        {vista === 'Liga' && (
+          <Liga participantes={participantes} />
+        )}
+        {vista === 'Puntos' && (
+          <Puntos participantes={participantes} />
+        )}
+      </main>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

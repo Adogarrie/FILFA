@@ -487,9 +487,12 @@ function Mercado({ participanteId, participantes, onFichaje }) {
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion)').eq('participante_id', participanteId);
 
-    // Límite 15 jugadores
-    if ((miPlantilla?.length || 0) >= 15) {
-      alert('Tu equipo ya tiene 15 jugadores (máximo permitido).');
+    // Límite 15 jugadores (para POR se insertan tantos como porteros haya en ese equipo)
+    const nNuevos = modal.posicion === 'POR'
+      ? jugadores.filter(j => j.posicion === 'POR' && j.equipo === modal.equipo).length
+      : 1;
+    if ((miPlantilla?.length || 0) + nNuevos > 15) {
+      alert(`No hay hueco suficiente. Tienes ${miPlantilla?.length || 0}/15 jugadores y este fichaje añade ${nNuevos}.`);
       setModal(null);
       return;
     }
@@ -516,11 +519,22 @@ function Mercado({ participanteId, participantes, onFichaje }) {
       }
     }
 
-    const { error } = await sb.from('plantillas').insert({
-      participante_id: participanteId,
-      jugador_id:      modal.id,
-      precio_compra:   coste,
-    });
+    // Construir registros a insertar:
+    // Para POR → todos los porteros del equipo LaLiga; el más caro al precio real, el resto a 0
+    // Para el resto → solo el jugador seleccionado
+    let registros;
+    if (modal.posicion === 'POR') {
+      const todosPorteros = jugadores.filter(j => j.posicion === 'POR' && j.equipo === modal.equipo);
+      registros = todosPorteros.map(j => ({
+        participante_id: participanteId,
+        jugador_id:      j.id,
+        precio_compra:   j.id === modal.id ? coste : 0,
+      }));
+    } else {
+      registros = [{ participante_id: participanteId, jugador_id: modal.id, precio_compra: coste }];
+    }
+
+    const { error } = await sb.from('plantillas').insert(registros);
     if (error) {
       alert('Error al fichar: ' + error.message);
     } else {
@@ -596,11 +610,21 @@ function Mercado({ participanteId, participantes, onFichaje }) {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h3>Confirmar fichaje</h3>
             <p>
-              {modal.posicion === 'POR'
-                ? <>Fichar portero de <strong>{modal.equipo}</strong><br/><em style={{fontSize:'.85rem',color:'var(--texto2)'}}>({modal.nombre})</em></>
-                : <>Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})</>
+              {modal.posicion === 'POR' ? (() => {
+                const todosP = jugadores.filter(j => j.posicion === 'POR' && j.equipo === modal.equipo)
+                  .sort((a,b) => (b.valor_mercado||0) - (a.valor_mercado||0));
+                return <>
+                  Fichar portería de <strong>{modal.equipo}</strong><br/>
+                  {todosP.map(j => (
+                    <span key={j.id} style={{fontSize:'.85rem', color:'var(--texto2)', display:'block'}}>
+                      {j.nombre} — {j.id === modal.id ? fmt(j.valor_mercado||0) : <em>gratis</em>}
+                    </span>
+                  ))}
+                </>;
+              })()
+              : <>Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})</>
               }<br/>
-              Coste: <strong>{fmt(modal.valor_mercado || 0)}</strong>
+              Coste total: <strong>{fmt(modal.valor_mercado || 0)}</strong>
             </p>
             <div className="modal-btns">
               <button className="btn-cancel" onClick={() => setModal(null)}>Cancelar</button>

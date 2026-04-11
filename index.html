@@ -162,6 +162,8 @@ if (!esDemo) {
 // ── UTILIDADES ─────────────────────────────────────────────────
 const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
 const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+const nombreJugador = (nombre, posicion, equipo) =>
+  posicion === 'POR' ? `Portería ${equipo}` : nombre;
 
 function Medalla({ pos }) {
   if (pos === 1) return <span className="medalla-1">🥇</span>;
@@ -332,9 +334,9 @@ function Plantilla({ participanteId, participanteNombre }) {
                   const dif = (j.valor || 0) - (j.compra || 0);
                   return (
                     <tr key={i}>
-                      <td style={{fontWeight:600}}>{j.nombre}</td>
+                      <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                      <td style={{color:'var(--texto2)'}}>{j.equipo}</td>
+                      <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
                       <td style={{textAlign:'right'}}
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
@@ -360,7 +362,7 @@ function Plantilla({ participanteId, participanteNombre }) {
             <div className="modal" onClick={e => e.stopPropagation()}>
               <h3>Vender al mercado</h3>
               <p>
-                Vendes a <strong>{modalVenta.nombre}</strong> ({modalVenta.equipo})<br/>
+                Vendes a <strong>{nombreJugador(modalVenta.nombre, modalVenta.posicion, modalVenta.equipo)}</strong><br/>
                 Precio de compra: <strong>{fmt(modalVenta.compra || 0)}</strong><br/>
                 Valor actual de mercado: <strong>{fmt(modalVenta.valor || 0)}</strong><br/>
                 {(() => {
@@ -487,12 +489,9 @@ function Mercado({ participanteId, participantes, onFichaje }) {
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion)').eq('participante_id', participanteId);
 
-    // Límite 15 jugadores (para POR se insertan tantos como porteros haya en ese equipo)
-    const nNuevos = modal.posicion === 'POR'
-      ? jugadores.filter(j => j.posicion === 'POR' && j.equipo === modal.equipo).length
-      : 1;
-    if ((miPlantilla?.length || 0) + nNuevos > 15) {
-      alert(`No hay hueco suficiente. Tienes ${miPlantilla?.length || 0}/15 jugadores y este fichaje añade ${nNuevos}.`);
+    // Límite 15 jugadores
+    if ((miPlantilla?.length || 0) >= 15) {
+      alert('Tu equipo ya tiene 15 jugadores (máximo permitido).');
       setModal(null);
       return;
     }
@@ -519,22 +518,12 @@ function Mercado({ participanteId, participantes, onFichaje }) {
       }
     }
 
-    // Construir registros a insertar:
-    // Para POR → todos los porteros del equipo LaLiga; el más caro al precio real, el resto a 0
-    // Para el resto → solo el jugador seleccionado
-    let registros;
-    if (modal.posicion === 'POR') {
-      const todosPorteros = jugadores.filter(j => j.posicion === 'POR' && j.equipo === modal.equipo);
-      registros = todosPorteros.map(j => ({
-        participante_id: participanteId,
-        jugador_id:      j.id,
-        precio_compra:   j.id === modal.id ? coste : 0,
-      }));
-    } else {
-      registros = [{ participante_id: participanteId, jugador_id: modal.id, precio_compra: coste }];
-    }
-
-    const { error } = await sb.from('plantillas').insert(registros);
+    // Insertar solo el portero más caro como representante de la portería del equipo
+    const { error } = await sb.from('plantillas').insert({
+      participante_id: participanteId,
+      jugador_id:      modal.id,
+      precio_compra:   coste,
+    });
     if (error) {
       alert('Error al fichar: ' + error.message);
     } else {
@@ -1228,9 +1217,9 @@ function Equipos({ participantes, miParticipanteId }) {
                   const dif = (j.valor || 0) - (j.compra || 0);
                   return (
                     <tr key={i}>
-                      <td style={{fontWeight:600}}>{j.nombre}</td>
+                      <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                      <td style={{color:'var(--texto2)'}}>{j.equipo}</td>
+                      <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
                       <td style={{textAlign:'right'}}
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
@@ -1271,8 +1260,8 @@ function Equipos({ participantes, miParticipanteId }) {
                       {titulares.map((a,i) => (
                         <tr key={i}>
                           <td style={{width:48}}><span className={`badge ${a.jugadores?.posicion}`}>{a.jugadores?.posicion}</span></td>
-                          <td style={{fontWeight:600}}>{a.jugadores?.nombre}</td>
-                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.equipo}</td>
+                          <td style={{fontWeight:600}}>{nombreJugador(a.jugadores?.nombre, a.jugadores?.posicion, a.jugadores?.equipo)}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.posicion === 'POR' ? '' : a.jugadores?.equipo}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1290,8 +1279,8 @@ function Equipos({ participantes, miParticipanteId }) {
                       {suplentes.map((a,i) => (
                         <tr key={i}>
                           <td style={{width:48}}><span className={`badge ${a.jugadores?.posicion}`}>{a.jugadores?.posicion}</span></td>
-                          <td style={{fontWeight:600}}>{a.jugadores?.nombre}</td>
-                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.equipo}</td>
+                          <td style={{fontWeight:600}}>{nombreJugador(a.jugadores?.nombre, a.jugadores?.posicion, a.jugadores?.equipo)}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.posicion === 'POR' ? '' : a.jugadores?.equipo}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1656,8 +1645,8 @@ function Alineacion({ participanteId }) {
                 {jugs.map(j => (
                   <tr key={j.id}>
                     <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                    <td style={{fontWeight:600}}>{j.nombre}</td>
-                    <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.equipo}</td>
+                    <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
+                    <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
                     {!bloqueado && (
                       <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
                         {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (

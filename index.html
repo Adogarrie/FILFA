@@ -161,6 +161,7 @@ if (!esDemo) {
 
 // ── UTILIDADES ─────────────────────────────────────────────────
 const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
+const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
 
 function Medalla({ pos }) {
   if (pos === 1) return <span className="medalla-1">🥇</span>;
@@ -386,32 +387,52 @@ function Plantilla({ participanteId, participanteNombre }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, onFichaje }) {
-  const [jugadores, setJugadores]   = useState(null);
-  const [busqueda, setBusqueda]     = useState('');
-  const [filtroPOS, setFiltroPOS]   = useState('');
+function Mercado({ participanteId, participantes, onFichaje }) {
+  const [jugadores, setJugadores]       = useState(null);
+  const [todasPlantillas, setTodasPlantillas] = useState([]);
+  const [busqueda, setBusqueda]         = useState('');
+  const [filtroPOS, setFiltroPOS]       = useState('');
   const [filtroEquipo, setFiltroEquipo] = useState('');
-  const [modal, setModal]           = useState(null);
+  const [modal, setModal]               = useState(null);
 
-  const cargar = () => {
-    if (!sb) { setJugadores(DEMO_MERCADO); return; }
-    sb.from('vista_jugadores_libres').select('*')
-      .then(({ data, error }) => {
-        if (error) { console.error(error); setJugadores([]); }
-        else setJugadores(data || []);
-      });
+  const cargar = async () => {
+    if (!sb) { setJugadores(DEMO_MERCADO); setTodasPlantillas([]); return; }
+    const [{ data: jugs }, { data: plants }] = await Promise.all([
+      sb.from('jugadores').select('*').eq('activo', true),
+      sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion)'),
+    ]);
+    setJugadores(jugs || []);
+    setTodasPlantillas(plants || []);
   };
 
   useEffect(() => { cargar(); }, []);
 
+  // IDs de jugadores no-POR que ya están en alguna plantilla
+  const noPorterosOcupados = useMemo(() => {
+    const s = new Set();
+    for (const p of todasPlantillas)
+      if (p.jugadores?.posicion !== 'POR') s.add(p.jugador_id);
+    return s;
+  }, [todasPlantillas]);
+
+  // IDs de jugadores que ya tiene MI equipo
+  const misJugadoresIds = useMemo(() => {
+    const s = new Set();
+    for (const p of todasPlantillas)
+      if (p.participante_id === participanteId) s.add(p.jugador_id);
+    return s;
+  }, [todasPlantillas, participanteId]);
+
   const equiposLista = useMemo(() => {
-    if (!jugadores || jugadores === 'demo') return [];
+    if (!jugadores) return [];
     return [...new Set(jugadores.map(j => j.equipo).filter(Boolean))].sort();
   }, [jugadores]);
 
   const lista = useMemo(() => {
-    if (!jugadores || jugadores === null) return [];
-    return jugadores.filter(j => {
+    if (!jugadores) return [];
+    const filtrada = jugadores.filter(j => {
+      if (misJugadoresIds.has(j.id)) return false;             // ya en mi plantilla
+      if (j.posicion !== 'POR' && noPorterosOcupados.has(j.id)) return false; // no-POR ya fichado
       const okPos    = !filtroPOS    || j.posicion === filtroPOS;
       const okEquipo = !filtroEquipo || j.equipo   === filtroEquipo;
       const okBus    = !busqueda ||
@@ -419,7 +440,20 @@ function Mercado({ participanteId, onFichaje }) {
         (j.equipo||'').toLowerCase().includes(busqueda.toLowerCase());
       return okPos && okEquipo && okBus;
     });
-  }, [jugadores, busqueda, filtroPOS, filtroEquipo]);
+    // Porteros: colapsar por equipo, mostrar solo el más caro
+    const porEquipo = {};
+    const resto = [];
+    for (const j of filtrada) {
+      if (j.posicion === 'POR') {
+        const vm = j.valor_mercado || 0;
+        if (!porEquipo[j.equipo] || vm > (porEquipo[j.equipo].valor_mercado || 0))
+          porEquipo[j.equipo] = j;
+      } else {
+        resto.push(j);
+      }
+    }
+    return [...Object.values(porEquipo), ...resto];
+  }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, noPorterosOcupados]);
 
   const confirmarFichaje = async () => {
     if (!sb || !participanteId || !modal) { setModal(null); return; }
@@ -435,6 +469,39 @@ function Mercado({ participanteId, onFichaje }) {
       return;
     }
 
+    // Obtener plantilla actualizada para validar
+    const { data: miPlantilla } = await sb.from('plantillas')
+      .select('id, jugadores(posicion)').eq('participante_id', participanteId);
+
+    // Límite 15 jugadores
+    if ((miPlantilla?.length || 0) >= 15) {
+      alert('Tu equipo ya tiene 15 jugadores (máximo permitido).');
+      setModal(null);
+      return;
+    }
+
+    if (modal.posicion === 'POR') {
+      // Máximo 1 portero por equipo
+      if ((miPlantilla || []).some(p => p.jugadores?.posicion === 'POR')) {
+        alert('Ya tienes un portero en tu equipo.');
+        setModal(null);
+        return;
+      }
+      // Portero no puede estar en otro equipo de la misma división
+      const miDivision = participantes.find(p => p.id === participanteId)?.division_id;
+      const { data: otrosConPortero } = await sb.from('plantillas')
+        .select('participante_id').eq('jugador_id', modal.id);
+      const conflicto = (otrosConPortero || []).some(r => {
+        const p = participantes.find(x => x.id === r.participante_id);
+        return p?.division_id === miDivision;
+      });
+      if (conflicto) {
+        alert('Este portero ya está fichado por otro equipo de tu misma división.');
+        setModal(null);
+        return;
+      }
+    }
+
     const { error } = await sb.from('plantillas').insert({
       participante_id: participanteId,
       jugador_id:      modal.id,
@@ -443,7 +510,6 @@ function Mercado({ participanteId, onFichaje }) {
     if (error) {
       alert('Error al fichar: ' + error.message);
     } else {
-      // Descontar del presupuesto real
       const { error: errPres } = await sb.from('participantes')
         .update({ presupuesto: presupuestoActual - coste })
         .eq('id', participanteId);
@@ -459,7 +525,7 @@ function Mercado({ participanteId, onFichaje }) {
   return (
     <div>
       <div className="card">
-        <h2>Mercado de jugadores libres</h2>
+        <h2>Mercado de jugadores</h2>
         <div className="filtros">
           <input placeholder="Buscar jugador o equipo..."
                  value={busqueda} onChange={e => setBusqueda(e.target.value)} />
@@ -485,10 +551,12 @@ function Mercado({ participanteId, onFichaje }) {
           <tbody>
             {lista.map(j => (
               <tr key={j.id}>
-                <td style={{fontWeight:600}}>{j.nombre}</td>
+                <td style={{fontWeight:600}}>
+                  {j.posicion === 'POR' ? j.equipo.toUpperCase() : j.nombre}
+                </td>
                 <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                <td style={{color:'var(--texto2)'}}>{j.equipo}</td>
-                <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || j.valor || 0)}</td>
+                <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
+                <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || 0)}</td>
                 <td>
                   <button className="btn-fichar" onClick={() => setModal(j)}
                           disabled={!participanteId}
@@ -501,8 +569,8 @@ function Mercado({ participanteId, onFichaje }) {
             {lista.length === 0 && (
               <tr><td colSpan={5} className="empty">
                 {jugadores.length === 0
-                  ? 'No hay jugadores en la base de datos. Ejecuta cargar_jugadores.py'
-                  : 'No hay jugadores que coincidan con la busqueda'}
+                  ? 'No hay jugadores en la base de datos. Ejecuta actualizar_temporada.py'
+                  : 'No hay jugadores disponibles con esos filtros'}
               </td></tr>
             )}
           </tbody>
@@ -514,7 +582,10 @@ function Mercado({ participanteId, onFichaje }) {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h3>Confirmar fichaje</h3>
             <p>
-              Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})<br/>
+              {modal.posicion === 'POR'
+                ? <>Fichar portero de <strong>{modal.equipo}</strong><br/><em style={{fontSize:'.85rem',color:'var(--texto2)'}}>({modal.nombre})</em></>
+                : <>Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})</>
+              }<br/>
               Coste: <strong>{fmt(modal.valor_mercado || 0)}</strong>
             </p>
             <div className="modal-btns">
@@ -1019,15 +1090,21 @@ function Liga({ participantes }) {
 
 // ── EQUIPOS ────────────────────────────────────────────────────
 function Equipos({ participantes, miParticipanteId }) {
-  const [equipoId, setEquipoId] = useState('');
-  const [jugadores, setJugadores] = useState(null);
+  const [equipoId, setEquipoId]       = useState('');
+  const [jugadores, setJugadores]     = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
+  const [aliJornada, setAliJornada]   = useState(1);
+  const [alineacion, setAlineacion]   = useState(null); // null = cargando
 
   useEffect(() => {
-    if (participantes.length > 0 && !equipoId) {
-      setEquipoId(participantes[0].id);
-    }
+    if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
   }, [participantes]);
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('config').select('jornada_actual').single()
+      .then(({ data }) => data && setAliJornada(data.jornada_actual));
+  }, []);
 
   useEffect(() => {
     if (!equipoId || !sb) return;
@@ -1041,6 +1118,16 @@ function Equipos({ participantes, miParticipanteId }) {
       .then(({ data }) => setPresupuesto(data?.presupuesto ?? null));
   }, [equipoId]);
 
+  useEffect(() => {
+    if (!equipoId || !sb) return;
+    setAlineacion(null);
+    sb.from('alineaciones')
+      .select('jugador_id, es_titular, jugadores(nombre, equipo, posicion)')
+      .eq('participante_id', equipoId)
+      .eq('jornada', aliJornada)
+      .then(({ data }) => setAlineacion(data || []));
+  }, [equipoId, aliJornada]);
+
   const equipo = participantes.find(p => p.id === equipoId);
   const lista = (jugadores || []).map(p => ({
     nombre:   p.jugadores?.nombre || '',
@@ -1049,6 +1136,11 @@ function Equipos({ participantes, miParticipanteId }) {
     valor:    p.jugadores?.valor_mercado || 0,
     compra:   p.precio_compra || 0,
   }));
+
+  const titulares  = (alineacion || []).filter(a => a.es_titular)
+    .sort((a,b) => POS_ORDEN[a.jugadores?.posicion] - POS_ORDEN[b.jugadores?.posicion]);
+  const suplentes  = (alineacion || []).filter(a => !a.es_titular)
+    .sort((a,b) => POS_ORDEN[a.jugadores?.posicion] - POS_ORDEN[b.jugadores?.posicion]);
 
   return (
     <div>
@@ -1111,6 +1203,64 @@ function Equipos({ participantes, miParticipanteId }) {
                 })}
               </tbody>
             </table>
+        }
+      </div>
+
+      <div className="card">
+        <div style={{display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem', flexWrap:'wrap'}}>
+          <h2 style={{margin:0}}>Alineación de {equipo?.nombre || '—'}</h2>
+          <div>
+            <label style={{fontSize:'.85rem', color:'var(--texto2)', marginRight:'.4rem'}}>Jornada:</label>
+            <select value={aliJornada} onChange={e => setAliJornada(Number(e.target.value))}
+                    style={{padding:'.3rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+              {Array.from({length:38},(_,i)=>i+1).map(j =>
+                <option key={j} value={j}>J{j}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {alineacion === null ? <Spinner /> : alineacion.length === 0
+          ? <div className="empty">Sin alineación guardada para J{aliJornada}.</div>
+          : <>
+              {titulares.length > 0 && (
+                <>
+                  <div style={{fontWeight:700, fontSize:'.78rem', color:'#198754',
+                               textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
+                    Titulares ({titulares.length}/11)
+                  </div>
+                  <table style={{width:'100%', marginBottom:'1rem'}}>
+                    <tbody>
+                      {titulares.map((a,i) => (
+                        <tr key={i}>
+                          <td style={{width:48}}><span className={`badge ${a.jugadores?.posicion}`}>{a.jugadores?.posicion}</span></td>
+                          <td style={{fontWeight:600}}>{a.jugadores?.nombre}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.equipo}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+              {suplentes.length > 0 && (
+                <>
+                  <div style={{fontWeight:700, fontSize:'.78rem', color:'#fd7e14',
+                               textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
+                    Suplentes ({suplentes.length}/4)
+                  </div>
+                  <table style={{width:'100%'}}>
+                    <tbody>
+                      {suplentes.map((a,i) => (
+                        <tr key={i}>
+                          <td style={{width:48}}><span className={`badge ${a.jugadores?.posicion}`}>{a.jugadores?.posicion}</span></td>
+                          <td style={{fontWeight:600}}>{a.jugadores?.nombre}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.equipo}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </>
         }
       </div>
     </div>
@@ -1347,6 +1497,172 @@ function Login({ onLogin }) {
   );
 }
 
+// ── ALINEACIÓN ─────────────────────────────────────────────────
+function Alineacion({ participanteId }) {
+  const [jornada, setJornada]     = useState(1);
+  const [cierre, setCierre]       = useState(null);
+  const [plantilla, setPlantilla] = useState(null);
+  const [estado, setEstado]       = useState({});  // id → 'T'|'S'|'F'
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg]             = useState('');
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('config').select('jornada_actual').single()
+      .then(({ data }) => data && setJornada(data.jornada_actual));
+  }, []);
+
+  useEffect(() => {
+    if (!sb || !participanteId) return;
+    sb.from('plantillas')
+      .select('jugador_id, jugadores(id, nombre, equipo, posicion)')
+      .eq('participante_id', participanteId)
+      .then(({ data }) => {
+        const jugs = (data || []).map(p => p.jugadores).filter(Boolean);
+        jugs.sort((a, b) => POS_ORDEN[a.posicion] - POS_ORDEN[b.posicion]);
+        setPlantilla(jugs);
+      });
+  }, [participanteId]);
+
+  useEffect(() => {
+    if (!sb || !participanteId || !plantilla) return;
+    Promise.all([
+      sb.from('alineaciones').select('jugador_id, es_titular')
+        .eq('participante_id', participanteId).eq('jornada', jornada),
+      sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle(),
+    ]).then(([{ data: ali }, { data: cierreRow }]) => {
+      setCierre(cierreRow?.cierre || null);
+      const e = {};
+      for (const j of plantilla) e[j.id] = 'F';
+      for (const a of (ali || []))
+        if (e.hasOwnProperty(a.jugador_id)) e[a.jugador_id] = a.es_titular ? 'T' : 'S';
+      setEstado(e);
+    });
+  }, [participanteId, jornada, plantilla]);
+
+  const bloqueado = !!(cierre && new Date() > new Date(cierre));
+  const nT = Object.values(estado).filter(v => v === 'T').length;
+  const nS = Object.values(estado).filter(v => v === 'S').length;
+
+  const setJugadorEstado = (id, op) => {
+    if (bloqueado) return;
+    if (op === 'T' && nT >= 11 && estado[id] !== 'T') { alert('Ya tienes 11 titulares.'); return; }
+    if (op === 'S' && nS >= 4  && estado[id] !== 'S') { alert('Máximo 4 suplentes.'); return; }
+    setEstado(prev => ({ ...prev, [id]: op }));
+    setMsg('');
+  };
+
+  const guardar = async () => {
+    if (bloqueado || !sb) return;
+    if (nT !== 11) { alert(`Necesitas exactamente 11 titulares (tienes ${nT}).`); return; }
+    setGuardando(true);
+    const registros = Object.entries(estado)
+      .filter(([, v]) => v === 'T' || v === 'S')
+      .map(([jugadorId, v]) => ({
+        participante_id: participanteId, jornada,
+        jugador_id: jugadorId, es_titular: v === 'T',
+      }));
+    await sb.from('alineaciones').delete()
+      .eq('participante_id', participanteId).eq('jornada', jornada);
+    if (registros.length) await sb.from('alineaciones').insert(registros);
+    setGuardando(false);
+    setMsg('Alineación guardada');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  if (plantilla === null) return <Spinner />;
+
+  const seciones = [
+    { key: 'T', label: `Titulares (${nT}/11)`, color: '#198754' },
+    { key: 'S', label: `Suplentes (${nS}/4)`,  color: '#fd7e14' },
+    { key: 'F', label: 'Sin convocar',           color: 'var(--texto2)' },
+  ];
+
+  return (
+    <div className="card">
+      <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'center', marginBottom:'1.2rem'}}>
+        <div>
+          <label style={{fontSize:'.85rem', color:'var(--texto2)', marginRight:'.4rem'}}>Jornada:</label>
+          <select value={jornada} onChange={e => setJornada(Number(e.target.value))}
+                  style={{padding:'.3rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+            {Array.from({length:38},(_,i)=>i+1).map(j =>
+              <option key={j} value={j}>J{j}</option>)}
+          </select>
+        </div>
+        <div style={{fontSize:'.85rem'}}>
+          {cierre
+            ? <span style={{color: bloqueado ? '#dc3545' : '#198754', fontWeight:600}}>
+                {bloqueado ? '🔒 Cerrada' : '🟢 Abierta'} — cierre: {new Date(cierre).toLocaleString('es-ES')}
+              </span>
+            : <span style={{color:'#198754', fontWeight:600}}>🟢 Sin hora de cierre</span>}
+        </div>
+        <div style={{marginLeft:'auto', fontSize:'.9rem'}}>
+          <strong style={{color: nT===11 ? '#198754' : '#dc3545'}}>{nT}/11</strong>
+          <span style={{color:'var(--texto2)'}}> tit &nbsp;·&nbsp; </span>
+          <strong>{nS}/4</strong>
+          <span style={{color:'var(--texto2)'}}> sup</span>
+        </div>
+      </div>
+
+      {seciones.map(({ key, label, color }) => {
+        const jugs = plantilla.filter(j => estado[j.id] === key);
+        if (!jugs.length) return null;
+        return (
+          <div key={key} style={{marginBottom:'1rem'}}>
+            <div style={{fontWeight:700, fontSize:'.78rem', color, textTransform:'uppercase',
+                         letterSpacing:'.05em', marginBottom:'.35rem'}}>
+              {label}
+            </div>
+            <table style={{width:'100%'}}>
+              <tbody>
+                {jugs.map(j => (
+                  <tr key={j.id}>
+                    <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                    <td style={{fontWeight:600}}>{j.nombre}</td>
+                    <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.equipo}</td>
+                    {!bloqueado && (
+                      <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                        {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
+                          <button key={op} onClick={() => setJugadorEstado(j.id, op)}
+                                  style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',
+                                          border:`1.5px solid ${estado[j.id]===op ? col : 'var(--borde)'}`,
+                                          borderRadius:6, cursor:'pointer',
+                                          background: estado[j.id]===op ? col : '#fff',
+                                          color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
+                            {etiq}
+                          </button>
+                        ))}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+
+      {plantilla.length === 0 && (
+        <div className="empty">Tu plantilla está vacía. Ficha jugadores primero.</div>
+      )}
+
+      {!bloqueado && plantilla.length > 0 && (
+        <div style={{marginTop:'1rem', display:'flex', gap:'1rem', alignItems:'center'}}>
+          <button className="btn-ok" onClick={guardar} disabled={guardando}>
+            {guardando ? 'Guardando…' : 'Guardar alineación'}
+          </button>
+          {msg && <span style={{color:'#198754', fontSize:'.9rem'}}>{msg}</span>}
+        </div>
+      )}
+      {bloqueado && (
+        <p style={{color:'#dc3545', fontSize:'.9rem', marginTop:'.6rem'}}>
+          La alineación de esta jornada está cerrada y no puede modificarse.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── ADMIN — PRESUPUESTOS ───────────────────────────────────────
 function AdminPresupuestos({ participantes }) {
   const [valores, setValores]   = useState({});
@@ -1563,6 +1879,73 @@ function AdminCalendario({ participantes }) {
   );
 }
 
+// ── ADMIN — CIERRES DE JORNADA ─────────────────────────────────
+function AdminCierres() {
+  const [jornada, setJornada] = useState(1);
+  const [cierre, setCierre]   = useState('');
+  const [msg, setMsg]         = useState('');
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('config').select('jornada_actual').single()
+      .then(({ data }) => data && setJornada(data.jornada_actual));
+  }, []);
+
+  const cargar = () => {
+    if (!sb) return;
+    sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle()
+      .then(({ data }) => setCierre(data?.cierre ? data.cierre.slice(0, 16) : ''));
+  };
+  useEffect(cargar, [jornada]);
+
+  const guardar = async () => {
+    if (!sb) return;
+    if (!cierre) {
+      await sb.from('jornadas_cierre').delete().eq('jornada', jornada);
+      setMsg('Cierre eliminado');
+    } else {
+      await sb.from('jornadas_cierre')
+        .upsert({ jornada, cierre: new Date(cierre).toISOString() }, { onConflict: 'jornada' });
+      setMsg('Cierre guardado');
+    }
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  return (
+    <div className="card">
+      <h2>Cierre de alineaciones por jornada</h2>
+      <p style={{fontSize:'.9rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+        Establece la hora límite a partir de la cual los equipos no pueden modificar su alineación.
+        Deja el campo vacío y guarda para eliminar el cierre de una jornada.
+      </p>
+      <div style={{display:'flex', gap:'1rem', alignItems:'flex-end', flexWrap:'wrap'}}>
+        <div>
+          <label style={{fontSize:'.85rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>Jornada</label>
+          <select value={jornada} onChange={e => setJornada(Number(e.target.value))}
+                  style={{padding:'.4rem .7rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+            {Array.from({length:38},(_,i)=>i+1).map(j =>
+              <option key={j} value={j}>Jornada {j}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:'.85rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+            Fecha y hora de cierre
+          </label>
+          <input type="datetime-local" value={cierre} onChange={e => setCierre(e.target.value)}
+                 style={{padding:'.4rem .7rem', borderRadius:6, border:'1.5px solid var(--borde)'}} />
+        </div>
+        <button className="btn-ok" onClick={guardar}>Guardar</button>
+        {msg && <span style={{color:'#198754', fontSize:'.9rem'}}>{msg}</span>}
+      </div>
+      {cierre && (
+        <p style={{marginTop:'.8rem', fontSize:'.85rem', color:'var(--texto2)'}}>
+          Cierre actual J{jornada}: <strong>{new Date(cierre).toLocaleString('es-ES')}</strong>
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
 function AdminPanel({ participantes }) {
   const [subtab, setSubtab] = useState('puntos');
@@ -1574,6 +1957,7 @@ function AdminPanel({ participantes }) {
           ['puntos',       'Clasificación'],
           ['presupuestos', 'Presupuestos'],
           ['calendario',   'Calendario'],
+          ['cierres',      'Cierres'],
         ].map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
                   onClick={() => setSubtab(k)}>
@@ -1584,6 +1968,7 @@ function AdminPanel({ participantes }) {
       {subtab === 'puntos'        && <Puntos participantes={participantes} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'calendario'    && <AdminCalendario participantes={participantes} />}
+      {subtab === 'cierres'       && <AdminCierres />}
     </div>
   );
 }
@@ -1628,7 +2013,7 @@ function App() {
   if (!session) return <Login onLogin={handleLogin} />;
 
   const isAdmin  = !!session.is_admin;
-  const VISTAS   = ['Mi Plantilla', 'Mercado', 'Equipos', 'Liga', 'Copa',
+  const VISTAS   = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Liga', 'Copa',
                     ...(isAdmin ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -1678,7 +2063,10 @@ function App() {
                      participanteNombre={participanteActual?.nombre} />
         )}
         {vista === 'Mercado' && (
-          <Mercado participanteId={participanteId} onFichaje={() => {}} />
+          <Mercado participanteId={participanteId} participantes={participantes} onFichaje={() => {}} />
+        )}
+        {vista === 'Alineación' && (
+          <Alineacion participanteId={participanteId} />
         )}
         {vista === 'Equipos' && (
           <Equipos participantes={participantes} miParticipanteId={participanteId} />

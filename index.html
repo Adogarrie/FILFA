@@ -389,22 +389,35 @@ function Plantilla({ participanteId, participanteNombre }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, onFichaje }) {
-  const [jugadores, setJugadores]       = useState(null);
+function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
+  const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
-  const [busqueda, setBusqueda]         = useState('');
-  const [filtroPOS, setFiltroPOS]       = useState('');
-  const [filtroEquipo, setFiltroEquipo] = useState('');
-  const [modal, setModal]               = useState(null);
+  const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
+  const [conteosPujas, setConteosPujas]     = useState({}); // jugador_id → count
+  const [busqueda, setBusqueda]             = useState('');
+  const [filtroPOS, setFiltroPOS]           = useState('');
+  const [filtroEquipo, setFiltroEquipo]     = useState('');
+  const [modal, setModal]                   = useState(null); // admin: fichar directo
+  const [modalPuja, setModalPuja]           = useState(null); // usuario: pujar
+  const [cantidadPuja, setCantidadPuja]     = useState('');
 
   const cargar = async () => {
     if (!sb) { setJugadores(DEMO_MERCADO); setTodasPlantillas([]); return; }
-    const [{ data: jugs }, { data: plants }] = await Promise.all([
+    const [{ data: jugs }, { data: plants }, { data: allPujas }] = await Promise.all([
       sb.from('jugadores').select('*').eq('activo', true),
       sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion, equipo)'),
+      sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false),
     ]);
     setJugadores(jugs || []);
     setTodasPlantillas(plants || []);
+    const mp = {}, cp = {};
+    for (const p of (allPujas || [])) {
+      cp[p.jugador_id] = (cp[p.jugador_id] || 0) + 1;
+      if (p.participante_id === participanteId)
+        mp[p.jugador_id] = { id: p.id, cantidad: p.cantidad };
+    }
+    setMisPujas(mp);
+    setConteosPujas(cp);
   };
 
   useEffect(() => { cargar(); }, []);
@@ -471,6 +484,35 @@ function Mercado({ participanteId, participantes, onFichaje }) {
     return [...Object.values(porEquipo), ...resto];
   }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, noPorterosOcupados, porteríasBloqueadas]);
 
+  // ── Pujar (usuarios) ──────────────────────────────────────────
+  const confirmarPuja = async () => {
+    if (!sb || !participanteId || !modalPuja) return;
+    const cantidad = parseFloat(String(cantidadPuja).replace(',', '.'));
+    const minimo   = modalPuja.valor_mercado || 0;
+    if (isNaN(cantidad) || cantidad < minimo) {
+      alert(`La puja mínima es ${fmt(minimo)}.`); return;
+    }
+    const { data: partData } = await sb.from('participantes')
+      .select('presupuesto').eq('id', participanteId).single();
+    if (cantidad > (partData?.presupuesto || 0)) {
+      alert(`Presupuesto insuficiente. Disponible: ${fmt(partData?.presupuesto || 0)}`); return;
+    }
+    await sb.from('pujas').upsert(
+      { participante_id: participanteId, jugador_id: modalPuja.id,
+        cantidad, resuelta: false, ganadora: null },
+      { onConflict: 'participante_id,jugador_id' }
+    );
+    setModalPuja(null); setCantidadPuja(''); cargar();
+  };
+
+  const cancelarPuja = async (jugadorId) => {
+    if (!sb) return;
+    await sb.from('pujas').delete()
+      .eq('participante_id', participanteId).eq('jugador_id', jugadorId);
+    cargar();
+  };
+
+  // ── Fichar directo (solo admin) ────────────────────────────────
   const confirmarFichaje = async () => {
     if (!sb || !participanteId || !modal) { setModal(null); return; }
 
@@ -562,29 +604,60 @@ function Mercado({ participanteId, participantes, onFichaje }) {
           <thead>
             <tr>
               <th>Jugador</th><th>Pos</th><th>Equipo</th>
-              <th style={{textAlign:'right'}}>Valor</th><th></th>
+              <th style={{textAlign:'right'}}>Valor mín.</th>
+              <th>Pujas</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            {lista.map(j => (
-              <tr key={j.id}>
-                <td style={{fontWeight:600}}>
-                  {j.posicion === 'POR' ? j.equipo.toUpperCase() : j.nombre}
-                </td>
-                <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
-                <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || 0)}</td>
-                <td>
-                  <button className="btn-fichar" onClick={() => setModal(j)}
-                          disabled={!participanteId}
-                          title={!participanteId ? 'Selecciona un participante primero' : ''}>
-                    Fichar
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {lista.map(j => {
+              const nPujas   = conteosPujas[j.id] || 0;
+              const miPuja   = misPujas[j.id];
+              return (
+                <tr key={j.id}>
+                  <td style={{fontWeight:600}}>
+                    {j.posicion === 'POR' ? j.equipo.toUpperCase() : j.nombre}
+                  </td>
+                  <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                  <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
+                  <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || 0)}</td>
+                  <td style={{textAlign:'center', fontSize:'.85rem', color: nPujas > 0 ? '#d97706' : 'var(--texto2)'}}>
+                    {nPujas > 0 ? `🔥 ${nPujas}` : '—'}
+                  </td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    {isAdmin ? (
+                      <button className="btn-fichar" onClick={() => setModal(j)}>Fichar</button>
+                    ) : miPuja ? (
+                      <span style={{display:'flex', gap:4, alignItems:'center'}}>
+                        <span style={{fontSize:'.8rem', color:'#198754', fontWeight:600}}>
+                          {fmt(miPuja.cantidad)}
+                        </span>
+                        <button onClick={() => { setModalPuja(j); setCantidadPuja(String(miPuja.cantidad)); }}
+                                style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
+                                        border:'1.5px solid #198754', background:'#fff',
+                                        color:'#198754', cursor:'pointer'}}>
+                          Editar
+                        </button>
+                        <button onClick={() => cancelarPuja(j.id)}
+                                style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
+                                        border:'1.5px solid #dc3545', background:'#fff',
+                                        color:'#dc3545', cursor:'pointer'}}>
+                          ✕
+                        </button>
+                      </span>
+                    ) : (
+                      <button className="btn-fichar"
+                              onClick={() => { setModalPuja(j); setCantidadPuja(''); }}
+                              disabled={!participanteId}>
+                        Pujar
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
             {lista.length === 0 && (
-              <tr><td colSpan={5} className="empty">
+              <tr><td colSpan={6} className="empty">
                 {jugadores.length === 0
                   ? 'No hay jugadores en la base de datos. Ejecuta actualizar_temporada.py'
                   : 'No hay jugadores disponibles con esos filtros'}
@@ -594,26 +667,50 @@ function Mercado({ participanteId, participantes, onFichaje }) {
         </table>
       </div>
 
+      {/* Modal puja (usuarios) */}
+      {modalPuja && (
+        <div className="overlay" onClick={() => setModalPuja(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Realizar puja</h3>
+            <p style={{marginBottom:'.8rem'}}>
+              {modalPuja.posicion === 'POR'
+                ? <>Portería de <strong>{modalPuja.equipo}</strong></>
+                : <><strong>{modalPuja.nombre}</strong> ({modalPuja.equipo})</>
+              }<br/>
+              <span style={{fontSize:'.85rem', color:'var(--texto2)'}}>
+                Valor de mercado: {fmt(modalPuja.valor_mercado || 0)} (puja mínima)
+              </span>
+            </p>
+            <div style={{marginBottom:'1rem'}}>
+              <label style={{fontSize:'.85rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+                Tu puja (€)
+              </label>
+              <input type="number" min={modalPuja.valor_mercado || 0} step="100000"
+                     value={cantidadPuja}
+                     onChange={e => setCantidadPuja(e.target.value)}
+                     style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                             border:'1.5px solid var(--borde)', fontSize:'1rem'}}
+                     placeholder={`Mínimo: ${fmt(modalPuja.valor_mercado || 0)}`} />
+            </div>
+            <div className="modal-btns">
+              <button className="btn-cancel" onClick={() => setModalPuja(null)}>Cancelar</button>
+              <button className="btn-ok" onClick={confirmarPuja}>Confirmar puja</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal fichar directo (admin) */}
       {modal && (
         <div className="overlay" onClick={() => setModal(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3>Confirmar fichaje</h3>
+            <h3>Fichar directamente</h3>
             <p>
-              {modal.posicion === 'POR' ? (() => {
-                const todosP = jugadores.filter(j => j.posicion === 'POR' && j.equipo === modal.equipo)
-                  .sort((a,b) => (b.valor_mercado||0) - (a.valor_mercado||0));
-                return <>
-                  Fichar portería de <strong>{modal.equipo}</strong><br/>
-                  {todosP.map(j => (
-                    <span key={j.id} style={{fontSize:'.85rem', color:'var(--texto2)', display:'block'}}>
-                      {j.nombre} — {j.id === modal.id ? fmt(j.valor_mercado||0) : <em>gratis</em>}
-                    </span>
-                  ))}
-                </>;
-              })()
-              : <>Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})</>
+              {modal.posicion === 'POR'
+                ? <>Portería de <strong>{modal.equipo}</strong></>
+                : <>Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})</>
               }<br/>
-              Coste total: <strong>{fmt(modal.valor_mercado || 0)}</strong>
+              Coste: <strong>{fmt(modal.valor_mercado || 0)}</strong>
             </p>
             <div className="modal-btns">
               <button className="btn-cancel" onClick={() => setModal(null)}>Cancelar</button>
@@ -1928,6 +2025,164 @@ function AdminCalendario({ participantes }) {
   );
 }
 
+// ── ADMIN — PUJAS ──────────────────────────────────────────────
+function AdminPujas({ participantes }) {
+  const [pujas, setPujas]       = useState(null);
+  const [resolviendo, setResolviendo] = useState(null); // jugador_id en proceso
+
+  const cargar = () => {
+    if (!sb) return;
+    sb.from('pujas')
+      .select('id, participante_id, jugador_id, cantidad, created_at, jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre)')
+      .eq('resuelta', false)
+      .order('cantidad', { ascending: false })
+      .then(({ data }) => setPujas(data || []));
+  };
+  useEffect(cargar, []);
+
+  // Agrupar por jugador, bids ordenadas de mayor a menor
+  const porJugador = useMemo(() => {
+    if (!pujas) return [];
+    const m = {};
+    for (const p of pujas) {
+      const jid = p.jugador_id;
+      if (!m[jid]) m[jid] = { jugador: p.jugadores, bids: [] };
+      m[jid].bids.push({ ...p, equipo: p.participantes?.nombre });
+    }
+    for (const jid in m) m[jid].bids.sort((a,b) => b.cantidad - a.cantidad);
+    return Object.values(m).sort((a,b) =>
+      (POS_ORDEN[a.jugador?.posicion]||9) - (POS_ORDEN[b.jugador?.posicion]||9));
+  }, [pujas]);
+
+  const resolver = async (jugadorId, ganador) => {
+    setResolviendo(jugadorId);
+    // 1. Presupuesto
+    const { data: pd } = await sb.from('participantes')
+      .select('presupuesto').eq('id', ganador.participante_id).single();
+    if ((pd?.presupuesto || 0) < ganador.cantidad) {
+      alert(`${ganador.equipo} no tiene presupuesto suficiente (${fmt(pd?.presupuesto||0)}).`);
+      setResolviendo(null); return;
+    }
+    // 2. Límite 15
+    const { data: plant } = await sb.from('plantillas')
+      .select('id').eq('participante_id', ganador.participante_id);
+    if ((plant?.length || 0) >= 15) {
+      alert(`${ganador.equipo} ya tiene 15 jugadores.`);
+      setResolviendo(null); return;
+    }
+    // 3. División (porteros)
+    const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
+    if (jug?.posicion === 'POR') {
+      const miDiv = participantes.find(p => p.id === ganador.participante_id)?.division_id;
+      const { data: existentes } = await sb.from('plantillas')
+        .select('participante_id, jugadores(posicion, equipo)')
+        .eq('jugador_id', jugadorId);
+      const conflicto = (existentes||[]).some(e => {
+        if (e.jugadores?.posicion !== 'POR' || e.jugadores?.equipo !== jug.equipo) return false;
+        return participantes.find(p => p.id === e.participante_id)?.division_id === miDiv;
+      });
+      if (conflicto) {
+        alert('Esta portería ya está en otro equipo de la misma división.');
+        setResolviendo(null); return;
+      }
+    }
+    // 4. Fichar
+    const { error } = await sb.from('plantillas').insert({
+      participante_id: ganador.participante_id,
+      jugador_id:      jugadorId,
+      precio_compra:   ganador.cantidad,
+    });
+    if (error) { alert('Error al fichar: ' + error.message); setResolviendo(null); return; }
+    // 5. Descontar presupuesto
+    await sb.from('participantes')
+      .update({ presupuesto: pd.presupuesto - ganador.cantidad })
+      .eq('id', ganador.participante_id);
+    // 6. Marcar todas las pujas de este jugador como resueltas
+    await sb.from('pujas').update({ resuelta: true, ganadora: false }).eq('jugador_id', jugadorId);
+    await sb.from('pujas').update({ ganadora: true }).eq('id', ganador.id);
+    setResolviendo(null);
+    cargar();
+  };
+
+  const descartarPujas = async (jugadorId) => {
+    await sb.from('pujas').update({ resuelta: true, ganadora: false }).eq('jugador_id', jugadorId);
+    cargar();
+  };
+
+  if (pujas === null) return <Spinner />;
+
+  return (
+    <div className="card">
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem'}}>
+        <h2 style={{margin:0}}>Pujas pendientes</h2>
+        <button onClick={cargar} style={{padding:'.3rem .8rem', borderRadius:6,
+                border:'1.5px solid var(--borde)', background:'#fff', cursor:'pointer', fontSize:'.85rem'}}>
+          Actualizar
+        </button>
+      </div>
+
+      {porJugador.length === 0 && (
+        <div className="empty">No hay pujas pendientes.</div>
+      )}
+
+      {porJugador.map(({ jugador, bids }) => (
+        <div key={jugador?.id} style={{marginBottom:'1.5rem', borderBottom:'1px solid var(--borde)', paddingBottom:'1rem'}}>
+          <div style={{display:'flex', alignItems:'center', gap:'.6rem', marginBottom:'.5rem'}}>
+            <span className={`badge ${jugador?.posicion}`}>{jugador?.posicion}</span>
+            <strong>{jugador?.posicion === 'POR' ? `Portería ${jugador?.equipo}` : jugador?.nombre}</strong>
+            {jugador?.posicion !== 'POR' && <span style={{color:'var(--texto2)', fontSize:'.85rem'}}>{jugador?.equipo}</span>}
+            <span style={{color:'var(--texto2)', fontSize:'.8rem', marginLeft:'auto'}}>{bids.length} puja{bids.length !== 1 ? 's' : ''}</span>
+          </div>
+          <table style={{width:'100%', marginBottom:'.5rem'}}>
+            <thead>
+              <tr>
+                <th style={{textAlign:'left', fontSize:'.8rem', color:'var(--texto2)', fontWeight:600, paddingBottom:'.2rem'}}>Equipo</th>
+                <th style={{textAlign:'right', fontSize:'.8rem', color:'var(--texto2)', fontWeight:600, paddingBottom:'.2rem'}}>Puja</th>
+                <th style={{textAlign:'right', fontSize:'.8rem', color:'var(--texto2)', fontWeight:600, paddingBottom:'.2rem'}}>Dif. VM</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {bids.map((b, i) => {
+                const dif = b.cantidad - (jugador?.valor_mercado || 0);
+                return (
+                  <tr key={b.id} style={{background: i === 0 ? '#f0fdf4' : ''}}>
+                    <td style={{fontWeight: i===0 ? 700 : 400}}>
+                      {i === 0 && <span style={{color:'#198754', marginRight:4}}>👑</span>}
+                      {b.equipo}
+                    </td>
+                    <td style={{textAlign:'right', fontWeight: i===0 ? 700 : 400}}>{fmt(b.cantidad)}</td>
+                    <td style={{textAlign:'right', fontSize:'.85rem',
+                                color: dif >= 0 ? '#198754' : '#dc3545'}}>
+                      {dif > 0 ? '+' : ''}{fmt(dif)}
+                    </td>
+                    <td style={{textAlign:'right'}}>
+                      {i === 0 && (
+                        <button onClick={() => resolver(jugador.id, b)}
+                                disabled={resolviendo === jugador.id}
+                                style={{padding:'.25rem .6rem', fontSize:'.8rem', borderRadius:6,
+                                        border:'none', background:'#198754', color:'#fff',
+                                        cursor:'pointer', fontWeight:600}}>
+                          {resolviendo === jugador.id ? '…' : 'Adjudicar'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <button onClick={() => descartarPujas(jugador.id)}
+                  style={{fontSize:'.78rem', color:'#dc3545', background:'none', border:'none',
+                          cursor:'pointer', padding:0}}>
+            Descartar todas las pujas de este jugador
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── ADMIN — CIERRES DE JORNADA ─────────────────────────────────
 function AdminCierres() {
   const [jornada, setJornada] = useState(1);
@@ -2006,6 +2261,7 @@ function AdminPanel({ participantes }) {
           ['puntos',       'Clasificación'],
           ['presupuestos', 'Presupuestos'],
           ['calendario',   'Calendario'],
+          ['pujas',        'Pujas'],
           ['cierres',      'Cierres'],
         ].map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
@@ -2017,6 +2273,7 @@ function AdminPanel({ participantes }) {
       {subtab === 'puntos'        && <Puntos participantes={participantes} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'calendario'    && <AdminCalendario participantes={participantes} />}
+      {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
       {subtab === 'cierres'       && <AdminCierres />}
     </div>
   );
@@ -2112,7 +2369,7 @@ function App() {
                      participanteNombre={participanteActual?.nombre} />
         )}
         {vista === 'Mercado' && (
-          <Mercado participanteId={participanteId} participantes={participantes} onFichaje={() => {}} />
+          <Mercado participanteId={participanteId} participantes={participantes} isAdmin={isAdmin} onFichaje={() => {}} />
         )}
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId} />

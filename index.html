@@ -438,6 +438,8 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
     return s;
   }, [todasPlantillas, participanteId]);
 
+  const miPlantillaLlena = misJugadoresIds.size >= 15;
+
   // Equipos LaLiga cuya portería ya está cogida por alguien de MI división
   const porteríasBloqueadas = useMemo(() => {
     const miDiv = participantes.find(p => p.id === participanteId)?.division_id;
@@ -487,6 +489,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
   // ── Pujar (usuarios) ──────────────────────────────────────────
   const confirmarPuja = async () => {
     if (!sb || !participanteId || !modalPuja) return;
+    // Verificar límite de plantilla (doble check contra la BD por si el estado local está desactualizado)
+    const { data: plantActual } = await sb.from('plantillas')
+      .select('id').eq('participante_id', participanteId);
+    if ((plantActual?.length || 0) >= 15) {
+      alert('Tu plantilla ya tiene 15 jugadores. No puedes realizar más pujas.');
+      setModalPuja(null); return;
+    }
     const cantidad = parseFloat(String(cantidadPuja).replace(',', '.'));
     const minimo   = modalPuja.valor_mercado || 0;
     if (isNaN(cantidad) || cantidad < minimo) {
@@ -648,7 +657,8 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
                     ) : (
                       <button className="btn-fichar"
                               onClick={() => { setModalPuja(j); setCantidadPuja(''); }}
-                              disabled={!participanteId}>
+                              disabled={!participanteId || miPlantillaLlena}
+                              title={miPlantillaLlena ? 'Tu plantilla ya tiene 15 jugadores' : ''}>
                         Pujar
                       </button>
                     )}
@@ -1627,8 +1637,9 @@ function Alineacion({ participanteId }) {
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
   const [estado, setEstado]       = useState({});  // id → 'T'|'S'|'F'
-  const [guardando, setGuardando] = useState(false);
-  const [msg, setMsg]             = useState('');
+  const [cargandoAli, setCargandoAli] = useState(false);
+  const [guardando, setGuardando]     = useState(false);
+  const [msg, setMsg]                 = useState('');
 
   useEffect(() => {
     if (!sb) return;
@@ -1651,6 +1662,7 @@ function Alineacion({ participanteId }) {
   useEffect(() => {
     if (!sb || !participanteId || !plantilla) return;
     const cargar = async () => {
+      setCargandoAli(true);
       const [{ data: ali }, { data: cierreRow }] = await Promise.all([
         sb.from('alineaciones').select('jugador_id, es_titular')
           .eq('participante_id', participanteId).eq('jornada', jornada),
@@ -1663,11 +1675,10 @@ function Alineacion({ participanteId }) {
 
       let fuente = ali || [];
       if (fuente.length === 0) {
-        // Sin alineación guardada para esta jornada → usar la última disponible
+        // Sin alineación para esta jornada → usar la última guardada
         const { data: ref } = await sb.from('alineaciones')
           .select('jornada')
           .eq('participante_id', participanteId)
-          .neq('jornada', jornada)
           .order('jornada', { ascending: false })
           .limit(1);
         if (ref?.length > 0) {
@@ -1680,8 +1691,10 @@ function Alineacion({ participanteId }) {
       }
 
       for (const a of fuente)
-        if (e.hasOwnProperty(a.jugador_id)) e[a.jugador_id] = a.es_titular ? 'T' : 'S';
+        if (Object.prototype.hasOwnProperty.call(e, a.jugador_id))
+          e[a.jugador_id] = a.es_titular ? 'T' : 'S';
       setEstado(e);
+      setCargandoAli(false);
     };
     cargar();
   }, [participanteId, jornada, plantilla]);
@@ -1700,7 +1713,6 @@ function Alineacion({ participanteId }) {
 
   const guardar = async () => {
     if (bloqueado || !sb) return;
-    if (nT !== 11) { alert(`Necesitas exactamente 11 titulares (tienes ${nT}).`); return; }
     setGuardando(true);
     const registros = Object.entries(estado)
       .filter(([, v]) => v === 'T' || v === 'S')
@@ -1717,6 +1729,8 @@ function Alineacion({ participanteId }) {
   };
 
   if (plantilla === null) return <Spinner />;
+
+  const incompleta = nT > 0 && nT !== 11; // aviso, no bloqueo
 
   const seciones = [
     { key: 'T', label: `Titulares (${nT}/11)`, color: '#198754' },
@@ -1750,61 +1764,71 @@ function Alineacion({ participanteId }) {
         </div>
       </div>
 
-      {seciones.map(({ key, label, color }) => {
-        const jugs = plantilla.filter(j => estado[j.id] === key);
-        if (!jugs.length) return null;
-        return (
-          <div key={key} style={{marginBottom:'1rem'}}>
-            <div style={{fontWeight:700, fontSize:'.78rem', color, textTransform:'uppercase',
-                         letterSpacing:'.05em', marginBottom:'.35rem'}}>
-              {label}
-            </div>
-            <table style={{width:'100%'}}>
-              <tbody>
-                {jugs.map(j => (
-                  <tr key={j.id}>
-                    <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                    <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
-                    <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
-                    {!bloqueado && (
-                      <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
-                        {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
-                          <button key={op} onClick={() => setJugadorEstado(j.id, op)}
-                                  style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',
-                                          border:`1.5px solid ${estado[j.id]===op ? col : 'var(--borde)'}`,
-                                          borderRadius:6, cursor:'pointer',
-                                          background: estado[j.id]===op ? col : '#fff',
-                                          color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
-                            {etiq}
-                          </button>
-                        ))}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
+      {cargandoAli
+        ? <Spinner />
+        : <>
+            {plantilla.length === 0 && (
+              <div className="empty">Tu plantilla está vacía. Ficha jugadores primero.</div>
+            )}
 
-      {plantilla.length === 0 && (
-        <div className="empty">Tu plantilla está vacía. Ficha jugadores primero.</div>
-      )}
+            {seciones.map(({ key, label, color }) => {
+              const jugs = plantilla.filter(j => estado[j.id] === key);
+              if (!jugs.length) return null;
+              return (
+                <div key={key} style={{marginBottom:'1rem'}}>
+                  <div style={{fontWeight:700, fontSize:'.78rem', color, textTransform:'uppercase',
+                               letterSpacing:'.05em', marginBottom:'.35rem'}}>
+                    {label}
+                  </div>
+                  <table style={{width:'100%'}}>
+                    <tbody>
+                      {jugs.map(j => (
+                        <tr key={j.id}>
+                          <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                          <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
+                          {!bloqueado && (
+                            <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                              {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
+                                <button key={op} onClick={() => setJugadorEstado(j.id, op)}
+                                        style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',
+                                                border:`1.5px solid ${estado[j.id]===op ? col : 'var(--borde)'}`,
+                                                borderRadius:6, cursor:'pointer',
+                                                background: estado[j.id]===op ? col : '#fff',
+                                                color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
+                                  {etiq}
+                                </button>
+                              ))}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
 
-      {!bloqueado && plantilla.length > 0 && (
-        <div style={{marginTop:'1rem', display:'flex', gap:'1rem', alignItems:'center'}}>
-          <button className="btn-ok" onClick={guardar} disabled={guardando}>
-            {guardando ? 'Guardando…' : 'Guardar alineación'}
-          </button>
-          {msg && <span style={{color:'#198754', fontSize:'.9rem'}}>{msg}</span>}
-        </div>
-      )}
-      {bloqueado && (
-        <p style={{color:'#dc3545', fontSize:'.9rem', marginTop:'.6rem'}}>
-          La alineación de esta jornada está cerrada y no puede modificarse.
-        </p>
-      )}
+            {!bloqueado && plantilla.length > 0 && (
+              <div style={{marginTop:'1rem', display:'flex', gap:'1rem', alignItems:'center', flexWrap:'wrap'}}>
+                <button className="btn-ok" onClick={guardar} disabled={guardando}>
+                  {guardando ? 'Guardando…' : 'Guardar alineación'}
+                </button>
+                {incompleta && (
+                  <span style={{color:'#856404', fontSize:'.85rem'}}>
+                    ⚠ Faltan titulares ({nT}/11)
+                  </span>
+                )}
+                {msg && <span style={{color:'#198754', fontSize:'.9rem'}}>{msg}</span>}
+              </div>
+            )}
+            {bloqueado && (
+              <p style={{color:'#dc3545', fontSize:'.9rem', marginTop:'.6rem'}}>
+                La alineación de esta jornada está cerrada y no puede modificarse.
+              </p>
+            )}
+          </>
+      }
     </div>
   );
 }

@@ -399,7 +399,7 @@ function Mercado({ participanteId, participantes, onFichaje }) {
     if (!sb) { setJugadores(DEMO_MERCADO); setTodasPlantillas([]); return; }
     const [{ data: jugs }, { data: plants }] = await Promise.all([
       sb.from('jugadores').select('*').eq('activo', true),
-      sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion)'),
+      sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion, equipo)'),
     ]);
     setJugadores(jugs || []);
     setTodasPlantillas(plants || []);
@@ -423,6 +423,19 @@ function Mercado({ participanteId, participantes, onFichaje }) {
     return s;
   }, [todasPlantillas, participanteId]);
 
+  // Equipos LaLiga cuya portería ya está cogida por alguien de MI división
+  const porteríasBloqueadas = useMemo(() => {
+    const miDiv = participantes.find(p => p.id === participanteId)?.division_id;
+    const s = new Set();
+    for (const p of todasPlantillas) {
+      if (p.jugadores?.posicion !== 'POR') continue;
+      if (p.participante_id === participanteId) continue; // la mía propia no cuenta
+      const fantasia = participantes.find(x => x.id === p.participante_id);
+      if (fantasia?.division_id === miDiv) s.add(p.jugadores.equipo);
+    }
+    return s;
+  }, [todasPlantillas, participanteId, participantes]);
+
   const equiposLista = useMemo(() => {
     if (!jugadores) return [];
     return [...new Set(jugadores.map(j => j.equipo).filter(Boolean))].sort();
@@ -431,8 +444,9 @@ function Mercado({ participanteId, participantes, onFichaje }) {
   const lista = useMemo(() => {
     if (!jugadores) return [];
     const filtrada = jugadores.filter(j => {
-      if (misJugadoresIds.has(j.id)) return false;             // ya en mi plantilla
-      if (j.posicion !== 'POR' && noPorterosOcupados.has(j.id)) return false; // no-POR ya fichado
+      if (misJugadoresIds.has(j.id)) return false;
+      if (j.posicion !== 'POR' && noPorterosOcupados.has(j.id)) return false;
+      if (j.posicion === 'POR' && porteríasBloqueadas.has(j.equipo)) return false; // portería de mi división
       const okPos    = !filtroPOS    || j.posicion === filtroPOS;
       const okEquipo = !filtroEquipo || j.equipo   === filtroEquipo;
       const okBus    = !busqueda ||
@@ -453,7 +467,7 @@ function Mercado({ participanteId, participantes, onFichaje }) {
       }
     }
     return [...Object.values(porEquipo), ...resto];
-  }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, noPorterosOcupados]);
+  }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, noPorterosOcupados, porteríasBloqueadas]);
 
   const confirmarFichaje = async () => {
     if (!sb || !participanteId || !modal) { setModal(null); return; }
@@ -487,16 +501,16 @@ function Mercado({ participanteId, participantes, onFichaje }) {
         setModal(null);
         return;
       }
-      // Portero no puede estar en otro equipo de la misma división
+      // La portería del equipo LaLiga no puede estar en otro equipo de la misma división
       const miDivision = participantes.find(p => p.id === participanteId)?.division_id;
-      const { data: otrosConPortero } = await sb.from('plantillas')
-        .select('participante_id').eq('jugador_id', modal.id);
-      const conflicto = (otrosConPortero || []).some(r => {
-        const p = participantes.find(x => x.id === r.participante_id);
-        return p?.division_id === miDivision;
+      const conflicto = todasPlantillas.some(p => {
+        if (p.jugadores?.posicion !== 'POR') return false;
+        if (p.jugadores?.equipo !== modal.equipo) return false;
+        if (p.participante_id === participanteId) return false;
+        return participantes.find(x => x.id === p.participante_id)?.division_id === miDivision;
       });
       if (conflicto) {
-        alert('Este portero ya está fichado por otro equipo de tu misma división.');
+        alert('La portería de este equipo ya está fichada por otro equipo de tu misma división.');
         setModal(null);
         return;
       }

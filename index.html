@@ -1553,18 +1553,40 @@ function Alineacion({ participanteId }) {
 
   useEffect(() => {
     if (!sb || !participanteId || !plantilla) return;
-    Promise.all([
-      sb.from('alineaciones').select('jugador_id, es_titular')
-        .eq('participante_id', participanteId).eq('jornada', jornada),
-      sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle(),
-    ]).then(([{ data: ali }, { data: cierreRow }]) => {
+    const cargar = async () => {
+      const [{ data: ali }, { data: cierreRow }] = await Promise.all([
+        sb.from('alineaciones').select('jugador_id, es_titular')
+          .eq('participante_id', participanteId).eq('jornada', jornada),
+        sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle(),
+      ]);
       setCierre(cierreRow?.cierre || null);
+
       const e = {};
       for (const j of plantilla) e[j.id] = 'F';
-      for (const a of (ali || []))
+
+      let fuente = ali || [];
+      if (fuente.length === 0) {
+        // Sin alineación guardada para esta jornada → usar la última disponible
+        const { data: ref } = await sb.from('alineaciones')
+          .select('jornada')
+          .eq('participante_id', participanteId)
+          .neq('jornada', jornada)
+          .order('jornada', { ascending: false })
+          .limit(1);
+        if (ref?.length > 0) {
+          const { data: ultima } = await sb.from('alineaciones')
+            .select('jugador_id, es_titular')
+            .eq('participante_id', participanteId)
+            .eq('jornada', ref[0].jornada);
+          fuente = ultima || [];
+        }
+      }
+
+      for (const a of fuente)
         if (e.hasOwnProperty(a.jugador_id)) e[a.jugador_id] = a.es_titular ? 'T' : 'S';
       setEstado(e);
-    });
+    };
+    cargar();
   }, [participanteId, jornada, plantilla]);
 
   const bloqueado = !!(cierre && new Date() > new Date(cierre));

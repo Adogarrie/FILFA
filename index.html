@@ -1740,11 +1740,15 @@ function Alineacion({ participanteId }) {
         participante_id: participanteId, jornada,
         jugador_id: jugadorId, es_titular: v === 'T',
       }));
-    await sb.from('alineaciones').delete()
+    const { error: errDel } = await sb.from('alineaciones').delete()
       .eq('participante_id', participanteId).eq('jornada', jornada);
-    if (registros.length) await sb.from('alineaciones').insert(registros);
+    if (errDel) { alert('Error al borrar alineación anterior: ' + errDel.message); setGuardando(false); return; }
+    if (registros.length) {
+      const { error: errIns } = await sb.from('alineaciones').insert(registros);
+      if (errIns) { alert('Error al guardar: ' + errIns.message); setGuardando(false); return; }
+    }
     setGuardando(false);
-    setMsg('Alineación guardada');
+    setMsg('✓ Alineación guardada');
     setTimeout(() => setMsg(''), 3000);
   };
 

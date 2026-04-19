@@ -1255,11 +1255,30 @@ function Equipos({ participantes, miParticipanteId }) {
   useEffect(() => {
     if (!equipoId || !sb) return;
     setAlineacion(null);
-    sb.from('alineaciones')
-      .select('jugador_id, es_titular, jugadores(nombre, equipo, posicion)')
-      .eq('participante_id', equipoId)
-      .eq('jornada', aliJornada)
-      .then(({ data }) => setAlineacion(data || []));
+    const cargarAli = async () => {
+      const { data: ali } = await sb.from('alineaciones')
+        .select('jugador_id, es_titular, jugadores(nombre, equipo, posicion)')
+        .eq('participante_id', equipoId)
+        .eq('jornada', aliJornada);
+      if (ali && ali.length > 0) { setAlineacion(ali); return; }
+      // Fallback: última jornada guardada <= aliJornada (no mostrar jornadas futuras)
+      const { data: ref } = await sb.from('alineaciones')
+        .select('jornada')
+        .eq('participante_id', equipoId)
+        .lte('jornada', aliJornada)
+        .order('jornada', { ascending: false })
+        .limit(1);
+      if (ref?.length > 0) {
+        const { data: ultima } = await sb.from('alineaciones')
+          .select('jugador_id, es_titular, jugadores(nombre, equipo, posicion)')
+          .eq('participante_id', equipoId)
+          .eq('jornada', ref[0].jornada);
+        setAlineacion(ultima || []);
+      } else {
+        setAlineacion([]);
+      }
+    };
+    cargarAli();
   }, [equipoId, aliJornada]);
 
   const equipo = participantes.find(p => p.id === equipoId);
@@ -1675,10 +1694,11 @@ function Alineacion({ participanteId }) {
 
       let fuente = ali || [];
       if (fuente.length === 0) {
-        // Sin alineación para esta jornada → usar la última guardada
+        // Sin alineación para esta jornada → usar la última guardada (solo jornadas anteriores)
         const { data: ref } = await sb.from('alineaciones')
           .select('jornada')
           .eq('participante_id', participanteId)
+          .lt('jornada', jornada)
           .order('jornada', { ascending: false })
           .limit(1);
         if (ref?.length > 0) {

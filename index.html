@@ -1095,6 +1095,20 @@ function Liga({ participantes }) {
       )}
 
       {subtab === 'partidos' && (() => {
+        // Etiqueta por jornada según la estructura de competiciones
+        const etiquetaJornada = (j) => {
+          if (j >= 1  && j <= 7)  return 'Primera División (ida) · Segunda División (v.1)';
+          if (j >= 8  && j <= 11) return 'Primera División (ida) · Segunda División (v.2)';
+          if (j >= 12 && j <= 13) return 'Primera División (ida, final)';
+          if (j >= 14 && j <= 17) return '❄️ Torneo de Navidad';
+          if (j >= 18 && j <= 20) return 'Primera División (vuelta) · Segunda División (v.2)';
+          if (j >= 21 && j <= 23) return 'Primera División (vuelta)';
+          if (j >= 24 && j <= 30) return 'Primera División (vuelta) · Segunda División (v.3 neutral)';
+          if (j >= 31 && j <= 37) return 'Copa de la Liga';
+          if (j === 38)           return 'Liga Fantástica — última jornada';
+          return '';
+        };
+
         if (calendario.length === 0) return (
           <div className="card">
             <div className="empty">
@@ -1110,7 +1124,7 @@ function Liga({ participantes }) {
             <div className="card" style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
               <span style={{fontWeight:600, whiteSpace:'nowrap'}}>Jornada:</span>
               <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap'}}>
-                {Array.from({length: maxJornada}, (_, i) => i + 1).map(j => (
+                {Array.from({length: 38}, (_, i) => i + 1).map(j => (
                   <button key={j} onClick={() => setJornadaP(j)}
                     style={{
                       padding:'.28rem .6rem', borderRadius:'8px', fontSize:'.8rem',
@@ -1123,6 +1137,10 @@ function Liga({ participantes }) {
                   </button>
                 ))}
               </div>
+            </div>
+            {/* Etiqueta contextual de la jornada */}
+            <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.5rem', paddingLeft:'.25rem'}}>
+              J{jornadaP} — {etiquetaJornada(jornadaP)}
             </div>
 
             {/* Partidos de cada división */}
@@ -1212,7 +1230,13 @@ function Liga({ participantes }) {
               div => calendario.filter(f => f.division_id === div.id && f.jornada === jornadaP).length === 0
             ) && (
               <div className="card">
-                <div className="empty">No hay partidos programados para la jornada {jornadaP}.</div>
+                <div className="empty">
+                  {jornadaP >= 14 && jornadaP <= 17
+                    ? '❄️ Jornada ' + jornadaP + ' — Torneo de Navidad. No hay partidos de Liga.'
+                    : jornadaP === 38
+                    ? 'Jornada 38 — Solo Liga Fantástica (sin partidos H2H).'
+                    : 'No hay partidos de Liga programados para la jornada ' + jornadaP + '.'}
+                </div>
               </div>
             )}
           </div>

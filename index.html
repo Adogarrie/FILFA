@@ -400,16 +400,22 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
   const [modal, setModal]                   = useState(null); // admin: fichar directo
   const [modalPuja, setModalPuja]           = useState(null); // usuario: pujar
   const [cantidadPuja, setCantidadPuja]     = useState('');
+  const [sorteoHabilitado, setSorteoHabilitado] = useState(false);
+  const [modalSorteo, setModalSorteo]       = useState(false);
+  const [sorteando, setSorteando]           = useState(false);
+  const [resultadoSorteo, setResultadoSorteo] = useState(null);
 
   const cargar = async () => {
     if (!sb) { setJugadores(DEMO_MERCADO); setTodasPlantillas([]); return; }
-    const [{ data: jugs }, { data: plants }, { data: allPujas }] = await Promise.all([
+    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: cfg }] = await Promise.all([
       sb.from('jugadores').select('*').eq('activo', true),
       sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion, equipo)'),
       sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false),
+      sb.from('config').select('sorteo_habilitado').single(),
     ]);
     setJugadores(jugs || []);
     setTodasPlantillas(plants || []);
+    setSorteoHabilitado(!!cfg?.sorteo_habilitado);
     const mp = {}, cp = {};
     for (const p of (allPujas || [])) {
       cp[p.jugador_id] = (cp[p.jugador_id] || 0) + 1;
@@ -588,12 +594,91 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
     setModal(null);
   };
 
+  // ── Sorteo aleatorio (usuario, en su propio equipo) ────────────
+  const ejecutarSorteo = async () => {
+    if (!sb || !participanteId) return;
+    setSorteando(true);
+
+    const { data: partData } = await sb.from('participantes')
+      .select('presupuesto').eq('id', participanteId).single();
+    let presupuestoRestante = partData?.presupuesto ?? 0;
+
+    const { data: miPlantilla } = await sb.from('plantillas')
+      .select('id, jugadores(posicion)').eq('participante_id', participanteId);
+    const huecos = 15 - (miPlantilla?.length || 0);
+    let yaTengoPortero = (miPlantilla || []).some(p => p.jugadores?.posicion === 'POR');
+
+    if (huecos <= 0) {
+      alert('Tu plantilla ya tiene 15 jugadores.');
+      setSorteando(false); setModalSorteo(false);
+      return;
+    }
+
+    // Pool elegible: misma lista filtrada que ve el usuario (sin mis jugadores,
+    // sin no-porteros ya ocupados, sin porterías bloqueadas de mi división)
+    const pool = [...lista];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const r = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[r]] = [pool[r], pool[i]];
+    }
+
+    const elegidos = [];
+    for (const j of pool) {
+      if (elegidos.length >= huecos) break;
+      if (j.posicion === 'POR' && yaTengoPortero) continue;
+      const coste = j.valor_mercado || 0;
+      if (coste > presupuestoRestante) continue;
+      elegidos.push(j);
+      presupuestoRestante -= coste;
+      if (j.posicion === 'POR') yaTengoPortero = true;
+    }
+
+    if (elegidos.length === 0) {
+      alert('No se pudo fichar a ningún jugador libre con el presupuesto disponible.');
+      setSorteando(false); setModalSorteo(false);
+      return;
+    }
+
+    const { error } = await sb.from('plantillas').insert(
+      elegidos.map(j => ({
+        participante_id: participanteId,
+        jugador_id:      j.id,
+        precio_compra:   j.valor_mercado || 0,
+      }))
+    );
+    if (error) {
+      alert('Error al fichar: ' + error.message);
+    } else {
+      const gastado = elegidos.reduce((s, j) => s + (j.valor_mercado || 0), 0);
+      const { error: errPres } = await sb.from('participantes')
+        .update({ presupuesto: presupuestoRestante })
+        .eq('id', participanteId);
+      if (errPres) console.error('Error actualizando presupuesto:', errPres);
+      setResultadoSorteo({ jugadores: elegidos, gastado });
+      onFichaje && onFichaje();
+      cargar();
+    }
+    setSorteando(false);
+    setModalSorteo(false);
+  };
+
   if (jugadores === null) return <Spinner />;
+
+  const huecosRestantes = 15 - misJugadoresIds.size;
 
   return (
     <div>
       <div className="card">
-        <h2>Mercado de jugadores</h2>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem', marginBottom:'1rem'}}>
+          <h2 style={{margin:0}}>Mercado de jugadores</h2>
+          {sorteoHabilitado && participanteId && (
+            <button className="btn-fichar" disabled={huecosRestantes <= 0}
+                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 15 jugadores' : ''}
+                    onClick={() => setModalSorteo(true)}>
+              🎲 Sorteo aleatorio
+            </button>
+          )}
+        </div>
         <div className="filtros">
           <input placeholder="Buscar jugador o equipo..."
                  value={busqueda} onChange={e => setBusqueda(e.target.value)} />
@@ -725,6 +810,51 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
             <div className="modal-btns">
               <button className="btn-cancel" onClick={() => setModal(null)}>Cancelar</button>
               <button className="btn-ok" onClick={confirmarFichaje}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal confirmar sorteo aleatorio */}
+      {modalSorteo && (
+        <div className="overlay" onClick={() => !sorteando && setModalSorteo(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Sorteo aleatorio</h3>
+            <p>
+              Se ficharán hasta <strong>{huecosRestantes}</strong> jugador(es) libres al azar,
+              respetando tu presupuesto disponible y las reglas del mercado
+              (máximo 1 portero, sin jugadores duplicados).
+            </p>
+            <div className="modal-btns">
+              <button className="btn-cancel" disabled={sorteando} onClick={() => setModalSorteo(false)}>
+                Cancelar
+              </button>
+              <button className="btn-ok" disabled={sorteando} onClick={ejecutarSorteo}>
+                {sorteando ? 'Sorteando…' : 'Confirmar sorteo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resultado del sorteo */}
+      {resultadoSorteo && (
+        <div className="overlay" onClick={() => setResultadoSorteo(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Sorteo completado</h3>
+            <p>
+              Has fichado a {resultadoSorteo.jugadores.length} jugador(es) por un total de{' '}
+              <strong>{fmt(resultadoSorteo.gastado)}</strong>:
+            </p>
+            <ul style={{marginBottom:'1.25rem', paddingLeft:'1.2rem', fontSize:'.88rem', color:'var(--texto2)'}}>
+              {resultadoSorteo.jugadores.map(j => (
+                <li key={j.id}>
+                  {j.posicion === 'POR' ? `Portería ${j.equipo}` : `${j.nombre} (${j.equipo})`} — {fmt(j.valor_mercado || 0)}
+                </li>
+              ))}
+            </ul>
+            <div className="modal-btns">
+              <button className="btn-ok" onClick={() => setResultadoSorteo(null)}>Cerrar</button>
             </div>
           </div>
         </div>
@@ -2322,6 +2452,51 @@ function AdminCierres() {
   );
 }
 
+// ── ADMIN — SORTEO ALEATORIO ───────────────────────────────────
+function AdminSorteo() {
+  const [habilitado, setHabilitado] = useState(null);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('config').select('sorteo_habilitado').single()
+      .then(({ data }) => setHabilitado(!!data?.sorteo_habilitado));
+  }, []);
+
+  const cambiar = async (valor) => {
+    if (!sb) return;
+    const { error } = await sb.from('config').update({ sorteo_habilitado: valor }).eq('id', 1);
+    if (error) { alert('Error al guardar: ' + error.message); return; }
+    setHabilitado(valor);
+    setMsg(valor ? 'Sorteo activado' : 'Sorteo desactivado');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  return (
+    <div className="card">
+      <h2>Sorteo aleatorio de jugadores</h2>
+      <p style={{fontSize:'.9rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+        Mientras esté activado, cada participante puede pulsar "Sorteo aleatorio" en el Mercado
+        para rellenar su propia plantilla con jugadores libres elegidos al azar, pagando su
+        valor de mercado y respetando su presupuesto disponible.
+      </p>
+      {habilitado === null ? <Spinner /> : (
+        <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+          <button className={habilitado ? 'btn-cancel' : 'btn-ok'}
+                  onClick={() => cambiar(!habilitado)}>
+            {habilitado ? 'Desactivar sorteo' : 'Activar sorteo'}
+          </button>
+          <span style={{fontSize:'.88rem', fontWeight:600,
+                        color: habilitado ? 'var(--verde)' : 'var(--texto2)'}}>
+            {habilitado ? 'Activado' : 'Desactivado'}
+          </span>
+          {msg && <span style={{color:'#198754', fontSize:'.88rem'}}>{msg}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
 function AdminPanel({ participantes }) {
   const [subtab, setSubtab] = useState('puntos');
@@ -2335,6 +2510,7 @@ function AdminPanel({ participantes }) {
           ['calendario',   'Calendario'],
           ['pujas',        'Pujas'],
           ['cierres',      'Cierres'],
+          ['sorteo',       'Sorteo'],
         ].map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
                   onClick={() => setSubtab(k)}>
@@ -2347,6 +2523,7 @@ function AdminPanel({ participantes }) {
       {subtab === 'calendario'    && <AdminCalendario participantes={participantes} />}
       {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
       {subtab === 'cierres'       && <AdminCierres />}
+      {subtab === 'sorteo'        && <AdminSorteo />}
     </div>
   );
 }

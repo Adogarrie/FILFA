@@ -80,6 +80,40 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
 
 ---
 
+## Paso 2.1 — Seguridad: login real con Supabase Auth (obligatorio en producción)
+
+Antes de abrir la app a tus amigos, ejecuta `supabase_seguridad.sql` en el
+**SQL Editor** de Supabase. Esto cierra el login con contraseñas en texto
+plano y las políticas RLS abiertas, sustituyéndolas por Supabase Auth
+(email + contraseña, o Google) y reglas donde cada equipo solo puede
+modificar sus propios datos.
+
+1. Pega y ejecuta `supabase_seguridad.sql`.
+2. (Opcional) Para permitir "Continuar con Google": en el panel de Supabase
+   ve a **Authentication → Providers → Google**, crea unas credenciales
+   OAuth en [Google Cloud Console](https://console.cloud.google.com)
+   (Client ID + Secret) y pégalas ahí. En **Authentication → URL
+   Configuration**, añade la URL donde tengas desplegada la app (la de
+   Vercel, por ejemplo) a *Redirect URLs*.
+3. Comparte la app con tus amigos. Cada uno se registra solo desde la
+   pantalla de login (email + contraseña, o Google) — no necesitas
+   recopilar emails ni ejecutar ningún script.
+4. Al entrar por primera vez, cada amigo elige:
+   - **"Ya jugaba antes"** → reclama su equipo de la lista de equipos sin
+     dueño (mantiene su plantilla y presupuesto de antes del cambio).
+   - **"Soy nuevo"** → crea un equipo nuevo con el nombre y división que
+     elija.
+5. Para convertirte en admin: regístrate igual que cualquier amigo y luego,
+   en el SQL Editor, ejecuta:
+   ```sql
+   select id, email from auth.users where email = 'tu_email@aqui.com';
+   insert into administradores (user_id) values ('<el id de arriba>');
+   ```
+6. Cuando todos confirmen que entran bien, borra la tabla antigua desde el
+   SQL Editor: `drop table usuarios;`
+
+---
+
 ## Paso 3 — Instalar dependencias Python
 
 ```bash

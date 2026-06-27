@@ -389,7 +389,7 @@ function Plantilla({ participanteId, participanteNombre }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
+function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion }) {
   const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
   const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
@@ -400,16 +400,26 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
   const [modal, setModal]                   = useState(null); // admin: fichar directo
   const [modalPuja, setModalPuja]           = useState(null); // usuario: pujar
   const [cantidadPuja, setCantidadPuja]     = useState('');
+  const [sorteoHabilitado, setSorteoHabilitado] = useState(false);
+  const [modalSorteo, setModalSorteo]       = useState(false);
+  const [sorteando, setSorteando]           = useState(false);
+  const [resultadoSorteo, setResultadoSorteo] = useState(null);
 
   const cargar = async () => {
     if (!sb) { setJugadores(DEMO_MERCADO); setTodasPlantillas([]); return; }
+    const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }] = await Promise.all([
       sb.from('jugadores').select('*').eq('activo', true),
-      sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion, equipo)'),
-      sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false),
+      partIds.length
+        ? sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion, equipo)').in('participante_id', partIds)
+        : Promise.resolve({ data: [] }),
+      partIds.length
+        ? sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false).in('participante_id', partIds)
+        : Promise.resolve({ data: [] }),
     ]);
     setJugadores(jugs || []);
     setTodasPlantillas(plants || []);
+    setSorteoHabilitado(!!federacion?.sorteo_habilitado);
     const mp = {}, cp = {};
     for (const p of (allPujas || [])) {
       cp[p.jugador_id] = (cp[p.jugador_id] || 0) + 1;
@@ -588,12 +598,91 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
     setModal(null);
   };
 
+  // ── Sorteo aleatorio (usuario, en su propio equipo) ────────────
+  const ejecutarSorteo = async () => {
+    if (!sb || !participanteId) return;
+    setSorteando(true);
+
+    const { data: partData } = await sb.from('participantes')
+      .select('presupuesto').eq('id', participanteId).single();
+    let presupuestoRestante = partData?.presupuesto ?? 0;
+
+    const { data: miPlantilla } = await sb.from('plantillas')
+      .select('id, jugadores(posicion)').eq('participante_id', participanteId);
+    const huecos = 15 - (miPlantilla?.length || 0);
+    let yaTengoPortero = (miPlantilla || []).some(p => p.jugadores?.posicion === 'POR');
+
+    if (huecos <= 0) {
+      alert('Tu plantilla ya tiene 15 jugadores.');
+      setSorteando(false); setModalSorteo(false);
+      return;
+    }
+
+    // Pool elegible: misma lista filtrada que ve el usuario (sin mis jugadores,
+    // sin no-porteros ya ocupados, sin porterías bloqueadas de mi división)
+    const pool = [...lista];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const r = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[r]] = [pool[r], pool[i]];
+    }
+
+    const elegidos = [];
+    for (const j of pool) {
+      if (elegidos.length >= huecos) break;
+      if (j.posicion === 'POR' && yaTengoPortero) continue;
+      const coste = j.valor_mercado || 0;
+      if (coste > presupuestoRestante) continue;
+      elegidos.push(j);
+      presupuestoRestante -= coste;
+      if (j.posicion === 'POR') yaTengoPortero = true;
+    }
+
+    if (elegidos.length === 0) {
+      alert('No se pudo fichar a ningún jugador libre con el presupuesto disponible.');
+      setSorteando(false); setModalSorteo(false);
+      return;
+    }
+
+    const { error } = await sb.from('plantillas').insert(
+      elegidos.map(j => ({
+        participante_id: participanteId,
+        jugador_id:      j.id,
+        precio_compra:   j.valor_mercado || 0,
+      }))
+    );
+    if (error) {
+      alert('Error al fichar: ' + error.message);
+    } else {
+      const gastado = elegidos.reduce((s, j) => s + (j.valor_mercado || 0), 0);
+      const { error: errPres } = await sb.from('participantes')
+        .update({ presupuesto: presupuestoRestante })
+        .eq('id', participanteId);
+      if (errPres) console.error('Error actualizando presupuesto:', errPres);
+      setResultadoSorteo({ jugadores: elegidos, gastado });
+      onFichaje && onFichaje();
+      cargar();
+    }
+    setSorteando(false);
+    setModalSorteo(false);
+  };
+
   if (jugadores === null) return <Spinner />;
+
+  const huecosRestantes = 15 - misJugadoresIds.size;
 
   return (
     <div>
       <div className="card">
-        <h2>Mercado de jugadores</h2>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem', marginBottom:'1rem'}}>
+          <h2 style={{margin:0}}>Mercado de jugadores</h2>
+          {sorteoHabilitado && participanteId && (
+            <button className="btn-fichar" disabled={huecosRestantes <= 0}
+                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 15 jugadores' : ''}
+                    onClick={() => setModalSorteo(true)}>
+              🎲 Sorteo aleatorio
+            </button>
+          )}
+        </div>
         <div className="filtros">
           <input placeholder="Buscar jugador o equipo..."
                  value={busqueda} onChange={e => setBusqueda(e.target.value)} />
@@ -725,6 +814,51 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje }) {
             <div className="modal-btns">
               <button className="btn-cancel" onClick={() => setModal(null)}>Cancelar</button>
               <button className="btn-ok" onClick={confirmarFichaje}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal confirmar sorteo aleatorio */}
+      {modalSorteo && (
+        <div className="overlay" onClick={() => !sorteando && setModalSorteo(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Sorteo aleatorio</h3>
+            <p>
+              Se ficharán hasta <strong>{huecosRestantes}</strong> jugador(es) libres al azar,
+              respetando tu presupuesto disponible y las reglas del mercado
+              (máximo 1 portero, sin jugadores duplicados).
+            </p>
+            <div className="modal-btns">
+              <button className="btn-cancel" disabled={sorteando} onClick={() => setModalSorteo(false)}>
+                Cancelar
+              </button>
+              <button className="btn-ok" disabled={sorteando} onClick={ejecutarSorteo}>
+                {sorteando ? 'Sorteando…' : 'Confirmar sorteo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resultado del sorteo */}
+      {resultadoSorteo && (
+        <div className="overlay" onClick={() => setResultadoSorteo(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Sorteo completado</h3>
+            <p>
+              Has fichado a {resultadoSorteo.jugadores.length} jugador(es) por un total de{' '}
+              <strong>{fmt(resultadoSorteo.gastado)}</strong>:
+            </p>
+            <ul style={{marginBottom:'1.25rem', paddingLeft:'1.2rem', fontSize:'.88rem', color:'var(--texto2)'}}>
+              {resultadoSorteo.jugadores.map(j => (
+                <li key={j.id}>
+                  {j.posicion === 'POR' ? `Portería ${j.equipo}` : `${j.nombre} (${j.equipo})`} — {fmt(j.valor_mercado || 0)}
+                </li>
+              ))}
+            </ul>
+            <div className="modal-btns">
+              <button className="btn-ok" onClick={() => setResultadoSorteo(null)}>Cerrar</button>
             </div>
           </div>
         </div>
@@ -891,7 +1025,7 @@ function ptsAGoles(pts) {
 }
 
 // ── LIGA ───────────────────────────────────────────────────────
-function Liga({ participantes }) {
+function Liga({ participantes, federacionId }) {
   const [subtab, setSubtab]         = useState('global');
   const [calendario, setCalendario] = useState(null);
   const [clasMap, setClasMap]       = useState(null);   // {pid: {jornada: pts}}
@@ -903,11 +1037,16 @@ function Liga({ participantes }) {
     [participantes]
   );
 
+  const partIds = useMemo(() => participantes.map(p => p.id), [participantes]);
+
   useEffect(() => {
-    if (!sb) return;
+    if (!sb || !federacionId) return;
     Promise.all([
-      sb.from('calendario').select('id, jornada, division_id, local_id, visitante_id, es_neutral'),
-      sb.from('clasificacion').select('participante_id, jornada, puntos_jornada'),
+      sb.from('calendario').select('id, jornada, division_id, local_id, visitante_id, es_neutral')
+        .eq('federacion_id', federacionId),
+      partIds.length
+        ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds)
+        : Promise.resolve({ data: [] }),
       sb.from('divisiones').select('id, nombre'),
     ]).then(([{ data: cal }, { data: clas }, { data: divs }]) => {
       setCalendario(cal || []);
@@ -1247,22 +1386,16 @@ function Liga({ participantes }) {
 }
 
 // ── EQUIPOS ────────────────────────────────────────────────────
-function Equipos({ participantes, miParticipanteId }) {
+function Equipos({ participantes, miParticipanteId, jornadaActual }) {
   const [equipoId, setEquipoId]       = useState('');
   const [jugadores, setJugadores]     = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
-  const [aliJornada, setAliJornada]   = useState(1);
+  const [aliJornada, setAliJornada]   = useState(jornadaActual || 1);
   const [alineacion, setAlineacion]   = useState(null); // null = cargando
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
   }, [participantes]);
-
-  useEffect(() => {
-    if (!sb) return;
-    sb.from('config').select('jornada_actual').single()
-      .then(({ data }) => data && setAliJornada(data.jornada_actual));
-  }, []);
 
   useEffect(() => {
     if (!equipoId || !sb) return;
@@ -1334,16 +1467,35 @@ function Equipos({ participantes, miParticipanteId }) {
       </div>
 
       {equipo && (
-        <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap'}}>
-          <div>
-            <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
-            <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
-              {presupuesto !== null ? fmt(presupuesto) : '…'}
+        <div className="card" style={{display:'flex', gap:'1.5rem', flexWrap:'wrap', alignItems:'flex-start'}}>
+          {equipo.escudo_url && (
+            <img src={equipo.escudo_url} alt="Escudo"
+                 style={{width:72, height:72, borderRadius:10, objectFit:'cover',
+                         border:'1.5px solid var(--borde)', flexShrink:0}} />
+          )}
+          <div style={{flex:1, display:'flex', gap:'2rem', flexWrap:'wrap'}}>
+            <div>
+              <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
+              <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
+                {presupuesto !== null ? fmt(presupuesto) : '…'}
+              </div>
             </div>
-          </div>
-          <div>
-            <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
-            <div style={{fontSize:'1.4rem', fontWeight:800}}>{jugadores ? lista.length : '…'}</div>
+            <div>
+              <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
+              <div style={{fontSize:'1.4rem', fontWeight:800}}>{jugadores ? lista.length : '…'}</div>
+            </div>
+            {equipo.estadio && (
+              <div>
+                <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Estadio</div>
+                <div style={{fontSize:'1rem', fontWeight:600}}>{equipo.estadio}</div>
+              </div>
+            )}
+            {equipo.entrenador && (
+              <div>
+                <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Entrenador</div>
+                <div style={{fontSize:'1rem', fontWeight:600}}>{equipo.entrenador}</div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1445,7 +1597,7 @@ function Equipos({ participantes, miParticipanteId }) {
 }
 
 // ── COPA DE LA LIGA ────────────────────────────────────────────
-function Copa({ participantes }) {
+function Copa({ participantes, federacionId }) {
   const [grupos, setGrupos]         = useState(null);
   const [calendario, setCalendario] = useState(null);
   const [clasMap, setClasMap]       = useState(null);
@@ -1456,12 +1608,16 @@ function Copa({ participantes }) {
     [participantes]
   );
 
+  const partIds = useMemo(() => participantes.map(p => p.id), [participantes]);
+
   useEffect(() => {
-    if (!sb) return;
+    if (!sb || !federacionId) return;
     Promise.all([
-      sb.from('copa_grupos').select('grupo, participante_id').order('grupo'),
-      sb.from('copa_calendario').select('*').order('jornada'),
-      sb.from('clasificacion').select('participante_id, jornada, puntos_jornada'),
+      sb.from('copa_grupos').select('grupo, participante_id').eq('federacion_id', federacionId).order('grupo'),
+      sb.from('copa_calendario').select('*').eq('federacion_id', federacionId).order('jornada'),
+      partIds.length
+        ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds)
+        : Promise.resolve({ data: [] }),
     ]).then(([{ data: grs }, { data: cal }, { data: clas }]) => {
       setGrupos(grs || []);
       setCalendario(cal || []);
@@ -1626,69 +1782,364 @@ function Copa({ participantes }) {
 
 // ── LOGIN ──────────────────────────────────────────────────────
 function Login({ onLogin }) {
-  const [user, setUser]       = useState('');
+  const [modo, setModo]       = useState('entrar'); // 'entrar' | 'crear'
+  const [email, setEmail]     = useState('');
   const [pass, setPass]       = useState('');
+  const [pass2, setPass2]     = useState('');
   const [error, setError]     = useState('');
+  const [info, setInfo]       = useState('');
   const [cargando, setCargando] = useState(false);
 
   const entrar = async () => {
-    if (!user.trim() || !pass.trim()) { setError('Introduce usuario y contraseña'); return; }
+    if (!email.trim() || !pass.trim()) { setError('Introduce tu email y contraseña'); return; }
     if (!sb) { setError('Sin conexión con la base de datos'); return; }
-    setCargando(true); setError('');
-    const { data, error: err } = await sb.from('usuarios')
-      .select('id, username, password, participante_id, is_admin')
-      .ilike('username', user.trim())
-      .single();
+    setCargando(true); setError(''); setInfo('');
+    const { data, error: err } = await sb.auth.signInWithPassword({
+      email: email.trim(), password: pass,
+    });
     setCargando(false);
-    if (err || !data)       { setError('Usuario no encontrado'); return; }
-    if (data.password !== pass) { setError('Contraseña incorrecta'); return; }
-    onLogin(data);
+    if (err || !data?.user) { setError('Email o contraseña incorrectos'); return; }
+    onLogin(data.user);
   };
+
+  const crearCuenta = async () => {
+    if (!email.trim() || !pass.trim()) { setError('Introduce tu email y contraseña'); return; }
+    if (pass !== pass2) { setError('Las contraseñas no coinciden'); return; }
+    if (pass.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return; }
+    if (!sb) { setError('Sin conexión con la base de datos'); return; }
+    setCargando(true); setError(''); setInfo('');
+    const { data, error: err } = await sb.auth.signUp({
+      email: email.trim(), password: pass,
+    });
+    setCargando(false);
+    if (err) { setError(err.message); return; }
+    if (data.session) { onLogin(data.user); return; }
+    setInfo('Cuenta creada. Revisa tu email para confirmarla y vuelve a entrar.');
+  };
+
+  const conGoogle = async () => {
+    if (!sb) { setError('Sin conexión con la base de datos'); return; }
+    setError(''); setInfo('');
+    await sb.auth.signInWithOAuth({ provider: 'google' });
+  };
+
+  const confirmar = () => (modo === 'entrar' ? entrar() : crearCuenta());
 
   return (
     <div className="login-wrap">
       <div className="login-card">
         <div className="login-logo">
           <h1>Fantasy LaLiga</h1>
-          <p>Inicia sesión con tu equipo</p>
+          <p>{modo === 'entrar' ? 'Inicia sesión con tu cuenta' : 'Crea tu cuenta'}</p>
         </div>
         {error && <div className="login-error">{error}</div>}
+        {info && <div className="login-error" style={{background:'#e6f4ea', color:'#1a7f37'}}>{info}</div>}
+
+        <button type="button" onClick={conGoogle}
+                style={{width:'100%', padding:'.65rem', marginBottom:'1.1rem',
+                        background:'#fff', color:'var(--texto)', fontWeight:600,
+                        border:'1.5px solid var(--borde)', borderRadius:10, cursor:'pointer'}}>
+          Continuar con Google
+        </button>
+
         <div className="campo">
-          <label>Usuario</label>
-          <input value={user} onChange={e => setUser(e.target.value)}
-                 placeholder="Nombre de tu equipo"
+          <label>Email</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                 placeholder="tu@email.com"
                  autoFocus
-                 onKeyDown={e => e.key === 'Enter' && entrar()} />
+                 onKeyDown={e => e.key === 'Enter' && confirmar()} />
         </div>
         <div className="campo">
           <label>Contraseña</label>
           <input type="password" value={pass} onChange={e => setPass(e.target.value)}
                  placeholder="Contraseña"
-                 onKeyDown={e => e.key === 'Enter' && entrar()} />
+                 onKeyDown={e => e.key === 'Enter' && confirmar()} />
         </div>
-        <button className="btn-full" onClick={entrar} disabled={cargando}>
-          {cargando ? 'Entrando…' : 'Entrar'}
+        {modo === 'crear' && (
+          <div className="campo">
+            <label>Repite la contraseña</label>
+            <input type="password" value={pass2} onChange={e => setPass2(e.target.value)}
+                   placeholder="Repite la contraseña"
+                   onKeyDown={e => e.key === 'Enter' && confirmar()} />
+          </div>
+        )}
+
+        <button className="btn-full" onClick={confirmar} disabled={cargando}>
+          {cargando ? 'Un momento…' : modo === 'entrar' ? 'Entrar' : 'Crear cuenta'}
+        </button>
+
+        <button type="button"
+                onClick={() => { setModo(modo === 'entrar' ? 'crear' : 'entrar'); setError(''); setInfo(''); }}
+                style={{marginTop:'.9rem', width:'100%', background:'none', border:'none',
+                        color:'var(--verde)', fontSize:'.85rem', cursor:'pointer', fontWeight:600}}>
+          {modo === 'entrar' ? '¿No tienes cuenta? Crea una' : '¿Ya tienes cuenta? Inicia sesión'}
         </button>
       </div>
     </div>
   );
 }
 
+// ── ONBOARDING — unirse o crear federación + configurar equipo ─
+function FederacionOnboarding({ user, onDone, onLogout }) {
+  const [paso, setPaso]             = useState('selector'); // 'selector' | 'equipo'
+  const [modo, setModo]             = useState('crear');    // 'crear' | 'unirse'
+  const [fedNombre, setFedNombre]   = useState('');
+  const [fedCodigo, setFedCodigo]   = useState('');
+  const [fedActual, setFedActual]   = useState(null);       // federacion elegida/creada
+  const [codigoGenerado, setCodigoGenerado] = useState(''); // para mostrar al admin
+
+  // Datos del equipo
+  const [nombreEquipo, setNombreEquipo] = useState('');
+  const [estadio, setEstadio]           = useState('');
+  const [entrenador, setEntrenador]     = useState('');
+  const [divisionId, setDivisionId]     = useState('');
+  const [divisiones, setDivisiones]     = useState([]);
+  const [escudoFile, setEscudoFile]     = useState(null);
+  const [escudoPreview, setEscudoPreview] = useState(null);
+
+  const [error, setError]     = useState('');
+  const [cargando, setCargando] = useState(false);
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('divisiones').select('id, nombre').order('nombre')
+      .then(({ data }) => setDivisiones(data || []));
+  }, []);
+
+  const generarCodigo = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+
+  const crearFederacion = async () => {
+    if (!fedNombre.trim()) { setError('Introduce un nombre para la federación'); return; }
+    setCargando(true); setError('');
+    const codigo = generarCodigo();
+    const { data, error: err } = await sb.from('federaciones').insert({
+      nombre: fedNombre.trim(), codigo, admin_user_id: user.id,
+    }).select().single();
+    setCargando(false);
+    if (err) { setError('Error al crear la federación: ' + err.message); return; }
+    setFedActual(data);
+    setCodigoGenerado(codigo);
+    setPaso('equipo');
+  };
+
+  const unirseAFederacion = async () => {
+    if (!fedNombre.trim() || !fedCodigo.trim()) {
+      setError('Introduce el nombre y el código de la federación'); return;
+    }
+    setCargando(true); setError('');
+    const { data, error: err } = await sb.from('federaciones')
+      .select('*')
+      .ilike('nombre', fedNombre.trim())
+      .eq('codigo', fedCodigo.trim().toUpperCase())
+      .maybeSingle();
+    setCargando(false);
+    if (err || !data) { setError('Federación no encontrada. Comprueba el nombre y el código.'); return; }
+    setFedActual(data);
+    setPaso('equipo');
+  };
+
+  const crearEquipo = async () => {
+    if (!nombreEquipo.trim()) { setError('Introduce el nombre de tu equipo'); return; }
+    if (!divisionId)          { setError('Selecciona una división'); return; }
+    if (!fedActual)           return;
+    setCargando(true); setError('');
+
+    let escudo_url = null;
+    if (escudoFile) {
+      const path = `${fedActual.id}/${user.id}`;
+      const { error: errUp } = await sb.storage
+        .from('escudos').upload(path, escudoFile, { upsert: true, contentType: escudoFile.type });
+      if (!errUp) {
+        const { data: urlData } = sb.storage.from('escudos').getPublicUrl(path);
+        escudo_url = urlData.publicUrl;
+      }
+    }
+
+    const { error: errPart } = await sb.from('participantes').insert({
+      nombre:       nombreEquipo.trim(),
+      division_id:  Number(divisionId),
+      user_id:      user.id,
+      federacion_id: fedActual.id,
+      presupuesto:  fedActual.presupuesto_inicial ?? 100000000,
+      escudo_url,
+      estadio:      estadio.trim()    || null,
+      entrenador:   entrenador.trim() || null,
+    });
+    setCargando(false);
+    if (errPart) { setError('Error al crear el equipo: ' + errPart.message); return; }
+    onDone();
+  };
+
+  const copiarCodigo = () => {
+    navigator.clipboard.writeText(codigoGenerado).catch(() => {});
+  };
+
+  // ── Paso 1: selector ────────────────────────────────────────
+  if (paso === 'selector') {
+    return (
+      <div className="login-wrap">
+        <div className="login-card" style={{maxWidth:440}}>
+          <div className="login-logo">
+            <h1>Fantasy LaLiga</h1>
+            <p>Crea una federación o únete a la de un amigo</p>
+          </div>
+          {error && <div className="login-error">{error}</div>}
+
+          <div className="tabs" style={{marginBottom:'1.25rem'}}>
+            <button type="button" className={`tab ${modo==='crear'?'active':''}`}
+                    onClick={() => { setModo('crear'); setError(''); }}>
+              Crear federación
+            </button>
+            <button type="button" className={`tab ${modo==='unirse'?'active':''}`}
+                    onClick={() => { setModo('unirse'); setError(''); }}>
+              Unirme a una federación
+            </button>
+          </div>
+
+          {modo === 'crear' ? (
+            <>
+              <div className="campo">
+                <label>Nombre de la federación</label>
+                <input value={fedNombre} onChange={e => setFedNombre(e.target.value)}
+                       placeholder="Ej: Fantasy Amigos 2025"
+                       onKeyDown={e => e.key === 'Enter' && crearFederacion()} />
+              </div>
+              <button className="btn-full" onClick={crearFederacion} disabled={cargando}>
+                {cargando ? 'Creando…' : 'Crear federación y continuar'}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="campo">
+                <label>Nombre de la federación</label>
+                <input value={fedNombre} onChange={e => setFedNombre(e.target.value)}
+                       placeholder="Nombre exacto de la federación" />
+              </div>
+              <div className="campo">
+                <label>Código de invitación</label>
+                <input value={fedCodigo}
+                       onChange={e => setFedCodigo(e.target.value.toUpperCase())}
+                       placeholder="Ej: AB12CD"
+                       style={{letterSpacing:'0.12em', fontWeight:700, textTransform:'uppercase'}}
+                       onKeyDown={e => e.key === 'Enter' && unirseAFederacion()} />
+              </div>
+              <button className="btn-full" onClick={unirseAFederacion} disabled={cargando}>
+                {cargando ? 'Verificando…' : 'Unirme a la federación'}
+              </button>
+            </>
+          )}
+
+          <button type="button" onClick={onLogout}
+                  style={{marginTop:'.9rem', width:'100%', background:'none', border:'none',
+                          color:'var(--texto2)', fontSize:'.85rem', cursor:'pointer'}}>
+            Salir
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Paso 2: configurar equipo ───────────────────────────────
+  return (
+    <div className="login-wrap">
+      <div className="login-card" style={{maxWidth:460}}>
+        <div className="login-logo">
+          <h1>Tu equipo</h1>
+          <p>Federación: <strong>{fedActual?.nombre}</strong></p>
+        </div>
+
+        {codigoGenerado && (
+          <div style={{background:'#f0fdf4', border:'1.5px solid var(--verde)', borderRadius:10,
+                       padding:'.9rem 1rem', marginBottom:'1.25rem'}}>
+            <div style={{fontSize:'.82rem', color:'var(--verde)', fontWeight:700, marginBottom:'.4rem'}}>
+              ¡Federación creada! Comparte este código con tus amigos:
+            </div>
+            <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
+              <span style={{fontSize:'1.5rem', fontWeight:800, letterSpacing:'.15em', color:'var(--texto)'}}>
+                {codigoGenerado}
+              </span>
+              <button onClick={copiarCodigo}
+                      style={{padding:'.3rem .7rem', borderRadius:6, border:'1.5px solid var(--verde)',
+                              background:'#fff', color:'var(--verde)', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+                Copiar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && <div className="login-error">{error}</div>}
+
+        <div className="campo">
+          <label>Nombre del equipo *</label>
+          <input value={nombreEquipo} onChange={e => setNombreEquipo(e.target.value)}
+                 placeholder="Ej: Los Galácticos" autoFocus />
+        </div>
+
+        <div className="campo">
+          <label>Escudo del equipo</label>
+          <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+            {escudoPreview
+              ? <img src={escudoPreview} alt="Escudo"
+                     style={{width:56, height:56, borderRadius:8, objectFit:'cover',
+                             border:'1.5px solid var(--borde)', flexShrink:0}} />
+              : <div style={{width:56, height:56, borderRadius:8, background:'var(--gris)',
+                             border:'1.5px dashed var(--borde)', flexShrink:0}} />
+            }
+            <input type="file" accept="image/*"
+                   onChange={e => {
+                     const f = e.target.files[0];
+                     if (!f) return;
+                     setEscudoFile(f);
+                     setEscudoPreview(URL.createObjectURL(f));
+                   }}
+                   style={{fontSize:'.85rem'}} />
+          </div>
+        </div>
+
+        <div className="campo">
+          <label>Estadio</label>
+          <input value={estadio} onChange={e => setEstadio(e.target.value)}
+                 placeholder="Ej: Estadio Municipal" />
+        </div>
+
+        <div className="campo">
+          <label>Entrenador</label>
+          <input value={entrenador} onChange={e => setEntrenador(e.target.value)}
+                 placeholder="Ej: José García" />
+        </div>
+
+        <div className="campo">
+          <label>División *</label>
+          <select value={divisionId} onChange={e => setDivisionId(e.target.value)}
+                  style={{width:'100%', padding:'.55rem .85rem',
+                          border:'1.5px solid var(--borde)', borderRadius:8, fontSize:'.95rem'}}>
+            <option value="">Selecciona división…</option>
+            {divisiones.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+          </select>
+        </div>
+
+        <button className="btn-full" onClick={crearEquipo} disabled={cargando}>
+          {cargando ? 'Creando equipo…' : 'Crear mi equipo'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// (componente legacy Onboarding conservado como alias — no se usa)
+function Onboarding({ user, onDone, onLogout }) {
+  return <FederacionOnboarding user={user} onDone={onDone} onLogout={onLogout} />;
+}
+
 // ── ALINEACIÓN ─────────────────────────────────────────────────
-function Alineacion({ participanteId }) {
-  const [jornada, setJornada]     = useState(1);
+function Alineacion({ participanteId, jornadaActual }) {
+  const [jornada, setJornada]     = useState(jornadaActual || 1);
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
   const [estado, setEstado]       = useState({});  // id → 'T'|'S'|'F'
   const [cargandoAli, setCargandoAli] = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
-
-  useEffect(() => {
-    if (!sb) return;
-    sb.from('config').select('jornada_actual').single()
-      .then(({ data }) => data && setJornada(data.jornada_actual));
-  }, []);
 
   useEffect(() => {
     if (!sb || !participanteId) return;
@@ -1887,13 +2338,14 @@ function AdminPresupuestos({ participantes }) {
   const [guardado, setGuardado] = useState(null);
 
   useEffect(() => {
-    if (!sb) return;
-    sb.from('participantes').select('id, presupuesto').then(({ data }) => {
+    if (!sb || participantes.length === 0) return;
+    const ids = participantes.map(p => p.id);
+    sb.from('participantes').select('id, presupuesto').in('id', ids).then(({ data }) => {
       const m = {};
       (data || []).forEach(p => { m[p.id] = String(p.presupuesto ?? 100000000); });
       setValores(m);
     });
-  }, []);
+  }, [participantes]);
 
   const guardar = async (pid) => {
     const val = parseFloat(valores[pid]);
@@ -1948,7 +2400,7 @@ function AdminPresupuestos({ participantes }) {
 }
 
 // ── ADMIN — CALENDARIO ─────────────────────────────────────────
-function AdminCalendario({ participantes }) {
+function AdminCalendario({ participantes, federacionId }) {
   const [fixtures, setFixtures]     = useState(null);
   const [divisiones, setDivisiones] = useState([]);
   const [filtrDiv, setFiltrDiv]     = useState('');
@@ -1959,10 +2411,12 @@ function AdminCalendario({ participantes }) {
   const [msg, setMsg] = useState('');
 
   const cargar = () => {
-    sb.from('calendario').select('*').order('jornada').then(({ data }) => setFixtures(data || []));
+    if (!federacionId) return;
+    sb.from('calendario').select('*').eq('federacion_id', federacionId).order('jornada')
+      .then(({ data }) => setFixtures(data || []));
     sb.from('divisiones').select('*').then(({ data }) => setDivisiones(data || []));
   };
-  useEffect(() => { if (sb) cargar(); }, []);
+  useEffect(() => { if (sb && federacionId) cargar(); }, [federacionId]);
 
   const eliminar = async (id) => {
     if (!confirm('¿Eliminar este partido del calendario?')) return;
@@ -1980,7 +2434,7 @@ function AdminCalendario({ participantes }) {
     }
     const { error } = await sb.from('calendario').insert({
       jornada: parseInt(jornada), division_id: parseInt(division_id),
-      local_id, visitante_id, es_neutral,
+      local_id, visitante_id, es_neutral, federacion_id: federacionId,
     });
     if (error) { setMsg('Error: ' + error.message); return; }
     setMsg('Partido añadido correctamente');
@@ -2104,9 +2558,12 @@ function AdminPujas({ participantes }) {
 
   const cargar = () => {
     if (!sb) return;
+    const partIds = participantes.map(p => p.id);
+    if (!partIds.length) { setPujas([]); return; }
     sb.from('pujas')
       .select('id, participante_id, jugador_id, cantidad, created_at, jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre)')
       .eq('resuelta', false)
+      .in('participante_id', partIds)
       .order('cantidad', { ascending: false })
       .then(({ data }) => setPujas(data || []));
   };
@@ -2256,16 +2713,10 @@ function AdminPujas({ participantes }) {
 }
 
 // ── ADMIN — CIERRES DE JORNADA ─────────────────────────────────
-function AdminCierres() {
-  const [jornada, setJornada] = useState(1);
+function AdminCierres({ federacion }) {
+  const [jornada, setJornada] = useState(federacion?.jornada_actual || 1);
   const [cierre, setCierre]   = useState('');
   const [msg, setMsg]         = useState('');
-
-  useEffect(() => {
-    if (!sb) return;
-    sb.from('config').select('jornada_actual').single()
-      .then(({ data }) => data && setJornada(data.jornada_actual));
-  }, []);
 
   const cargar = () => {
     if (!sb) return;
@@ -2322,19 +2773,148 @@ function AdminCierres() {
   );
 }
 
+// ── ADMIN — SORTEO ALEATORIO ───────────────────────────────────
+function AdminSorteo({ federacion, onFederacionUpdate }) {
+  const [habilitado, setHabilitado] = useState(!!federacion?.sorteo_habilitado);
+  const [msg, setMsg] = useState('');
+
+  const cambiar = async (valor) => {
+    if (!sb || !federacion) return;
+    const { error } = await sb.from('federaciones')
+      .update({ sorteo_habilitado: valor }).eq('id', federacion.id);
+    if (error) { alert('Error al guardar: ' + error.message); return; }
+    setHabilitado(valor);
+    onFederacionUpdate({ ...federacion, sorteo_habilitado: valor });
+    setMsg(valor ? 'Sorteo activado' : 'Sorteo desactivado');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  return (
+    <div className="card">
+      <h2>Sorteo aleatorio de jugadores</h2>
+      <p style={{fontSize:'.9rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+        Mientras esté activado, cada participante puede pulsar "Sorteo aleatorio" en el Mercado
+        para rellenar su propia plantilla con jugadores libres elegidos al azar, pagando su
+        valor de mercado y respetando su presupuesto disponible.
+      </p>
+      {habilitado === null ? <Spinner /> : (
+        <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+          <button className={habilitado ? 'btn-cancel' : 'btn-ok'}
+                  onClick={() => cambiar(!habilitado)}>
+            {habilitado ? 'Desactivar sorteo' : 'Activar sorteo'}
+          </button>
+          <span style={{fontSize:'.88rem', fontWeight:600,
+                        color: habilitado ? 'var(--verde)' : 'var(--texto2)'}}>
+            {habilitado ? 'Activado' : 'Desactivado'}
+          </span>
+          {msg && <span style={{color:'#198754', fontSize:'.88rem'}}>{msg}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ADMIN — MI FEDERACIÓN ──────────────────────────────────────
+function AdminFederacion({ federacion, onFederacionUpdate }) {
+  const [nombre, setNombre]     = useState(federacion?.nombre || '');
+  const [presup, setPresup]     = useState(String(federacion?.presupuesto_inicial ?? 100000000));
+  const [jornada, setJornada]   = useState(String(federacion?.jornada_actual ?? 1));
+  const [msg, setMsg]           = useState('');
+  const [copiado, setCopiado]   = useState(false);
+
+  const copiar = () => {
+    navigator.clipboard.writeText(federacion?.codigo || '').then(() => {
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    }).catch(() => {});
+  };
+
+  const guardar = async () => {
+    if (!sb || !federacion) return;
+    const { error, data } = await sb.from('federaciones')
+      .update({
+        nombre:              nombre.trim() || federacion.nombre,
+        presupuesto_inicial: parseFloat(presup) || federacion.presupuesto_inicial,
+        jornada_actual:      parseInt(jornada)  || federacion.jornada_actual,
+      })
+      .eq('id', federacion.id)
+      .select().single();
+    if (error) { alert('Error: ' + error.message); return; }
+    onFederacionUpdate(data);
+    setMsg('Guardado correctamente');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  return (
+    <div className="card">
+      <h2>Mi Federación</h2>
+
+      <div style={{background:'var(--gris)', borderRadius:10, padding:'1rem 1.25rem', marginBottom:'1.25rem'}}>
+        <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.35rem', fontWeight:600}}>
+          Código de invitación — compártelo con tus amigos
+        </div>
+        <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
+          <span style={{fontSize:'1.8rem', fontWeight:800, letterSpacing:'.18em', color:'var(--verde)'}}>
+            {federacion?.codigo}
+          </span>
+          <button onClick={copiar}
+                  style={{padding:'.35rem .9rem', borderRadius:8, border:'1.5px solid var(--verde)',
+                          background:'#fff', color:'var(--verde)', cursor:'pointer', fontWeight:600, fontSize:'.85rem'}}>
+            {copiado ? '✓ Copiado' : 'Copiar'}
+          </button>
+        </div>
+        <div style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+          Para unirse: nombre de la federación + este código
+        </div>
+      </div>
+
+      <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+        <div style={{flex:2, minWidth:180}}>
+          <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+            Nombre de la federación
+          </label>
+          <input value={nombre} onChange={e => setNombre(e.target.value)}
+                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+        </div>
+        <div style={{minWidth:140}}>
+          <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+            Presupuesto inicial (€)
+          </label>
+          <input type="number" value={presup} onChange={e => setPresup(e.target.value)}
+                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+        </div>
+        <div style={{minWidth:100}}>
+          <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+            Jornada actual
+          </label>
+          <input type="number" min="1" max="38" value={jornada} onChange={e => setJornada(e.target.value)}
+                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+        </div>
+        <button className="btn-ok" onClick={guardar}>Guardar</button>
+        {msg && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
-function AdminPanel({ participantes }) {
-  const [subtab, setSubtab] = useState('puntos');
+function AdminPanel({ participantes, federacion, onFederacionUpdate }) {
+  const [subtab, setSubtab] = useState('federacion');
 
   return (
     <div>
       <div className="tabs">
         {[
+          ['federacion',   'Mi Federación'],
           ['puntos',       'Clasificación'],
           ['presupuestos', 'Presupuestos'],
           ['calendario',   'Calendario'],
           ['pujas',        'Pujas'],
           ['cierres',      'Cierres'],
+          ['sorteo',       'Sorteo'],
         ].map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
                   onClick={() => setSubtab(k)}>
@@ -2342,11 +2922,13 @@ function AdminPanel({ participantes }) {
           </button>
         ))}
       </div>
-      {subtab === 'puntos'        && <Puntos participantes={participantes} />}
-      {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
-      {subtab === 'calendario'    && <AdminCalendario participantes={participantes} />}
-      {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
-      {subtab === 'cierres'       && <AdminCierres />}
+      {subtab === 'federacion'   && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
+      {subtab === 'puntos'       && <Puntos participantes={participantes} />}
+      {subtab === 'presupuestos' && <AdminPresupuestos participantes={participantes} />}
+      {subtab === 'calendario'   && <AdminCalendario participantes={participantes} federacionId={federacion?.id} />}
+      {subtab === 'pujas'        && <AdminPujas participantes={participantes} />}
+      {subtab === 'cierres'      && <AdminCierres federacion={federacion} />}
+      {subtab === 'sorteo'       && <AdminSorteo federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
     </div>
   );
 }
@@ -2354,43 +2936,79 @@ function AdminPanel({ participantes }) {
 // ── APP PRINCIPAL ──────────────────────────────────────────────
 
 function App() {
-  const [vista, setVista]               = useState('Clasificacion');
-  const [participantes, setParticipantes] = useState([]);
+  const [vista, setVista]                   = useState('Mi Plantilla');
+  const [participantes, setParticipantes]   = useState([]);
   const [participanteId, setParticipanteId] = useState('');
+  const [federacion, setFederacion]         = useState(null);
 
-  // Sesión persistida en localStorage
-  const [session, setSession] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('filfa_session') || 'null'); }
-    catch { return null; }
-  });
+  const [authUser, setAuthUser]       = useState(null);
+  const [session, setSession]         = useState(null);
+  const [sesionLista, setSesionLista] = useState(false);
+
+  const cargarPerfil = async (user) => {
+    setAuthUser(user);
+    const { data: part } = await sb.from('participantes')
+      .select('id, nombre, federacion_id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    let fedData = null;
+    if (part?.federacion_id) {
+      const { data: fd } = await sb.from('federaciones')
+        .select('*').eq('id', part.federacion_id).single();
+      fedData = fd;
+    }
+    setFederacion(fedData);
+    setSession({ email: user.email, participante_id: part?.id || null });
+  };
 
   useEffect(() => {
-    if (!sb) return;
-    sb.from('participantes').select('id, nombre, division_id')
-      .order('nombre')
-      .then(({ data }) => {
-        if (data && data.length > 0) {
-          setParticipantes(data);
-          const pid = session?.participante_id;
-          setParticipanteId(pid && data.find(p => p.id === pid) ? pid : data[0].id);
-        }
-      });
+    if (!sb) { setSesionLista(true); return; }
+    sb.auth.getSession().then(async ({ data }) => {
+      if (data.session) await cargarPerfil(data.session.user);
+      setSesionLista(true);
+    });
+    const { data: sub } = sb.auth.onAuthStateChange((event, sess) => {
+      if (event === 'SIGNED_OUT') { setSession(null); setAuthUser(null); setFederacion(null); }
+      if (event === 'SIGNED_IN' && sess?.user) cargarPerfil(sess.user);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
 
-  const handleLogin = (userData) => {
-    localStorage.setItem('filfa_session', JSON.stringify(userData));
-    setSession(userData);
-    if (userData.participante_id) setParticipanteId(userData.participante_id);
+  useEffect(() => {
+    if (!sb || !federacion?.id) { setParticipantes([]); return; }
+    sb.from('participantes')
+      .select('id, nombre, division_id, escudo_url, estadio, entrenador')
+      .eq('federacion_id', federacion.id)
+      .order('nombre')
+      .then(({ data }) => {
+        const lista = data || [];
+        setParticipantes(lista);
+        if (lista.length > 0) {
+          const pid = session?.participante_id;
+          setParticipanteId(prev =>
+            (prev && lista.find(p => p.id === prev)) ? prev :
+            (pid  && lista.find(p => p.id === pid))  ? pid  : lista[0].id
+          );
+        }
+      });
+  }, [federacion, session]);
+
+  const handleLogin  = (user) => cargarPerfil(user);
+  const handleLogout = async () => {
+    await sb.auth.signOut();
+    setSession(null); setAuthUser(null); setFederacion(null);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('filfa_session');
-    setSession(null);
-  };
-
+  if (sb && !sesionLista) return <Spinner />;
   if (!session) return <Login onLogin={handleLogin} />;
+  if (!session.participante_id) {
+    return <FederacionOnboarding user={authUser}
+                                 onDone={() => cargarPerfil(authUser)}
+                                 onLogout={handleLogout} />;
+  }
 
-  const isAdmin  = !!session.is_admin;
+  const isAdmin  = federacion?.admin_user_id === authUser?.id;
   const VISTAS   = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Liga', 'Copa',
                     ...(isAdmin ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
@@ -2398,14 +3016,13 @@ function App() {
   return (
     <>
       <nav>
-        <h1>Fantasy LaLiga</h1>
+        <h1>{federacion?.nombre || 'Fantasy LaLiga'}</h1>
         {VISTAS.map(v => (
           <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}>
             {v}
           </button>
         ))}
 
-        {/* Selector de equipo: admin puede cambiar, usuario ve solo el suyo */}
         {participantes.length > 0 && (
           isAdmin
             ? <div className="nav-selector">
@@ -2422,9 +3039,8 @@ function App() {
               </div>
         )}
 
-        {/* Usuario y botón logout */}
         <div className="nav-user">
-          <span>{isAdmin ? '⚙ Admin' : session.username}</span>
+          <span>{isAdmin ? '⚙ Admin' : session.email}</span>
           <button className="btn-logout" onClick={handleLogout}>Salir</button>
         </div>
       </nav>
@@ -2436,22 +3052,33 @@ function App() {
       )}
 
       <main>
-        {vista === 'Mi Plantilla'  && (
+        {vista === 'Mi Plantilla' && (
           <Plantilla participanteId={participanteId}
                      participanteNombre={participanteActual?.nombre} />
         )}
         {vista === 'Mercado' && (
-          <Mercado participanteId={participanteId} participantes={participantes} isAdmin={isAdmin} onFichaje={() => {}} />
+          <Mercado participanteId={participanteId} participantes={participantes}
+                   isAdmin={isAdmin} onFichaje={() => {}} federacion={federacion} />
         )}
         {vista === 'Alineación' && (
-          <Alineacion participanteId={participanteId} />
+          <Alineacion participanteId={participanteId}
+                      jornadaActual={federacion?.jornada_actual || 1} />
         )}
         {vista === 'Equipos' && (
-          <Equipos participantes={participantes} miParticipanteId={participanteId} />
+          <Equipos participantes={participantes} miParticipanteId={participanteId}
+                   jornadaActual={federacion?.jornada_actual || 1} />
         )}
-        {vista === 'Liga'  && <Liga participantes={participantes} />}
-        {vista === 'Copa'  && <Copa participantes={participantes} />}
-        {vista === 'Admin' && isAdmin && <AdminPanel participantes={participantes} />}
+        {vista === 'Liga' && (
+          <Liga participantes={participantes} federacionId={federacion?.id} />
+        )}
+        {vista === 'Copa' && (
+          <Copa participantes={participantes} federacionId={federacion?.id} />
+        )}
+        {vista === 'Admin' && isAdmin && (
+          <AdminPanel participantes={participantes}
+                      federacion={federacion}
+                      onFederacionUpdate={setFederacion} />
+        )}
       </main>
     </>
   );

@@ -1843,12 +1843,13 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
   return null;
 }
 
-function Competiciones({ participantes, federacion }) {
-  const [comps, setComps]     = useState(null);
-  const [compId, setCompId]   = useState(null);
-  const [fases, setFases]     = useState([]);
-  const [faseId, setFaseId]   = useState(null);
+function Competiciones({ participantes, federacion, miParticipanteId }) {
+  const [comps, setComps]       = useState(null);
+  const [compId, setCompId]     = useState(null);
+  const [fases, setFases]       = useState([]);
+  const [faseId, setFaseId]     = useState(null);
   const [faseData, setFaseData] = useState(null);
+  const [inscritos, setInscritos] = useState([]); // participante_ids inscritos en comp actual
 
   const idNombre = useMemo(
     () => Object.fromEntries(participantes.map(p => [p.id, p.nombre])),
@@ -1866,13 +1867,16 @@ function Competiciones({ participantes, federacion }) {
   }, [federacion]);
 
   useEffect(() => {
-    if (!compId) { setFases([]); setFaseId(null); return; }
-    sb.from('fases').select('*').eq('competicion_id', compId).order('orden')
-      .then(({ data }) => {
-        const list = data || [];
-        setFases(list);
-        setFaseId(list.length > 0 ? list[0].id : null);
-      });
+    if (!compId) { setFases([]); setFaseId(null); setInscritos([]); return; }
+    Promise.all([
+      sb.from('fases').select('*').eq('competicion_id', compId).order('orden'),
+      sb.from('competicion_inscripciones').select('participante_id').eq('competicion_id', compId),
+    ]).then(([{ data: fs }, { data: ins }]) => {
+      const list = fs || [];
+      setFases(list);
+      setFaseId(list.length > 0 ? list[0].id : null);
+      setInscritos((ins || []).map(r => r.participante_id));
+    });
   }, [compId]);
 
   useEffect(() => {
@@ -1901,6 +1905,24 @@ function Competiciones({ participantes, federacion }) {
     });
   }, [faseId]);
 
+  const recargarInscritos = async () => {
+    const { data } = await sb.from('competicion_inscripciones')
+      .select('participante_id').eq('competicion_id', compId);
+    setInscritos((data || []).map(r => r.participante_id));
+  };
+
+  const inscribirse = async () => {
+    await sb.from('competicion_inscripciones')
+      .insert({ competicion_id: compId, participante_id: miParticipanteId });
+    await recargarInscritos();
+  };
+
+  const desinscribirse = async () => {
+    await sb.from('competicion_inscripciones')
+      .delete().eq('competicion_id', compId).eq('participante_id', miParticipanteId);
+    await recargarInscritos();
+  };
+
   if (comps === null) return <Spinner />;
   if (comps.length === 0) return (
     <div className="card">
@@ -1909,11 +1931,13 @@ function Competiciones({ participantes, federacion }) {
     </div>
   );
 
-  const faseActual = fases.find(f => f.id === faseId);
-  const compActual = comps.find(c => c.id === compId);
+  const faseActual  = fases.find(f => f.id === faseId);
+  const compActual  = comps.find(c => c.id === compId);
+  const estaInscrito = miParticipanteId && inscritos.includes(miParticipanteId);
 
   return (
     <div>
+      {/* Selector de competición */}
       {comps.length > 1 && (
         <div className="tabs">
           {comps.map(c => (
@@ -1922,14 +1946,45 @@ function Competiciones({ participantes, federacion }) {
           ))}
         </div>
       )}
-      {comps.length === 1 && (
-        <div className="card" style={{padding:'.75rem 1.25rem', marginBottom:0}}>
-          <h2 style={{marginBottom:0}}>{compActual?.nombre}</h2>
+
+      {/* Panel de inscripciones */}
+      {compActual && (inscritos.length > 0 || compActual.inscripciones_habilitadas) && (
+        <div className="card" style={{marginBottom:'.5rem'}}>
+          <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'.75rem'}}>
+            <div>
+              <span style={{fontSize:'.85rem', fontWeight:600, color:'var(--texto2)'}}>
+                Inscripciones:{' '}
+              </span>
+              {compActual.inscripciones_habilitadas
+                ? <span style={{color:'var(--verde)', fontWeight:700, fontSize:'.85rem'}}>ABIERTAS</span>
+                : <span style={{color:'var(--texto2)', fontSize:'.85rem'}}>CERRADAS</span>}
+              {inscritos.length > 0 && (
+                <span style={{marginLeft:'.75rem', fontSize:'.83rem', color:'var(--texto2)'}}>
+                  {inscritos.length} equipo{inscritos.length !== 1 ? 's' : ''} inscrito{inscritos.length !== 1 ? 's' : ''}:
+                  {' '}{inscritos.map(pid => idNombre[pid] || '?').join(', ')}
+                </span>
+              )}
+            </div>
+            {compActual.inscripciones_habilitadas && miParticipanteId && (
+              estaInscrito
+                ? <button onClick={desinscribirse}
+                          style={{background:'#fee2e2', border:'none', color:'#b91c1c',
+                                  padding:'.35rem .85rem', borderRadius:8, cursor:'pointer', fontSize:'.85rem'}}>
+                    Cancelar inscripción
+                  </button>
+                : <button onClick={inscribirse}
+                          style={{background:'var(--verde)', color:'#fff', border:'none',
+                                  padding:'.35rem .85rem', borderRadius:8, cursor:'pointer', fontSize:'.85rem', fontWeight:600}}>
+                    Inscribir mi equipo
+                  </button>
+            )}
+          </div>
         </div>
       )}
 
+      {/* Selector de fase */}
       {fases.length > 1 && (
-        <div className="tabs" style={{marginTop:'.5rem'}}>
+        <div className="tabs" style={{marginTop:'.25rem'}}>
           {fases.map(f => (
             <button key={f.id} className={`tab ${faseId === f.id ? 'active' : ''}`}
                     onClick={() => setFaseId(f.id)}>{f.nombre}</button>
@@ -3490,6 +3545,9 @@ function AdminCompeticiones({ federacion, participantes }) {
   const [esNeutral, setEsNeutral] = useState(false);
   const [msg, setMsg]             = useState('');
 
+  const [inscritos, setInscritos]   = useState([]); // participante_ids inscritos en comp actual
+  const [addInscPid, setAddInscPid] = useState('');
+
   const ok = (m) => { setMsg(m); setTimeout(() => setMsg(''), 3000); };
   const idNombre = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
 
@@ -3497,6 +3555,12 @@ function AdminCompeticiones({ federacion, participantes }) {
     const { data } = await sb.from('competiciones').select('*')
       .eq('federacion_id', federacion.id).order('created_at');
     setComps(data || []);
+  };
+
+  const cargarInscritos = async (cid) => {
+    const { data } = await sb.from('competicion_inscripciones')
+      .select('participante_id').eq('competicion_id', cid);
+    setInscritos((data || []).map(r => r.participante_id));
   };
 
   const cargarFases = async (cid) => {
@@ -3518,8 +3582,33 @@ function AdminCompeticiones({ federacion, participantes }) {
   };
 
   useEffect(() => { if (federacion?.id) cargarComps(); }, [federacion]);
-  useEffect(() => { if (compId) cargarFases(compId); else { setFases([]); setFaseId(null); } }, [compId]);
+  useEffect(() => {
+    if (compId) { cargarFases(compId); cargarInscritos(compId); }
+    else { setFases([]); setFaseId(null); setInscritos([]); }
+  }, [compId]);
   useEffect(() => { if (faseId) cargarFaseDatos(faseId); else { setGruposDatos([]); setPartidos([]); } }, [faseId]);
+
+  const toggleInscripciones = async (comp) => {
+    const nuevo = !comp.inscripciones_habilitadas;
+    await sb.from('competiciones').update({ inscripciones_habilitadas: nuevo }).eq('id', comp.id);
+    await cargarComps();
+    ok(nuevo ? 'Inscripciones abiertas' : 'Inscripciones cerradas');
+  };
+
+  const addInscrito = async () => {
+    if (!addInscPid) return;
+    await sb.from('competicion_inscripciones')
+      .upsert({ competicion_id: compId, participante_id: addInscPid }, { onConflict: 'competicion_id,participante_id' });
+    setAddInscPid('');
+    await cargarInscritos(compId);
+    ok('Equipo añadido');
+  };
+
+  const removeInscrito = async (pid) => {
+    await sb.from('competicion_inscripciones')
+      .delete().eq('competicion_id', compId).eq('participante_id', pid);
+    await cargarInscritos(compId);
+  };
 
   const crearComp = async () => {
     if (!nComp.trim()) return;
@@ -3603,11 +3692,20 @@ function AdminCompeticiones({ federacion, participantes }) {
         {comps.length === 0 && <p style={{color:'var(--texto2)', marginBottom:'1rem', fontSize:'.88rem'}}>Sin competiciones. Crea la primera.</p>}
         <div style={{display:'flex', flexDirection:'column', gap:'.5rem', marginBottom:'1rem'}}>
           {comps.map(c => (
-            <div key={c.id} style={{display:'flex', alignItems:'center', gap:'.5rem'}}>
+            <div key={c.id} style={{display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
               <button className={`tab ${compId === c.id ? 'active' : ''}`}
                       onClick={() => setCompId(compId === c.id ? null : c.id)}
-                      style={{flex:1, textAlign:'left'}}>
+                      style={{flex:1, textAlign:'left', minWidth:120}}>
                 {c.nombre}
+              </button>
+              <button onClick={() => toggleInscripciones(c)}
+                      style={{
+                        background: c.inscripciones_habilitadas ? '#d1fae5' : 'var(--gris)',
+                        border: '1.5px solid ' + (c.inscripciones_habilitadas ? '#059669' : 'var(--borde)'),
+                        color: c.inscripciones_habilitadas ? '#065f46' : 'var(--texto2)',
+                        padding:'.28rem .7rem', borderRadius:8, cursor:'pointer', fontSize:'.78rem', fontWeight:600,
+                      }}>
+                {c.inscripciones_habilitadas ? 'Inscripciones: ABIERTAS' : 'Inscripciones: CERRADAS'}
               </button>
               <button style={delStyle} onClick={() => borrarComp(c.id)}>Eliminar</button>
             </div>
@@ -3622,10 +3720,35 @@ function AdminCompeticiones({ federacion, participantes }) {
         </div>
       </div>
 
-      {/* Card 2: Fases */}
+      {/* Card 2: Inscripciones + Fases */}
       {compId && (
         <div className="card">
-          <h2>Fases — {comps.find(c => c.id === compId)?.nombre}</h2>
+          <h2>Equipos inscritos — {comps.find(c => c.id === compId)?.nombre}</h2>
+          <div style={{display:'flex', flexWrap:'wrap', gap:'.4rem', marginBottom:'.75rem'}}>
+            {inscritos.length === 0
+              ? <span style={{fontSize:'.85rem', color:'var(--texto2)'}}>Ningún equipo inscrito aún.</span>
+              : inscritos.map(pid => (
+                  <div key={pid} style={{display:'inline-flex', alignItems:'center', gap:'.3rem',
+                                         background:'var(--gris)', border:'1.5px solid var(--borde)',
+                                         borderRadius:20, padding:'.25rem .65rem', fontSize:'.83rem'}}>
+                    {idNombre[pid] || '?'}
+                    <button onClick={() => removeInscrito(pid)}
+                            style={{background:'none', border:'none', color:'#b91c1c',
+                                    cursor:'pointer', fontWeight:700, lineHeight:1, padding:0}}>×</button>
+                  </div>
+                ))
+            }
+          </div>
+          <div style={{display:'flex', gap:'.5rem', marginBottom:'1.25rem'}}>
+            <select value={addInscPid} onChange={e => setAddInscPid(e.target.value)} style={inputStyle}>
+              <option value="">Añadir equipo…</option>
+              {participantes.filter(p => !inscritos.includes(p.id))
+                .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+            <button style={btnStyle} onClick={addInscrito}>Añadir</button>
+          </div>
+
+          <h2>Fases</h2>
           {fases.length === 0 && <p style={{color:'var(--texto2)', marginBottom:'1rem', fontSize:'.88rem'}}>Sin fases. Añade una.</p>}
           <div style={{display:'flex', flexDirection:'column', gap:'.5rem', marginBottom:'1rem'}}>
             {fases.map(f => (
@@ -3664,9 +3787,16 @@ function AdminCompeticiones({ federacion, participantes }) {
           {/* Tipo: Liga */}
           {faseActual.tipo === 'liga' && (
             <div>
-              <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+              <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
                 Selecciona equipos para generar el calendario de liga (todos contra todos).
               </p>
+              {inscritos.length > 0 && (
+                <button onClick={() => setEquipSel([...inscritos])}
+                        style={{marginBottom:'.75rem', background:'#eff6ff', border:'1.5px solid #bfdbfe',
+                                color:'#1d4ed8', padding:'.3rem .8rem', borderRadius:8, cursor:'pointer', fontSize:'.83rem'}}>
+                  Usar equipos inscritos ({inscritos.length})
+                </button>
+              )}
               <div style={{display:'flex', flexWrap:'wrap', gap:'.4rem', marginBottom:'1rem'}}>
                 {participantes.map(p => (
                   <label key={p.id} style={{
@@ -3701,6 +3831,18 @@ function AdminCompeticiones({ federacion, participantes }) {
           {/* Tipo: Grupos */}
           {faseActual.tipo === 'grupos' && (
             <div>
+              {inscritos.length > 0 && (
+                <button onClick={() => {
+                  const prev = {...asignG};
+                  const letras = 'ABCDEFGH'.slice(0, numGrupos).split('');
+                  inscritos.forEach((pid, i) => { if (!prev[pid]) prev[pid] = letras[i % letras.length]; });
+                  setAsignG(prev);
+                }}
+                        style={{marginBottom:'.75rem', background:'#eff6ff', border:'1.5px solid #bfdbfe',
+                                color:'#1d4ed8', padding:'.3rem .8rem', borderRadius:8, cursor:'pointer', fontSize:'.83rem'}}>
+                  Pre-asignar equipos inscritos ({inscritos.length})
+                </button>
+              )}
               <div style={{display:'flex', gap:'1rem', alignItems:'center', marginBottom:'.75rem', flexWrap:'wrap'}}>
                 <label style={{fontSize:'.85rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
                   Grupos:
@@ -3917,7 +4059,7 @@ function App() {
   }
 
   const isAdmin  = federacion?.admin_user_id === authUser?.id;
-  const VISTAS   = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Liga', 'Competiciones',
+  const VISTAS   = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Competiciones',
                     ...(isAdmin ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -3980,11 +4122,9 @@ function App() {
           <Equipos participantes={participantes} miParticipanteId={participanteId}
                    jornadaActual={federacion?.jornada_actual || 1} />
         )}
-        {vista === 'Liga' && (
-          <Liga participantes={participantes} federacionId={federacion?.id} />
-        )}
         {vista === 'Competiciones' && (
-          <Competiciones participantes={participantes} federacion={federacion} />
+          <Competiciones participantes={participantes} federacion={federacion}
+                         miParticipanteId={session?.participante_id} />
         )}
         {vista === 'Admin' && isAdmin && (
           <AdminPanel participantes={participantes}

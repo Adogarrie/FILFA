@@ -3465,6 +3465,39 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [msgEq, setMsgEq]         = useState('');
   const [eliminando, setEliminando] = useState(null);
 
+  const [mods, setMods]       = useState([]);   // [{id, participante_id}]
+  const [selMod, setSelMod]   = useState('');
+  const [msgMod, setMsgMod]   = useState('');
+
+  const cargarMods = async () => {
+    if (!federacion) return;
+    const { data } = await sb.from('moderadores').select('id, participante_id')
+      .eq('federacion_id', federacion.id);
+    setMods(data || []);
+  };
+
+  useEffect(() => { cargarMods(); }, [federacion?.id]);
+
+  const añadirModerador = async () => {
+    if (!selMod) { setMsgMod('Selecciona un equipo'); return; }
+    const { error } = await sb.from('moderadores')
+      .insert({ federacion_id: federacion.id, participante_id: selMod });
+    if (error) { setMsgMod('Error: ' + error.message); return; }
+    setSelMod('');
+    setMsgMod('Moderador añadido');
+    setTimeout(() => setMsgMod(''), 2500);
+    cargarMods();
+  };
+
+  const quitarModerador = async (modId) => {
+    await sb.from('moderadores').delete().eq('id', modId);
+    cargarMods();
+  };
+
+  const modPids  = new Set(mods.map(m => m.participante_id));
+  // Candidatos: equipos de la federación que tienen usuario, no son admin, y no son ya moderadores
+  const candidatos = participantes.filter(p => p.user_id && p.user_id !== federacion?.admin_user_id && !modPids.has(p.id));
+
   const copiar = () => {
     navigator.clipboard.writeText(federacion?.codigo || '').then(() => {
       setCopiado(true);
@@ -3614,6 +3647,64 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
           onParticipantesChange?.();
         }}>Crear equipo</button>
       </div>
+    </div>
+
+    {/* ── Moderadores ── */}
+    <div className="card">
+      <h2>Moderadores</h2>
+      <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+        Los moderadores pueden gestionar clasificaciones, presupuestos, pujas, cierres y competiciones, pero no la configuración de la federación ni el mercado.
+      </p>
+
+      {mods.length > 0 && (
+        <table style={{marginBottom:'1rem'}}>
+          <thead><tr><th>Equipo</th><th></th></tr></thead>
+          <tbody>
+            {mods.map(m => {
+              const p = participantes.find(x => x.id === m.participante_id);
+              return (
+                <tr key={m.id}>
+                  <td style={{fontWeight:600}}>{p?.nombre || '?'}</td>
+                  <td style={{textAlign:'right'}}>
+                    <button onClick={() => quitarModerador(m.id)}
+                            style={{background:'none', border:'none', color:'#dc3545',
+                                    cursor:'pointer', fontSize:'.82rem'}}>
+                      Quitar
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {mods.length === 0 && (
+        <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+          Sin moderadores asignados.
+        </p>
+      )}
+      {msgMod && (
+        <div style={{color: msgMod.includes('Error') ? '#dc3545' : 'var(--verde)',
+                     fontWeight:600, marginBottom:'.75rem', fontSize:'.88rem'}}>
+          {msgMod}
+        </div>
+      )}
+      <div style={{display:'flex', gap:'.5rem', alignItems:'center', flexWrap:'wrap'}}>
+        <select value={selMod} onChange={e => setSelMod(e.target.value)}
+                style={{flex:1, minWidth:180, padding:'.4rem .7rem',
+                        border:'1.5px solid var(--borde)', borderRadius:8, fontSize:'.9rem'}}>
+          <option value="">Seleccionar equipo…</option>
+          {candidatos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+        </select>
+        <button className="btn-ok" onClick={añadirModerador} disabled={!selMod}>
+          Añadir moderador
+        </button>
+      </div>
+      {candidatos.length === 0 && participantes.filter(p => p.user_id).length === 0 && (
+        <p style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:'.5rem'}}>
+          Solo equipos con usuario registrado pueden ser moderadores.
+        </p>
+      )}
     </div>
     </>
   );
@@ -4129,26 +4220,37 @@ function AdminCompeticiones({ federacion, participantes }) {
 }
 
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
-function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange }) {
-  const [subtab, setSubtab] = useState('federacion');
+function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador }) {
+  // [key, label, soloAdmin]
+  const TABS_DEF = [
+    ['federacion',   'Mi Federación', true],
+    ['puntos',       'Clasificación', false],
+    ['presupuestos', 'Presupuestos',  false],
+    ['calendario',   'Calendario',    false],
+    ['pujas',        'Pujas',         false],
+    ['cierres',      'Cierres',       false],
+    ['mercado',      'Mercado',       true],
+    ['competiciones','Competiciones', false],
+  ];
+  const tabs    = TABS_DEF.filter(([,, soloAdmin]) => !isModerador || !soloAdmin);
+  const primera = tabs[0]?.[0] || 'puntos';
+  const [subtab, setSubtab] = useState(primera);
+
+  React.useEffect(() => {
+    if (!tabs.find(([k]) => k === subtab)) setSubtab(primera);
+  }, [isModerador]);
 
   return (
     <div>
+      {isModerador && (
+        <div style={{background:'var(--verde)', color:'#fff', padding:'.4rem 1rem',
+                     fontSize:'.82rem', borderRadius:'var(--radio)', marginBottom:'.5rem'}}>
+          Modo moderador — acceso restringido
+        </div>
+      )}
       <div className="tabs">
-        {[
-          ['federacion',   'Mi Federación'],
-          ['puntos',       'Clasificación'],
-          ['presupuestos', 'Presupuestos'],
-          ['calendario',   'Calendario'],
-          ['pujas',        'Pujas'],
-          ['cierres',      'Cierres'],
-          ['mercado',      'Mercado'],
-          ['competiciones','Competiciones'],
-        ].map(([k, l]) => (
-          <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
-                  onClick={() => setSubtab(k)}>
-            {l}
-          </button>
+        {tabs.map(([k, l]) => (
+          <button key={k} className={`tab ${subtab===k?'active':''}`} onClick={() => setSubtab(k)}>{l}</button>
         ))}
       </div>
       {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
@@ -4183,13 +4285,20 @@ function App() {
       .maybeSingle();
 
     let fedData = null;
+    let esMod   = false;
     if (part?.federacion_id) {
-      const { data: fd } = await sb.from('federaciones')
-        .select('*').eq('id', part.federacion_id).single();
+      const [{ data: fd }, { data: modRow }] = await Promise.all([
+        sb.from('federaciones').select('*').eq('id', part.federacion_id).single(),
+        sb.from('moderadores').select('id')
+          .eq('federacion_id', part.federacion_id)
+          .eq('participante_id', part.id)
+          .maybeSingle(),
+      ]);
       fedData = fd;
+      esMod   = !!modRow;
     }
     setFederacion(fedData);
-    setSession({ email: user.email, participante_id: part?.id || null });
+    setSession({ email: user.email, participante_id: part?.id || null, es_moderador: esMod });
   };
 
   useEffect(() => {
@@ -4238,9 +4347,10 @@ function App() {
                                  onLogout={handleLogout} />;
   }
 
-  const isAdmin  = federacion?.admin_user_id === authUser?.id;
-  const VISTAS   = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Competiciones',
-                    ...(isAdmin ? ['Admin'] : [])];
+  const isAdmin     = federacion?.admin_user_id === authUser?.id;
+  const isModerador = !isAdmin && !!session?.es_moderador;
+  const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Competiciones',
+                       ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
   return (
@@ -4254,7 +4364,7 @@ function App() {
         ))}
 
         {participantes.length > 0 && (
-          isAdmin
+          (isAdmin || isModerador)
             ? <div className="nav-selector">
                 <label>Ver equipo:</label>
                 <select value={participanteId} onChange={e => setParticipanteId(e.target.value)}>
@@ -4270,7 +4380,7 @@ function App() {
         )}
 
         <div className="nav-user">
-          <span>{isAdmin ? '⚙ Admin' : session.email}</span>
+          <span>{isAdmin ? '⚙ Admin' : isModerador ? '⚙ Mod' : session.email}</span>
           <button className="btn-logout" onClick={handleLogout}>Salir</button>
         </div>
       </nav>
@@ -4306,11 +4416,12 @@ function App() {
           <Competiciones participantes={participantes} federacion={federacion}
                          miParticipanteId={session?.participante_id} />
         )}
-        {vista === 'Admin' && isAdmin && (
+        {vista === 'Admin' && (isAdmin || isModerador) && (
           <AdminPanel participantes={participantes}
                       federacion={federacion}
                       onFederacionUpdate={setFederacion}
-                      onParticipantesChange={recargarParticipantes} />
+                      onParticipantesChange={recargarParticipantes}
+                      isModerador={isModerador} />
         )}
       </main>
     </>

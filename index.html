@@ -240,7 +240,7 @@ function Clasificacion() {
 }
 
 // ── PLANTILLA ──────────────────────────────────────────────────
-function Plantilla({ participanteId, participanteNombre, federacion }) {
+function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId }) {
   const [jugadores, setJugadores] = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
   const [modalVenta, setModalVenta] = useState(null);
@@ -285,6 +285,9 @@ function Plantilla({ participanteId, participanteNombre, federacion }) {
 
   if (jugadores === null) return <Spinner />;
 
+  // Admin actuando sobre equipo ajeno → poderes de admin; sobre su propio equipo → presidente
+  const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
+
   const lista = jugadores === 'demo' ? DEMO_PLANTILLA : jugadores.map(p => ({
     id:         p.id,
     jugador_id: p.jugador_id,
@@ -316,7 +319,7 @@ function Plantilla({ participanteId, participanteNombre, federacion }) {
       </div>
       <div className="card">
         <h2>Plantilla de {participanteNombre || '—'}</h2>
-        {!federacion?.ventas_habilitadas && lista.length > 0 && (
+        {!isActingAsAdmin && !federacion?.ventas_habilitadas && lista.length > 0 && (
           <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
                        borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
                        border:'1px solid #ffc107'}}>
@@ -333,7 +336,7 @@ function Plantilla({ participanteId, participanteNombre, federacion }) {
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
-                  {federacion?.ventas_habilitadas && <th></th>}
+                  {(isActingAsAdmin || federacion?.ventas_habilitadas) && <th></th>}
                 </tr>
               </thead>
               <tbody>
@@ -349,7 +352,7 @@ function Plantilla({ participanteId, participanteNombre, federacion }) {
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
-                      {federacion?.ventas_habilitadas && (
+                      {(isActingAsAdmin || federacion?.ventas_habilitadas) && (
                         <td>
                           <button onClick={() => setModalVenta(j)}
                             style={{background:'#d93025', color:'#fff', border:'none',
@@ -398,7 +401,7 @@ function Plantilla({ participanteId, participanteNombre, federacion }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion }) {
+function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion, miParticipanteId }) {
   const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
   const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
@@ -677,6 +680,9 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   if (jugadores === null) return <Spinner />;
 
+  // Admin viendo equipo ajeno → poderes de admin; su propio equipo → actúa como presidente
+  const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
+
   const huecosRestantes = 15 - misJugadoresIds.size;
 
   return (
@@ -692,7 +698,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
             </button>
           )}
         </div>
-        {!isAdmin && !federacion?.ventas_habilitadas && (
+        {!isActingAsAdmin && !federacion?.ventas_habilitadas && (
           <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
                        borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
                        border:'1px solid #ffc107'}}>
@@ -739,7 +745,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                     {nPujas > 0 ? `🔥 ${nPujas}` : '—'}
                   </td>
                   <td style={{whiteSpace:'nowrap'}}>
-                    {isAdmin ? (
+                    {isActingAsAdmin ? (
                       <button className="btn-fichar" onClick={() => setModal(j)}>Fichar</button>
                     ) : !federacion?.ventas_habilitadas ? (
                       miPuja ? (
@@ -3104,11 +3110,14 @@ function App() {
         {vista === 'Mi Plantilla' && (
           <Plantilla participanteId={participanteId}
                      participanteNombre={participanteActual?.nombre}
-                     federacion={federacion} />
+                     federacion={federacion}
+                     isAdmin={isAdmin}
+                     miParticipanteId={session?.participante_id} />
         )}
         {vista === 'Mercado' && (
           <Mercado participanteId={participanteId} participantes={participantes}
-                   isAdmin={isAdmin} onFichaje={() => {}} federacion={federacion} />
+                   isAdmin={isAdmin} onFichaje={() => {}} federacion={federacion}
+                   miParticipanteId={session?.participante_id} />
         )}
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}

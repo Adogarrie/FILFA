@@ -1636,20 +1636,46 @@ function Equipos({ participantes, miParticipanteId, jornadaActual }) {
 
 // ── COMPETICIONES ──────────────────────────────────────────────
 
-function generarRoundRobin(equipos, jornadaInicio) {
+function generarRoundRobinNVueltas(equipos, jornadaInicio, numVueltas) {
   const teams = [...equipos];
-  if (teams.length % 2 !== 0) teams.push(null);
+  if (teams.length % 2 !== 0) teams.push(null);  // bye
   const n = teams.length;
-  const fixtures = [];
-  for (let ronda = 0; ronda < n - 1; ronda++) {
+  const rondasPorVuelta = n - 1;
+
+  // Genera orden base de emparejamientos para 1 vuelta (algoritmo de rotación)
+  const baseRondas = [];
+  const rot = [...teams];
+  for (let ronda = 0; ronda < rondasPorVuelta; ronda++) {
+    const matches = [];
     for (let i = 0; i < n / 2; i++) {
-      const local = teams[i], visitante = teams[n - 1 - i];
-      if (local !== null && visitante !== null)
-        fixtures.push({ jornada: jornadaInicio + ronda, local_id: local, visitante_id: visitante });
+      const a = rot[i], b = rot[n - 1 - i];
+      if (a !== null && b !== null) matches.push({ local_id: a, visitante_id: b });
     }
-    teams.splice(1, 0, teams.pop());
+    baseRondas.push(matches);
+    rot.splice(1, 0, rot.pop());
   }
-  return fixtures;
+
+  // Neutral:  1 vuelta sola, o la última cuando N es impar
+  // Invertida: vueltas pares (0-indexed 1,3,5...) excepto si son neutral
+  const all = [];
+  for (let v = 0; v < numVueltas; v++) {
+    const esUltimaImpar = numVueltas % 2 === 1 && v === numVueltas - 1;
+    const neutral   = numVueltas === 1 || esUltimaImpar;
+    const invertida = !neutral && v % 2 === 1;
+    const jornadaV  = jornadaInicio + v * rondasPorVuelta;
+
+    baseRondas.forEach((matches, rondaIdx) => {
+      matches.forEach(m => {
+        all.push({
+          jornada:      jornadaV + rondaIdx,
+          local_id:     invertida ? m.visitante_id : m.local_id,
+          visitante_id: invertida ? m.local_id     : m.visitante_id,
+          es_neutral:   neutral,
+        });
+      });
+    });
+  }
+  return all;
 }
 
 function TablaClasificacionComp({ filas }) {
@@ -3725,6 +3751,7 @@ function AdminCompeticiones({ federacion, participantes }) {
   const [numGrupos, setNumGrupos] = useState(2);
   const [equipSel, setEquipSel]   = useState([]);
   const [asignG, setAsignG]       = useState({});
+  const [numVueltas, setNumVueltas] = useState(2);
   const [nRonda, setNRonda]       = useState('Final');
   const [eLocal, setELocal]       = useState('');
   const [eVisit, setEVisit]       = useState('');
@@ -3755,7 +3782,7 @@ function AdminCompeticiones({ federacion, participantes }) {
     setFases(data || []); setFaseId(null); setGruposDatos([]); setPartidos([]);
   };
 
-  const cargarFaseDatos = async (fid) => {
+  const cargarFaseDatos = async (fid, insc = inscritos) => {
     const [{ data: gd }, { data: pt }] = await Promise.all([
       sb.from('fase_grupos').select('*').eq('fase_id', fid),
       sb.from('fase_partidos').select('*').eq('fase_id', fid).order('jornada'),
@@ -3765,7 +3792,8 @@ function AdminCompeticiones({ federacion, participantes }) {
     (gd || []).forEach(r => { prevAsign[r.participante_id] = r.grupo; });
     if (Object.keys(prevAsign).length > 0) setAsignG(prevAsign);
     const prevEq = [...new Set((pt || []).flatMap(p => [p.local_id, p.visitante_id]))];
-    if (prevEq.length > 0) setEquipSel(prevEq);
+    // Si no hay partidos previos, preseleccionar los inscritos
+    setEquipSel(prevEq.length > 0 ? prevEq : insc);
   };
 
   useEffect(() => { if (federacion?.id) cargarComps(); }, [federacion]);
@@ -3773,7 +3801,7 @@ function AdminCompeticiones({ federacion, participantes }) {
     if (compId) { cargarFases(compId); cargarInscritos(compId); }
     else { setFases([]); setFaseId(null); setInscritos([]); }
   }, [compId]);
-  useEffect(() => { if (faseId) cargarFaseDatos(faseId); else { setGruposDatos([]); setPartidos([]); } }, [faseId]);
+  useEffect(() => { if (faseId) cargarFaseDatos(faseId, inscritos); else { setGruposDatos([]); setPartidos([]); } }, [faseId]);
 
   const toggleInscripciones = async (comp) => {
     const nuevo = !comp.inscripciones_habilitadas;
@@ -3828,14 +3856,17 @@ function AdminCompeticiones({ federacion, participantes }) {
 
   const generarLiga = async () => {
     if (equipSel.length < 2) { ok('Selecciona al menos 2 equipos'); return; }
-    const rows = generarRoundRobin(equipSel, Number(jornadaIni)).map(f => ({ fase_id: faseId, ...f }));
+    const nv   = Math.max(1, Number(numVueltas) || 2);
+    const rows = generarRoundRobinNVueltas(equipSel, Number(jornadaIni), nv)
+      .map(f => ({ fase_id: faseId, ...f }));
     await sb.from('fase_partidos').delete().eq('fase_id', faseId);
     if (rows.length) await sb.from('fase_partidos').insert(rows);
     await cargarFaseDatos(faseId);
-    ok(`${rows.length} partidos generados`);
+    ok(`${rows.length} partidos generados (${nv} vuelta${nv>1?'s':''})`);
   };
 
   const generarGrupos = async () => {
+    const nv     = Math.max(1, Number(numVueltas) || 2);
     const letras = 'ABCDEFGH'.slice(0, numGrupos);
     const grupoRows = Object.entries(asignG)
       .filter(([, g]) => letras.includes(g))
@@ -3843,16 +3874,16 @@ function AdminCompeticiones({ federacion, participantes }) {
     await sb.from('fase_grupos').delete().eq('fase_id', faseId);
     if (grupoRows.length) await sb.from('fase_grupos').insert(grupoRows);
     const partidoRows = [];
-    'ABCDEFGH'.slice(0, numGrupos).split('').forEach(letra => {
+    letras.split('').forEach(letra => {
       const teamsG = Object.entries(asignG).filter(([, g]) => g === letra).map(([pid]) => pid);
-      generarRoundRobin(teamsG, Number(jornadaIni)).forEach(f =>
+      generarRoundRobinNVueltas(teamsG, Number(jornadaIni), nv).forEach(f =>
         partidoRows.push({ fase_id: faseId, grupo: letra, ...f })
       );
     });
     await sb.from('fase_partidos').delete().eq('fase_id', faseId);
     if (partidoRows.length) await sb.from('fase_partidos').insert(partidoRows);
     await cargarFaseDatos(faseId);
-    ok(`Grupos generados: ${grupoRows.length} equipos, ${partidoRows.length} partidos`);
+    ok(`Grupos generados: ${grupoRows.length} equipos, ${partidoRows.length} partidos (${nv} vuelta${nv>1?'s':''})`);
   };
 
   const añadirPartido = async (grupo = null, ronda = null) => {
@@ -3983,15 +4014,20 @@ function AdminCompeticiones({ federacion, participantes }) {
           {faseActual.tipo === 'liga' && (
             <div>
               <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
-                Selecciona equipos para generar el calendario de liga (todos contra todos).
+                Equipos para el calendario (todos contra todos). Se preseleccionan los inscritos.
               </p>
-              {inscritos.length > 0 && (
+              <div style={{display:'flex', gap:'.5rem', alignItems:'center', flexWrap:'wrap', marginBottom:'.75rem'}}>
                 <button onClick={() => setEquipSel([...inscritos])}
-                        style={{marginBottom:'.75rem', background:'#eff6ff', border:'1.5px solid #bfdbfe',
+                        style={{background:'#eff6ff', border:'1.5px solid #bfdbfe',
                                 color:'#1d4ed8', padding:'.3rem .8rem', borderRadius:8, cursor:'pointer', fontSize:'.83rem'}}>
-                  Usar equipos inscritos ({inscritos.length})
+                  Usar inscritos ({inscritos.length})
                 </button>
-              )}
+                <button onClick={() => setEquipSel([])}
+                        style={{background:'var(--gris)', border:'1.5px solid var(--borde)',
+                                color:'var(--texto2)', padding:'.3rem .8rem', borderRadius:8, cursor:'pointer', fontSize:'.83rem'}}>
+                  Limpiar
+                </button>
+              </div>
               <div style={{display:'flex', flexWrap:'wrap', gap:'.4rem', marginBottom:'1rem'}}>
                 {participantes.map(p => (
                   <label key={p.id} style={{
@@ -4007,12 +4043,22 @@ function AdminCompeticiones({ federacion, participantes }) {
                   </label>
                 ))}
               </div>
-              <div style={{display:'flex', gap:'1rem', alignItems:'center', marginBottom:'.75rem', flexWrap:'wrap'}}>
+              <div style={{display:'flex', gap:'1.25rem', alignItems:'center', marginBottom:'.75rem', flexWrap:'wrap'}}>
                 <label style={{fontSize:'.85rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
                   Jornada inicio:
                   <input type="number" value={jornadaIni} onChange={e => setJornadaIni(e.target.value)}
                          style={{...inputStyle, width:70}} min={1} />
                 </label>
+                <label style={{fontSize:'.85rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
+                  Vueltas:
+                  <input type="number" value={numVueltas} onChange={e => setNumVueltas(e.target.value)}
+                         style={{...inputStyle, width:60}} min={1} max={10} />
+                </label>
+                <span style={{fontSize:'.78rem', color:'var(--texto2)'}}>
+                  {numVueltas == 1 ? '1 vuelta — neutral' :
+                   numVueltas == 2 ? '2 vueltas — ida y vuelta' :
+                   `${numVueltas} vueltas — ${Math.floor(numVueltas/2)} ida/vuelta${numVueltas%2===1?' + 1 neutral':''}`}
+                </span>
               </div>
               <button style={btnStyle} onClick={generarLiga}>Generar calendario</button>
               {partidos.length > 0 && (
@@ -4089,6 +4135,16 @@ function AdminCompeticiones({ federacion, participantes }) {
                   <input type="number" value={jornadaIni} onChange={e => setJornadaIni(e.target.value)}
                          style={{...inputStyle, width:70}} min={1} />
                 </label>
+                <label style={{fontSize:'.85rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
+                  Vueltas:
+                  <input type="number" value={numVueltas} onChange={e => setNumVueltas(e.target.value)}
+                         style={{...inputStyle, width:60}} min={1} max={10} />
+                </label>
+                <span style={{fontSize:'.78rem', color:'var(--texto2)'}}>
+                  {numVueltas == 1 ? '1 vuelta — neutral' :
+                   numVueltas == 2 ? '2 vueltas — ida y vuelta' :
+                   `${numVueltas} vueltas — ${Math.floor(numVueltas/2)} ida/vuelta${numVueltas%2===1?' + 1 neutral':''}`}
+                </span>
               </div>
               <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.5rem'}}>Asigna cada equipo a un grupo:</p>
               <table style={{marginBottom:'1rem'}}>

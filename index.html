@@ -1734,21 +1734,26 @@ function PartidosList({ partidos, idNombre, titulo }) {
                                   padding:'.9rem 0', borderBottom:'1px solid var(--gris)'}}>
             <div style={{flex:1, textAlign:'right'}}>
               <div style={{fontWeight:700, fontSize:'.95rem', color:cL}}>{nomL}</div>
-              {f.jugado && <div style={{fontSize:'.72rem', color:'var(--texto2)'}}>
-                {f.es_neutral ? f.efL : `${f.efL - 5}+5`}={f.efL} pts → <strong>{f.gL}</strong> {f.gL===1?'gol':'goles'}
-              </div>}
+              {f.jugado && !f.resultadoReal && (
+                <div style={{fontSize:'.72rem', color:'var(--texto2)'}}>
+                  {f.es_neutral ? f.efL : `${f.efL-5}+5`}={f.efL} pts → <strong>{f.gL}</strong> {f.gL===1?'gol':'goles'}
+                </div>
+              )}
             </div>
-            <div style={{width:'80px', textAlign:'center', flexShrink:0, lineHeight:1.1,
+            <div style={{width:'84px', textAlign:'center', flexShrink:0, lineHeight:1.2,
                          fontWeight:800, fontSize:f.jugado?'1.35rem':'.9rem',
                          color:f.jugado?'var(--texto)':'var(--texto2)'}}>
               {f.jugado ? `${f.gL} – ${f.gV}` : '—'}
               <div style={{fontSize:'.7rem', color:'var(--texto2)', fontWeight:400}}>J{f.jornada}</div>
+              {f.es_neutral && <div style={{fontSize:'.65rem', color:'var(--texto2)', fontWeight:400}}>neutral</div>}
             </div>
             <div style={{flex:1}}>
               <div style={{fontWeight:700, fontSize:'.95rem', color:cV}}>{nomV}</div>
-              {f.jugado && <div style={{fontSize:'.72rem', color:'var(--texto2)'}}>
-                {f.ptsV} pts → <strong>{f.gV}</strong> {f.gV===1?'gol':'goles'}
-              </div>}
+              {f.jugado && !f.resultadoReal && (
+                <div style={{fontSize:'.72rem', color:'var(--texto2)'}}>
+                  {f.ptsV} pts → <strong>{f.gV}</strong> {f.gV===1?'gol':'goles'}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -1812,12 +1817,17 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
   useEffect(() => { setSubvista('clasificacion'); }, [fase.id]);
 
   const calcularResultados = (matchList) => matchList.map(f => {
+    // Resultado real introducido por el admin
+    if (f.finalizado && f.goles_local !== null && f.goles_visitante !== null) {
+      return { ...f, jugado: true, resultadoReal: true, gL: f.goles_local, gV: f.goles_visitante };
+    }
+    // Fallback: derivar de puntos fantasy de la clasificación
     const ptsLRec = (clasMap[f.local_id] || {})[f.jornada];
     const ptsVRec = (clasMap[f.visitante_id] || {})[f.jornada];
     const jugado  = ptsLRec !== undefined || ptsVRec !== undefined;
     const ptsL    = ptsLRec ?? 0, ptsV = ptsVRec ?? 0;
     const efL     = f.es_neutral ? ptsL : ptsL + 5;
-    return { ...f, jugado, efL, ptsV, gL: ptsAGoles(efL), gV: ptsAGoles(ptsV) };
+    return { ...f, jugado, resultadoReal: false, efL, ptsV, gL: ptsAGoles(efL), gV: ptsAGoles(ptsV) };
   });
 
   const calcularTabla = (matchList, pidList) => {
@@ -3736,6 +3746,131 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   );
 }
 
+// ── TABLA DE PARTIDOS EDITABLE (admin) ────────────────────────
+function TablaPartidosAdmin({ partidos, participantes, idNombre, onSave, onDelete, mostrarGrupo=false, mostrarRonda=false }) {
+  const [editandoId, setEditandoId] = useState(null);
+  const [editForm,   setEditForm]   = useState({});
+
+  const iS = { padding:'.32rem .5rem', border:'1.5px solid var(--borde)', borderRadius:7, fontSize:'.82rem' };
+  const bS = { background:'var(--verde)', color:'#fff', border:'none', padding:'.32rem .65rem', borderRadius:7, cursor:'pointer', fontWeight:600, fontSize:'.8rem' };
+  const dS = { background:'#fee2e2', border:'none', color:'#b91c1c', padding:'.32rem .65rem', borderRadius:7, cursor:'pointer', fontSize:'.8rem' };
+
+  const iniciarEdit = (pt) => {
+    setEditandoId(pt.id);
+    setEditForm({
+      local_id:        pt.local_id,
+      visitante_id:    pt.visitante_id,
+      jornada:         pt.jornada,
+      es_neutral:      !!pt.es_neutral,
+      goles_local:     pt.goles_local ?? '',
+      goles_visitante: pt.goles_visitante ?? '',
+      finalizado:      !!pt.finalizado,
+      grupo:           pt.grupo || '',
+      ronda:           pt.ronda || '',
+    });
+  };
+
+  const guardar = () => {
+    const update = {
+      local_id:        editForm.local_id,
+      visitante_id:    editForm.visitante_id,
+      jornada:         Number(editForm.jornada),
+      es_neutral:      editForm.es_neutral,
+      goles_local:     editForm.goles_local === '' ? null : Number(editForm.goles_local),
+      goles_visitante: editForm.goles_visitante === '' ? null : Number(editForm.goles_visitante),
+      finalizado:      editForm.finalizado,
+    };
+    if (mostrarGrupo) update.grupo = editForm.grupo || null;
+    if (mostrarRonda) update.ronda = editForm.ronda || null;
+    onSave(editandoId, update);
+    setEditandoId(null);
+  };
+
+  const f = (pid) => idNombre[pid] || '?';
+  const ordenados = [...partidos].sort((a,b) => {
+    if (mostrarRonda) return (a.ronda||'').localeCompare(b.ronda||'') || a.jornada-b.jornada;
+    if (mostrarGrupo) return (a.grupo||'').localeCompare(b.grupo||'') || a.jornada-b.jornada;
+    return a.jornada-b.jornada;
+  });
+
+  if (ordenados.length === 0) return null;
+  return (
+    <table style={{fontSize:'.82rem', marginTop:'.5rem'}}>
+      <thead>
+        <tr>
+          {mostrarRonda && <th>Ronda</th>}
+          {mostrarGrupo && <th>Grp</th>}
+          <th>J</th><th>Local</th><th style={{textAlign:'center', minWidth:60}}>Res.</th><th>Visitante</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {ordenados.map(pt => (
+          editandoId === pt.id ? (
+            <tr key={pt.id} style={{background:'#f0f9ff'}}>
+              <td colSpan={5 + (mostrarGrupo?1:0) + (mostrarRonda?1:0)}>
+                <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center', padding:'.5rem 0'}}>
+                  {mostrarRonda && (
+                    <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem'}}>
+                      Ronda:<input value={editForm.ronda} onChange={e => setEditForm(f => ({...f, ronda:e.target.value}))} style={{...iS, width:90}} />
+                    </label>
+                  )}
+                  {mostrarGrupo && (
+                    <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem'}}>
+                      Grp:
+                      <select value={editForm.grupo} onChange={e => setEditForm(f => ({...f, grupo:e.target.value}))} style={iS}>
+                        {'ABCDEFGH'.split('').map(l => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem'}}>
+                    J:<input type="number" value={editForm.jornada} onChange={e => setEditForm(f => ({...f, jornada:e.target.value}))} style={{...iS, width:52}} min={1} />
+                  </label>
+                  <select value={editForm.local_id} onChange={e => setEditForm(f => ({...f, local_id:e.target.value}))} style={iS}>
+                    {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <span style={{fontWeight:700}}>vs</span>
+                  <select value={editForm.visitante_id} onChange={e => setEditForm(f => ({...f, visitante_id:e.target.value}))} style={iS}>
+                    {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem', cursor:'pointer'}}>
+                    <input type="checkbox" checked={editForm.es_neutral} onChange={e => setEditForm(f => ({...f, es_neutral:e.target.checked}))} /> Neutral
+                  </label>
+                  <span style={{borderLeft:'1px solid var(--borde)', paddingLeft:'.4rem', fontWeight:600, fontSize:'.78rem', color:'var(--texto2)'}}>Resultado:</span>
+                  <input type="number" value={editForm.goles_local} onChange={e => setEditForm(f => ({...f, goles_local:e.target.value}))} style={{...iS, width:48}} min={0} placeholder="—" />
+                  <span>–</span>
+                  <input type="number" value={editForm.goles_visitante} onChange={e => setEditForm(f => ({...f, goles_visitante:e.target.value}))} style={{...iS, width:48}} min={0} placeholder="—" />
+                  <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem', cursor:'pointer'}}>
+                    <input type="checkbox" checked={editForm.finalizado} onChange={e => setEditForm(f => ({...f, finalizado:e.target.checked}))} /> Finalizado
+                  </label>
+                  <button style={bS} onClick={guardar}>Guardar</button>
+                  <button style={dS} onClick={() => setEditandoId(null)}>Cancelar</button>
+                </div>
+              </td>
+            </tr>
+          ) : (
+            <tr key={pt.id}>
+              {mostrarRonda && <td style={{fontWeight:600, fontSize:'.8rem'}}>{pt.ronda}</td>}
+              {mostrarGrupo && <td style={{fontWeight:700, color:'var(--verde)'}}>{pt.grupo}</td>}
+              <td style={{color:'var(--texto2)'}}>J{pt.jornada}</td>
+              <td>{f(pt.local_id)}</td>
+              <td style={{textAlign:'center', fontWeight:700}}>
+                {pt.finalizado && pt.goles_local !== null
+                  ? <span style={{color:'var(--verde)'}}>{pt.goles_local}–{pt.goles_visitante}</span>
+                  : <span style={{color:'var(--texto2)', fontWeight:400, fontSize:'.8rem'}}>{pt.es_neutral?'neutral':'vs'}</span>}
+              </td>
+              <td>{f(pt.visitante_id)}</td>
+              <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                <button style={{...bS, background:'#eff6ff', color:'#3b5bdb', marginRight:'.3rem'}} onClick={() => iniciarEdit(pt)}>✎</button>
+                <button style={{...dS, padding:'.2rem .45rem'}} onClick={() => onDelete(pt.id)}>×</button>
+              </td>
+            </tr>
+          )
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 // ── ADMIN — COMPETICIONES ──────────────────────────────────────
 function AdminCompeticiones({ federacion, participantes }) {
   const [comps, setComps]         = useState([]);
@@ -3902,6 +4037,12 @@ function AdminCompeticiones({ federacion, participantes }) {
   const eliminarPartido = async (id) => {
     await sb.from('fase_partidos').delete().eq('id', id);
     await cargarFaseDatos(faseId);
+  };
+
+  const guardarPartido = async (id, update) => {
+    await sb.from('fase_partidos').update(update).eq('id', id);
+    await cargarFaseDatos(faseId);
+    ok('Partido actualizado');
   };
 
   const faseActual = fases.find(f => f.id === faseId);
@@ -4088,22 +4229,13 @@ function AdminCompeticiones({ federacion, participantes }) {
                   </label>
                   <button style={btnStyle} onClick={() => añadirPartido()}>Añadir</button>
                 </div>
-                {partidos.length > 0 && (
-                  <table>
-                    <thead><tr><th>J</th><th>Local</th><th></th><th>Visitante</th><th></th></tr></thead>
-                    <tbody>
-                      {[...partidos].sort((a,b)=>a.jornada-b.jornada).map(pt => (
-                        <tr key={pt.id}>
-                          <td style={{color:'var(--texto2)', fontSize:'.83rem'}}>J{pt.jornada}</td>
-                          <td>{idNombre[pt.local_id] || '?'}</td>
-                          <td style={{textAlign:'center', color:'var(--texto2)', fontSize:'.8rem'}}>vs</td>
-                          <td>{idNombre[pt.visitante_id] || '?'}</td>
-                          <td><button style={{...delStyle, padding:'.15rem .5rem'}} onClick={() => eliminarPartido(pt.id)}>×</button></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <TablaPartidosAdmin
+                  partidos={partidos}
+                  participantes={participantes}
+                  idNombre={idNombre}
+                  onSave={guardarPartido}
+                  onDelete={eliminarPartido}
+                />
               </div>
             </div>
           )}
@@ -4197,23 +4329,14 @@ function AdminCompeticiones({ federacion, participantes }) {
                   </select>
                   <button style={btnStyle} onClick={() => añadirPartido(asignG[eLocal] || 'A')}>Añadir</button>
                 </div>
-                {partidos.length > 0 && (
-                  <table>
-                    <thead><tr><th>J</th><th>Grp</th><th>Local</th><th></th><th>Visitante</th><th></th></tr></thead>
-                    <tbody>
-                      {[...partidos].sort((a,b) => (a.grupo||'').localeCompare(b.grupo||'') || a.jornada-b.jornada).map(pt => (
-                        <tr key={pt.id}>
-                          <td style={{color:'var(--texto2)', fontSize:'.83rem'}}>J{pt.jornada}</td>
-                          <td style={{fontWeight:600, color:'var(--verde)'}}>{pt.grupo}</td>
-                          <td>{idNombre[pt.local_id] || '?'}</td>
-                          <td style={{textAlign:'center', color:'var(--texto2)', fontSize:'.8rem'}}>vs</td>
-                          <td>{idNombre[pt.visitante_id] || '?'}</td>
-                          <td><button style={{...delStyle, padding:'.15rem .5rem'}} onClick={() => eliminarPartido(pt.id)}>×</button></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <TablaPartidosAdmin
+                  partidos={partidos}
+                  participantes={participantes}
+                  idNombre={idNombre}
+                  onSave={guardarPartido}
+                  onDelete={eliminarPartido}
+                  mostrarGrupo
+                />
               </div>
             </div>
           )}
@@ -4248,25 +4371,14 @@ function AdminCompeticiones({ federacion, participantes }) {
                 </label>
                 <button style={btnStyle} onClick={() => añadirPartido(null, true)}>Añadir</button>
               </div>
-              {partidos.length > 0 && (
-                <table>
-                  <thead><tr><th>Ronda</th><th>Local</th><th></th><th>Visitante</th><th>J</th><th></th></tr></thead>
-                  <tbody>
-                    {partidos.map(pt => (
-                      <tr key={pt.id}>
-                        <td style={{fontWeight:600}}>{pt.ronda}</td>
-                        <td>{idNombre[pt.local_id] || '?'}</td>
-                        <td style={{textAlign:'center', color:'var(--texto2)', fontSize:'.8rem'}}>vs</td>
-                        <td>{idNombre[pt.visitante_id] || '?'}</td>
-                        <td style={{textAlign:'center', color:'var(--texto2)'}}>J{pt.jornada}</td>
-                        <td>
-                          <button style={{...delStyle, padding:'.15rem .5rem'}} onClick={() => eliminarPartido(pt.id)}>×</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+              <TablaPartidosAdmin
+                partidos={partidos}
+                participantes={participantes}
+                idNombre={idNombre}
+                onSave={guardarPartido}
+                onDelete={eliminarPartido}
+                mostrarRonda
+              />
             </div>
           )}
         </div>

@@ -240,7 +240,7 @@ function Clasificacion() {
 }
 
 // ── PLANTILLA ──────────────────────────────────────────────────
-function Plantilla({ participanteId, participanteNombre }) {
+function Plantilla({ participanteId, participanteNombre, federacion }) {
   const [jugadores, setJugadores] = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
   const [modalVenta, setModalVenta] = useState(null);
@@ -316,6 +316,13 @@ function Plantilla({ participanteId, participanteNombre }) {
       </div>
       <div className="card">
         <h2>Plantilla de {participanteNombre || '—'}</h2>
+        {!federacion?.ventas_habilitadas && lista.length > 0 && (
+          <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
+                       borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
+                       border:'1px solid #ffc107'}}>
+            La venta de jugadores está deshabilitada. El administrador debe activarla en Admin → Mercado.
+          </div>
+        )}
         {!participanteId
           ? <div className="empty">Selecciona un participante en el menu superior.</div>
           : lista.length === 0
@@ -326,7 +333,7 @@ function Plantilla({ participanteId, participanteNombre }) {
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
-                  <th></th>
+                  {federacion?.ventas_habilitadas && <th></th>}
                 </tr>
               </thead>
               <tbody>
@@ -342,14 +349,16 @@ function Plantilla({ participanteId, participanteNombre }) {
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
-                      <td>
-                        <button onClick={() => setModalVenta(j)}
-                          style={{background:'#d93025', color:'#fff', border:'none',
-                                  padding:'.3rem .7rem', borderRadius:'8px',
-                                  cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
-                          Vender
-                        </button>
-                      </td>
+                      {federacion?.ventas_habilitadas && (
+                        <td>
+                          <button onClick={() => setModalVenta(j)}
+                            style={{background:'#d93025', color:'#fff', border:'none',
+                                    padding:'.3rem .7rem', borderRadius:'8px',
+                                    cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                            Vender
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -2773,43 +2782,60 @@ function AdminCierres({ federacion }) {
   );
 }
 
-// ── ADMIN — SORTEO ALEATORIO ───────────────────────────────────
-function AdminSorteo({ federacion, onFederacionUpdate }) {
-  const [habilitado, setHabilitado] = useState(!!federacion?.sorteo_habilitado);
-  const [msg, setMsg] = useState('');
+// ── ADMIN — MERCADO (ventas + sorteo) ─────────────────────────
+function AdminMercado({ federacion, onFederacionUpdate }) {
+  const [ventas,  setVentas]  = useState(!!federacion?.ventas_habilitadas);
+  const [sorteo,  setSorteo]  = useState(!!federacion?.sorteo_habilitado);
+  const [msg, setMsg]         = useState('');
 
-  const cambiar = async (valor) => {
+  const cambiar = async (campo, valor, setEstado) => {
     if (!sb || !federacion) return;
     const { error } = await sb.from('federaciones')
-      .update({ sorteo_habilitado: valor }).eq('id', federacion.id);
+      .update({ [campo]: valor }).eq('id', federacion.id);
     if (error) { alert('Error al guardar: ' + error.message); return; }
-    setHabilitado(valor);
-    onFederacionUpdate({ ...federacion, sorteo_habilitado: valor });
-    setMsg(valor ? 'Sorteo activado' : 'Sorteo desactivado');
-    setTimeout(() => setMsg(''), 3000);
+    setEstado(valor);
+    onFederacionUpdate({ ...federacion, [campo]: valor });
+    setMsg('Guardado');
+    setTimeout(() => setMsg(''), 2500);
   };
+
+  const Opcion = ({ label, desc, activo, onChange }) => (
+    <div style={{display:'flex', alignItems:'flex-start', gap:'1rem',
+                 padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700, marginBottom:'.2rem'}}>{label}</div>
+        <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>{desc}</div>
+      </div>
+      <div style={{display:'flex', alignItems:'center', gap:'.6rem', flexShrink:0}}>
+        <span style={{fontSize:'.85rem', fontWeight:600,
+                      color: activo ? 'var(--verde)' : 'var(--texto2)'}}>
+          {activo ? 'Activado' : 'Desactivado'}
+        </span>
+        <button className={activo ? 'btn-cancel' : 'btn-ok'} onClick={() => onChange(!activo)}>
+          {activo ? 'Desactivar' : 'Activar'}
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="card">
-      <h2>Sorteo aleatorio de jugadores</h2>
-      <p style={{fontSize:'.9rem', color:'var(--texto2)', marginBottom:'1rem'}}>
-        Mientras esté activado, cada participante puede pulsar "Sorteo aleatorio" en el Mercado
-        para rellenar su propia plantilla con jugadores libres elegidos al azar, pagando su
-        valor de mercado y respetando su presupuesto disponible.
-      </p>
-      {habilitado === null ? <Spinner /> : (
-        <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
-          <button className={habilitado ? 'btn-cancel' : 'btn-ok'}
-                  onClick={() => cambiar(!habilitado)}>
-            {habilitado ? 'Desactivar sorteo' : 'Activar sorteo'}
-          </button>
-          <span style={{fontSize:'.88rem', fontWeight:600,
-                        color: habilitado ? 'var(--verde)' : 'var(--texto2)'}}>
-            {habilitado ? 'Activado' : 'Desactivado'}
-          </span>
-          {msg && <span style={{color:'#198754', fontSize:'.88rem'}}>{msg}</span>}
-        </div>
-      )}
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.25rem'}}>
+        <h2 style={{margin:0}}>Mercado</h2>
+        {msg && <span style={{color:'var(--verde)', fontSize:'.88rem', fontWeight:600}}>{msg}</span>}
+      </div>
+      <Opcion
+        label="Venta de jugadores"
+        desc="Permite a los equipos vender jugadores de su plantilla y recibir su valor de mercado."
+        activo={ventas}
+        onChange={v => cambiar('ventas_habilitadas', v, setVentas)}
+      />
+      <Opcion
+        label="Sorteo aleatorio"
+        desc="Permite a cada equipo rellenar su plantilla con jugadores libres elegidos al azar, pagando su valor de mercado."
+        activo={sorteo}
+        onChange={v => cambiar('sorteo_habilitado', v, setSorteo)}
+      />
     </div>
   );
 }
@@ -2914,7 +2940,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate }) {
           ['calendario',   'Calendario'],
           ['pujas',        'Pujas'],
           ['cierres',      'Cierres'],
-          ['sorteo',       'Sorteo'],
+          ['mercado',      'Mercado'],
         ].map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
                   onClick={() => setSubtab(k)}>
@@ -2928,7 +2954,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate }) {
       {subtab === 'calendario'   && <AdminCalendario participantes={participantes} federacionId={federacion?.id} />}
       {subtab === 'pujas'        && <AdminPujas participantes={participantes} />}
       {subtab === 'cierres'      && <AdminCierres federacion={federacion} />}
-      {subtab === 'sorteo'       && <AdminSorteo federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
+      {subtab === 'mercado'      && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
     </div>
   );
 }
@@ -3054,7 +3080,8 @@ function App() {
       <main>
         {vista === 'Mi Plantilla' && (
           <Plantilla participanteId={participanteId}
-                     participanteNombre={participanteActual?.nombre} />
+                     participanteNombre={participanteActual?.nombre}
+                     federacion={federacion} />
         )}
         {vista === 'Mercado' && (
           <Mercado participanteId={participanteId} participantes={participantes}

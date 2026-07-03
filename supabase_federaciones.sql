@@ -9,9 +9,10 @@ create table if not exists federaciones (
   nombre              text not null,
   codigo              text not null unique,
   admin_user_id       uuid references auth.users(id) on delete set null,
-  presupuesto_inicial numeric(10,2) not null default 100000000,
+  presupuesto_inicial numeric(12,2) not null default 100000000,
   jornada_actual      int not null default 1,
   sorteo_habilitado   boolean not null default false,
+  ventas_habilitadas  boolean not null default false,
   created_at          timestamptz default now()
 );
 

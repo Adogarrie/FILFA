@@ -1905,24 +1905,6 @@ function Competiciones({ participantes, federacion, miParticipanteId }) {
     });
   }, [faseId]);
 
-  const recargarInscritos = async () => {
-    const { data } = await sb.from('competicion_inscripciones')
-      .select('participante_id').eq('competicion_id', compId);
-    setInscritos((data || []).map(r => r.participante_id));
-  };
-
-  const inscribirse = async () => {
-    await sb.from('competicion_inscripciones')
-      .insert({ competicion_id: compId, participante_id: miParticipanteId });
-    await recargarInscritos();
-  };
-
-  const desinscribirse = async () => {
-    await sb.from('competicion_inscripciones')
-      .delete().eq('competicion_id', compId).eq('participante_id', miParticipanteId);
-    await recargarInscritos();
-  };
-
   if (comps === null) return <Spinner />;
   if (comps.length === 0) return (
     <div className="card">
@@ -1931,9 +1913,8 @@ function Competiciones({ participantes, federacion, miParticipanteId }) {
     </div>
   );
 
-  const faseActual  = fases.find(f => f.id === faseId);
-  const compActual  = comps.find(c => c.id === compId);
-  const estaInscrito = miParticipanteId && inscritos.includes(miParticipanteId);
+  const faseActual = fases.find(f => f.id === faseId);
+  const compActual = comps.find(c => c.id === compId);
 
   return (
     <div>
@@ -1947,38 +1928,22 @@ function Competiciones({ participantes, federacion, miParticipanteId }) {
         </div>
       )}
 
-      {/* Panel de inscripciones */}
-      {compActual && (inscritos.length > 0 || compActual.inscripciones_habilitadas) && (
-        <div className="card" style={{marginBottom:'.5rem'}}>
-          <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'.75rem'}}>
-            <div>
-              <span style={{fontSize:'.85rem', fontWeight:600, color:'var(--texto2)'}}>
-                Inscripciones:{' '}
-              </span>
-              {compActual.inscripciones_habilitadas
-                ? <span style={{color:'var(--verde)', fontWeight:700, fontSize:'.85rem'}}>ABIERTAS</span>
-                : <span style={{color:'var(--texto2)', fontSize:'.85rem'}}>CERRADAS</span>}
-              {inscritos.length > 0 && (
-                <span style={{marginLeft:'.75rem', fontSize:'.83rem', color:'var(--texto2)'}}>
-                  {inscritos.length} equipo{inscritos.length !== 1 ? 's' : ''} inscrito{inscritos.length !== 1 ? 's' : ''}:
-                  {' '}{inscritos.map(pid => idNombre[pid] || '?').join(', ')}
-                </span>
-              )}
-            </div>
-            {compActual.inscripciones_habilitadas && miParticipanteId && (
-              estaInscrito
-                ? <button onClick={desinscribirse}
-                          style={{background:'#fee2e2', border:'none', color:'#b91c1c',
-                                  padding:'.35rem .85rem', borderRadius:8, cursor:'pointer', fontSize:'.85rem'}}>
-                    Cancelar inscripción
-                  </button>
-                : <button onClick={inscribirse}
-                          style={{background:'var(--verde)', color:'#fff', border:'none',
-                                  padding:'.35rem .85rem', borderRadius:8, cursor:'pointer', fontSize:'.85rem', fontWeight:600}}>
-                    Inscribir mi equipo
-                  </button>
-            )}
-          </div>
+      {/* Equipos inscritos (solo informativo) */}
+      {compActual && inscritos.length > 0 && (
+        <div className="card" style={{marginBottom:'.5rem', padding:'.75rem 1.25rem'}}>
+          <span style={{fontSize:'.83rem', color:'var(--texto2)', fontWeight:600}}>
+            Equipos participantes:
+          </span>
+          {' '}
+          {inscritos.map((pid, i) => (
+            <span key={pid} style={{
+              fontSize:'.83rem',
+              fontWeight: pid === miParticipanteId ? 700 : 400,
+              color: pid === miParticipanteId ? 'var(--verde)' : 'var(--texto)',
+            }}>
+              {idNombre[pid] || '?'}{i < inscritos.length - 1 ? ', ' : ''}
+            </span>
+          ))}
         </div>
       )}
 
@@ -3592,7 +3557,7 @@ function AdminCompeticiones({ federacion, participantes }) {
     const nuevo = !comp.inscripciones_habilitadas;
     await sb.from('competiciones').update({ inscripciones_habilitadas: nuevo }).eq('id', comp.id);
     await cargarComps();
-    ok(nuevo ? 'Inscripciones abiertas' : 'Inscripciones cerradas');
+    ok(nuevo ? 'Gestión de equipos: abierta' : 'Gestión de equipos: cerrada');
   };
 
   const addInscrito = async () => {
@@ -3705,7 +3670,7 @@ function AdminCompeticiones({ federacion, participantes }) {
                         color: c.inscripciones_habilitadas ? '#065f46' : 'var(--texto2)',
                         padding:'.28rem .7rem', borderRadius:8, cursor:'pointer', fontSize:'.78rem', fontWeight:600,
                       }}>
-                {c.inscripciones_habilitadas ? 'Inscripciones: ABIERTAS' : 'Inscripciones: CERRADAS'}
+                {c.inscripciones_habilitadas ? 'Equipos: abierto' : 'Equipos: cerrado'}
               </button>
               <button style={delStyle} onClick={() => borrarComp(c.id)}>Eliminar</button>
             </div>

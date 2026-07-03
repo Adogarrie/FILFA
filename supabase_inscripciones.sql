@@ -24,27 +24,7 @@ drop policy if exists "Ver inscripciones" on competicion_inscripciones;
 create policy "Ver inscripciones"
   on competicion_inscripciones for select using (true);
 
--- Equipo puede inscribirse a sí mismo cuando inscripciones_habilitadas = true
-drop policy if exists "Equipo se inscribe" on competicion_inscripciones;
-create policy "Equipo se inscribe"
-  on competicion_inscripciones for insert
-  with check (
-    participante_id in (select id from participantes where user_id = auth.uid())
-    and competicion_id in (select id from competiciones where inscripciones_habilitadas = true)
-  );
-
--- Equipo puede cancelar su propia inscripción
-drop policy if exists "Equipo cancela inscripcion" on competicion_inscripciones;
-create policy "Equipo cancela inscripcion"
-  on competicion_inscripciones for delete
-  using (
-    participante_id in (select id from participantes where user_id = auth.uid())
-    or competicion_id in (select c.id from competiciones c
-      join federaciones f on f.id = c.federacion_id
-      where f.admin_user_id = auth.uid())
-  );
-
--- Admin puede gestionar inscripciones de su federación
+-- Solo el admin gestiona inscripciones
 drop policy if exists "Admin gestiona inscripciones" on competicion_inscripciones;
 create policy "Admin gestiona inscripciones"
   on competicion_inscripciones for all

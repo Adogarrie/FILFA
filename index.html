@@ -2869,6 +2869,200 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
   );
 }
 
+// ── ADMIN — LIGA (divisiones + equipos) ───────────────────────
+function AdminLiga({ participantes, federacion, onParticipantesChange }) {
+  const [divisiones, setDivisiones]   = useState([]);
+  const [nuevaDiv, setNuevaDiv]       = useState('');
+  const [msgDiv, setMsgDiv]           = useState('');
+  const [guardandoId, setGuardandoId] = useState(null);
+  const [nuevoEq, setNuevoEq]         = useState({ nombre:'', division_id:'', estadio:'', entrenador:'' });
+  const [msgEq, setMsgEq]             = useState('');
+  const [eliminando, setEliminando]   = useState(null);
+
+  const cargarDivisiones = () => {
+    if (!sb) return;
+    sb.from('divisiones').select('*').order('nombre')
+      .then(({ data }) => setDivisiones(data || []));
+  };
+  useEffect(cargarDivisiones, []);
+
+  const crearDivision = async () => {
+    if (!nuevaDiv.trim()) return;
+    const { data, error } = await sb.from('divisiones')
+      .insert({ nombre: nuevaDiv.trim() }).select().single();
+    if (error) { setMsgDiv('Error: ' + error.message); return; }
+    setDivisiones(prev => [...prev, data].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+    setNuevaDiv('');
+    setMsgDiv('División creada');
+    setTimeout(() => setMsgDiv(''), 2500);
+  };
+
+  const eliminarDivision = async (id) => {
+    if (participantes.some(p => p.division_id === id)) {
+      alert('No se puede eliminar: hay equipos en esta división. Muévelos primero.'); return;
+    }
+    if (!confirm('¿Eliminar esta división?')) return;
+    await sb.from('divisiones').delete().eq('id', id);
+    setDivisiones(prev => prev.filter(d => d.id !== id));
+  };
+
+  const moverEquipo = async (participanteId, nuevaDivId) => {
+    setGuardandoId(participanteId);
+    const { error } = await sb.from('participantes')
+      .update({ division_id: Number(nuevaDivId) }).eq('id', participanteId);
+    setGuardandoId(null);
+    if (error) alert('Error: ' + error.message);
+    else onParticipantesChange();
+  };
+
+  const crearEquipo = async () => {
+    if (!nuevoEq.nombre.trim() || !nuevoEq.division_id) {
+      setMsgEq('Nombre y división son obligatorios'); return;
+    }
+    const { error } = await sb.from('participantes').insert({
+      nombre:       nuevoEq.nombre.trim(),
+      division_id:  Number(nuevoEq.division_id),
+      federacion_id: federacion.id,
+      presupuesto:  federacion.presupuesto_inicial ?? 100000000,
+      estadio:      nuevoEq.estadio.trim()    || null,
+      entrenador:   nuevoEq.entrenador.trim() || null,
+    });
+    if (error) { setMsgEq('Error: ' + error.message); return; }
+    setNuevoEq({ nombre:'', division_id:'', estadio:'', entrenador:'' });
+    setMsgEq('Equipo creado');
+    setTimeout(() => setMsgEq(''), 2500);
+    onParticipantesChange();
+  };
+
+  const eliminarEquipo = async (p) => {
+    if (!confirm(`¿Eliminar el equipo "${p.nombre}"? Esta acción no se puede deshacer.`)) return;
+    setEliminando(p.id);
+    const { error } = await sb.from('participantes').delete().eq('id', p.id);
+    setEliminando(null);
+    if (error) alert('Error: ' + error.message);
+    else onParticipantesChange();
+  };
+
+  return (
+    <div>
+      {/* ── Divisiones ── */}
+      <div className="card">
+        <h2>Divisiones</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th style={{textAlign:'center'}}>Equipos</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {divisiones.map(d => {
+              const n = participantes.filter(p => p.division_id === d.id).length;
+              return (
+                <tr key={d.id}>
+                  <td style={{fontWeight:600}}>{d.nombre}</td>
+                  <td style={{textAlign:'center', color:'var(--texto2)'}}>{n}</td>
+                  <td style={{textAlign:'right'}}>
+                    <button onClick={() => eliminarDivision(d.id)}
+                            style={{background:'none', border:'none', color:'#dc3545',
+                                    cursor:'pointer', fontSize:'.82rem'}}>
+                      Eliminar
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div style={{display:'flex', gap:'.75rem', marginTop:'1rem', alignItems:'center', flexWrap:'wrap'}}>
+          <input value={nuevaDiv} onChange={e => setNuevaDiv(e.target.value)}
+                 placeholder="Nueva división (ej: Tercera)"
+                 style={{flex:1, minWidth:180, padding:'.45rem .75rem',
+                         borderRadius:8, border:'1.5px solid var(--borde)', fontSize:'.95rem'}}
+                 onKeyDown={e => e.key === 'Enter' && crearDivision()} />
+          <button className="btn-ok" onClick={crearDivision}>Añadir</button>
+          {msgDiv && <span style={{color:'var(--verde)', fontSize:'.88rem', fontWeight:600}}>{msgDiv}</span>}
+        </div>
+      </div>
+
+      {/* ── Mover equipos ── */}
+      <div className="card">
+        <h2>Equipos y divisiones</h2>
+        {participantes.length === 0
+          ? <div className="empty">No hay equipos en esta federación.</div>
+          : <table>
+              <thead>
+                <tr>
+                  <th>Equipo</th>
+                  <th>División</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {participantes.map(p => (
+                  <tr key={p.id}>
+                    <td style={{fontWeight:600}}>{p.nombre}</td>
+                    <td>
+                      <select value={p.division_id || ''}
+                              onChange={e => moverEquipo(p.id, e.target.value)}
+                              style={{padding:'.3rem .6rem', borderRadius:6,
+                                      border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
+                        {divisiones.map(d => (
+                          <option key={d.id} value={d.id}>{d.nombre}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{textAlign:'right'}}>
+                      {guardandoId === p.id
+                        ? <span style={{fontSize:'.8rem', color:'var(--verde)'}}>Guardando…</span>
+                        : <button onClick={() => eliminarEquipo(p)}
+                                  disabled={eliminando === p.id}
+                                  style={{background:'none', border:'none', color:'#dc3545',
+                                          cursor:'pointer', fontSize:'.82rem'}}>
+                            Eliminar
+                          </button>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+        }
+      </div>
+
+      {/* ── Crear equipo ── */}
+      <div className="card">
+        <h2>Añadir equipo</h2>
+        <p style={{fontSize:'.9rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+          Crea un equipo sin usuario asociado (para completar la liga, añadir bots, etc.).
+        </p>
+        {msgEq && (
+          <div style={{color: msgEq.includes('Error') ? '#dc3545' : 'var(--verde)',
+                       fontWeight:600, marginBottom:'.75rem', fontSize:'.9rem'}}>
+            {msgEq}
+          </div>
+        )}
+        <div className="filtros" style={{flexWrap:'wrap'}}>
+          <input placeholder="Nombre del equipo *" value={nuevoEq.nombre}
+                 onChange={e => setNuevoEq(p => ({...p, nombre: e.target.value}))}
+                 style={{minWidth:160}} />
+          <select value={nuevoEq.division_id}
+                  onChange={e => setNuevoEq(p => ({...p, division_id: e.target.value}))}>
+            <option value="">División *</option>
+            {divisiones.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+          </select>
+          <input placeholder="Estadio" value={nuevoEq.estadio}
+                 onChange={e => setNuevoEq(p => ({...p, estadio: e.target.value}))} />
+          <input placeholder="Entrenador" value={nuevoEq.entrenador}
+                 onChange={e => setNuevoEq(p => ({...p, entrenador: e.target.value}))} />
+          <button className="btn-ok" onClick={crearEquipo}>Crear equipo</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── ADMIN — MI FEDERACIÓN ──────────────────────────────────────
 function AdminFederacion({ federacion, onFederacionUpdate }) {
   const [nombre, setNombre]     = useState(federacion?.nombre || '');
@@ -2956,7 +3150,7 @@ function AdminFederacion({ federacion, onFederacionUpdate }) {
 }
 
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
-function AdminPanel({ participantes, federacion, onFederacionUpdate }) {
+function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange }) {
   const [subtab, setSubtab] = useState('federacion');
 
   return (
@@ -2964,6 +3158,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate }) {
       <div className="tabs">
         {[
           ['federacion',   'Mi Federación'],
+          ['liga',         'Liga'],
           ['puntos',       'Clasificación'],
           ['presupuestos', 'Presupuestos'],
           ['calendario',   'Calendario'],
@@ -2978,6 +3173,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate }) {
         ))}
       </div>
       {subtab === 'federacion'   && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
+      {subtab === 'liga'         && <AdminLiga participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} />}
       {subtab === 'puntos'       && <Puntos participantes={participantes} />}
       {subtab === 'presupuestos' && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'calendario'   && <AdminCalendario participantes={participantes} federacionId={federacion?.id} />}
@@ -3030,24 +3226,24 @@ function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
+  const recargarParticipantes = async () => {
     if (!sb || !federacion?.id) { setParticipantes([]); return; }
-    sb.from('participantes')
+    const { data } = await sb.from('participantes')
       .select('id, nombre, division_id, escudo_url, estadio, entrenador')
       .eq('federacion_id', federacion.id)
-      .order('nombre')
-      .then(({ data }) => {
-        const lista = data || [];
-        setParticipantes(lista);
-        if (lista.length > 0) {
-          const pid = session?.participante_id;
-          setParticipanteId(prev =>
-            (prev && lista.find(p => p.id === prev)) ? prev :
-            (pid  && lista.find(p => p.id === pid))  ? pid  : lista[0].id
-          );
-        }
-      });
-  }, [federacion, session]);
+      .order('nombre');
+    const lista = data || [];
+    setParticipantes(lista);
+    if (lista.length > 0) {
+      const pid = session?.participante_id;
+      setParticipanteId(prev =>
+        (prev && lista.find(p => p.id === prev)) ? prev :
+        (pid  && lista.find(p => p.id === pid))  ? pid  : lista[0].id
+      );
+    }
+  };
+
+  useEffect(() => { recargarParticipantes(); }, [federacion, session]);
 
   const handleLogin  = (user) => cargarPerfil(user);
   const handleLogout = async () => {
@@ -3136,7 +3332,8 @@ function App() {
         {vista === 'Admin' && isAdmin && (
           <AdminPanel participantes={participantes}
                       federacion={federacion}
-                      onFederacionUpdate={setFederacion} />
+                      onFederacionUpdate={setFederacion}
+                      onParticipantesChange={recargarParticipantes} />
         )}
       </main>
     </>

@@ -684,7 +684,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem', marginBottom:'1rem'}}>
           <h2 style={{margin:0}}>Mercado de jugadores</h2>
-          {sorteoHabilitado && participanteId && (
+          {sorteoHabilitado && participanteId && federacion?.ventas_habilitadas && (
             <button className="btn-fichar" disabled={huecosRestantes <= 0}
                     title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 15 jugadores' : ''}
                     onClick={() => setModalSorteo(true)}>
@@ -692,6 +692,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
             </button>
           )}
         </div>
+        {!isAdmin && !federacion?.ventas_habilitadas && (
+          <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
+                       borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
+                       border:'1px solid #ffc107'}}>
+            El mercado está cerrado. El administrador debe activarlo en Admin → Mercado.
+          </div>
+        )}
         <div className="filtros">
           <input placeholder="Buscar jugador o equipo..."
                  value={busqueda} onChange={e => setBusqueda(e.target.value)} />
@@ -734,6 +741,22 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                   <td style={{whiteSpace:'nowrap'}}>
                     {isAdmin ? (
                       <button className="btn-fichar" onClick={() => setModal(j)}>Fichar</button>
+                    ) : !federacion?.ventas_habilitadas ? (
+                      miPuja ? (
+                        <span style={{display:'flex', gap:4, alignItems:'center'}}>
+                          <span style={{fontSize:'.8rem', color:'#198754', fontWeight:600}}>
+                            {fmt(miPuja.cantidad)}
+                          </span>
+                          <button onClick={() => cancelarPuja(j.id)}
+                                  style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
+                                          border:'1.5px solid #dc3545', background:'#fff',
+                                          color:'#dc3545', cursor:'pointer'}}>
+                            ✕
+                          </button>
+                        </span>
+                      ) : (
+                        <span style={{fontSize:'.8rem', color:'var(--texto2)'}}>🔒</span>
+                      )
                     ) : miPuja ? (
                       <span style={{display:'flex', gap:4, alignItems:'center'}}>
                         <span style={{fontSize:'.8rem', color:'#198754', fontWeight:600}}>

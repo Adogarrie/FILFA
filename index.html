@@ -953,7 +953,7 @@ function Puntos({ participantes }) {
     // 1. Guardar puntos por jugador
     const rows = Object.entries(ptsJug)
       .filter(([, v]) => v !== '' && v !== undefined)
-      .map(([jid, v]) => ({ jugador_id: Number(jid), jornada, pts: Number(v) || 0 }));
+      .map(([jid, v]) => ({ jugador_id: jid, jornada, pts: Number(v) || 0 }));
     if (rows.length > 0) {
       const { error } = await sb.from('puntos_jugador')
         .upsert(rows, { onConflict: 'jugador_id,jornada' });

@@ -6,7 +6,7 @@
 -- ─── 1. Puntos individuales por jugador y jornada ────────────────
 create table if not exists puntos_jugador (
   id         serial primary key,
-  jugador_id int  not null references jugadores(id) on delete cascade,
+  jugador_id uuid not null references jugadores(id) on delete cascade,
   jornada    int  not null check (jornada between 1 and 38),
   pts        numeric(7,2) not null default 0,
   unique(jugador_id, jornada)

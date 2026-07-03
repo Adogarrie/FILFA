@@ -1731,8 +1731,47 @@ function PartidosList({ partidos, idNombre, titulo }) {
   );
 }
 
+function CalendarioJornadas({ partidos, idNombre }) {
+  const jornadas = useMemo(() => [...new Set(partidos.map(f => f.jornada))].sort((a,b) => a-b), [partidos]);
+  const [jActiva, setJActiva] = useState(null);
+
+  useEffect(() => {
+    if (jornadas.length === 0) return;
+    // Abrir la primera jornada con partidos pendientes, o la última
+    const primPend = jornadas.find(j => partidos.filter(p => p.jornada === j).some(p => !p.jugado));
+    setJActiva(prev => prev && jornadas.includes(prev) ? prev : (primPend ?? jornadas[jornadas.length - 1]));
+  }, [jornadas]);
+
+  if (jornadas.length === 0) return (
+    <div className="card"><div className="empty">Sin partidos en esta fase.</div></div>
+  );
+
+  return (
+    <div>
+      {/* Selector de jornada */}
+      <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', marginBottom:'.5rem'}}>
+        {jornadas.map(j => (
+          <button key={j} onClick={() => setJActiva(j)}
+                  className={`tab ${jActiva === j ? 'active' : ''}`}
+                  style={{padding:'.3rem .7rem', fontSize:'.82rem'}}>
+            J{j}
+          </button>
+        ))}
+      </div>
+      {jActiva && (
+        <PartidosList
+          partidos={partidos.filter(f => f.jornada === jActiva)}
+          idNombre={idNombre}
+          titulo={`Jornada ${jActiva}`}
+        />
+      )}
+    </div>
+  );
+}
+
 function FaseVista({ fase, faseData, idNombre, compNombre }) {
   const [grupoActivo, setGrupoActivo] = useState('');
+  const [subvista, setSubvista]       = useState('clasificacion');
   const { grupos, partidos, clasMap } = faseData;
 
   const letrasGrupos = useMemo(
@@ -1743,6 +1782,8 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
   useEffect(() => {
     if (letrasGrupos.length > 0 && !grupoActivo) setGrupoActivo(letrasGrupos[0]);
   }, [letrasGrupos]);
+
+  useEffect(() => { setSubvista('clasificacion'); }, [fase.id]);
 
   const calcularResultados = (matchList) => matchList.map(f => {
     const ptsLRec = (clasMap[f.local_id] || {})[f.jornada];
@@ -1763,23 +1804,38 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
       tabla[f.local_id].pj++;     tabla[f.visitante_id].pj++;
       tabla[f.local_id].gf    += f.gL; tabla[f.local_id].gc    += f.gV;
       tabla[f.visitante_id].gf += f.gV; tabla[f.visitante_id].gc += f.gL;
-      if      (f.gL > f.gV) { tabla[f.local_id].pg++;      tabla[f.local_id].pts     += 3; tabla[f.visitante_id].pp++; }
-      else if (f.gL < f.gV) { tabla[f.visitante_id].pg++; tabla[f.visitante_id].pts  += 3; tabla[f.local_id].pp++; }
-      else                  { tabla[f.local_id].pe++;       tabla[f.local_id].pts++;         tabla[f.visitante_id].pe++; tabla[f.visitante_id].pts++; }
+      if      (f.gL > f.gV) { tabla[f.local_id].pg++;     tabla[f.local_id].pts     += 3; tabla[f.visitante_id].pp++; }
+      else if (f.gL < f.gV) { tabla[f.visitante_id].pg++; tabla[f.visitante_id].pts += 3; tabla[f.local_id].pp++; }
+      else                  { tabla[f.local_id].pe++;      tabla[f.local_id].pts++;        tabla[f.visitante_id].pe++; tabla[f.visitante_id].pts++; }
     });
     return Object.values(tabla).sort((a,b) => b.pts-a.pts || (b.gf-b.gc)-(a.gf-a.gc) || b.gf-a.gf);
   };
+
+  const SubtabsLigaGrupos = () => (
+    <div className="tabs" style={{marginBottom:'.25rem'}}>
+      {[['clasificacion','Clasificación'],['calendario','Calendario']].map(([k,l]) => (
+        <button key={k} className={`tab ${subvista===k?'active':''}`} onClick={() => setSubvista(k)}>{l}</button>
+      ))}
+    </div>
+  );
 
   if (fase.tipo === 'liga') {
     const res  = calcularResultados(partidos);
     const pids = [...new Set(partidos.flatMap(f => [f.local_id, f.visitante_id]))];
     return (
       <div>
-        <div className="card">
-          <h2>{compNombre} — {fase.nombre}</h2>
-          <TablaClasificacionComp filas={calcularTabla(res, pids)} />
-        </div>
-        <PartidosList partidos={res} idNombre={idNombre} titulo={`Partidos — ${fase.nombre}`} />
+        <SubtabsLigaGrupos />
+        {subvista === 'clasificacion' && (
+          <div className="card">
+            <h2>{compNombre} — {fase.nombre}</h2>
+            {pids.length === 0
+              ? <div className="empty">Sin partidos generados aún.</div>
+              : <TablaClasificacionComp filas={calcularTabla(res, pids)} />}
+          </div>
+        )}
+        {subvista === 'calendario' && (
+          <CalendarioJornadas partidos={res} idNombre={idNombre} />
+        )}
       </div>
     );
   }
@@ -1787,32 +1843,30 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
   if (fase.tipo === 'grupos') {
     const res = calcularResultados(partidos);
     const ga  = grupoActivo || letrasGrupos[0] || '';
+    const grupoPartidos = res.filter(f => f.grupo === ga);
+    const grupoPids     = grupos.filter(g => g.grupo === ga).map(g => g.participante_id);
     return (
       <div>
         {letrasGrupos.length > 1 && (
           <div className="tabs">
             {letrasGrupos.map(l => (
-              <button key={l} className={`tab ${ga === l ? 'active' : ''}`}
+              <button key={l} className={`tab ${ga===l?'active':''}`}
                       onClick={() => setGrupoActivo(l)}>Grupo {l}</button>
             ))}
           </div>
         )}
         {ga && (
           <>
-            <div className="card">
-              <h2>{compNombre} — {fase.nombre} — Grupo {ga}</h2>
-              <TablaClasificacionComp
-                filas={calcularTabla(
-                  res.filter(f => f.grupo === ga),
-                  grupos.filter(g => g.grupo === ga).map(g => g.participante_id)
-                )}
-              />
-            </div>
-            <PartidosList
-              partidos={res.filter(f => f.grupo === ga)}
-              idNombre={idNombre}
-              titulo={`Partidos — Grupo ${ga}`}
-            />
+            <SubtabsLigaGrupos />
+            {subvista === 'clasificacion' && (
+              <div className="card">
+                <h2>{compNombre} — {fase.nombre} — Grupo {ga}</h2>
+                <TablaClasificacionComp filas={calcularTabla(grupoPartidos, grupoPids)} />
+              </div>
+            )}
+            {subvista === 'calendario' && (
+              <CalendarioJornadas partidos={grupoPartidos} idNombre={idNombre} />
+            )}
           </>
         )}
       </div>
@@ -1825,13 +1879,11 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
     return (
       <div>
         {rondas.map(ronda => (
-          <div key={ronda}>
-            <PartidosList
-              partidos={res.filter(f => f.ronda === ronda)}
-              idNombre={idNombre}
-              titulo={`${compNombre} — ${fase.nombre} — ${ronda}`}
-            />
-          </div>
+          <PartidosList key={ronda}
+            partidos={res.filter(f => f.ronda === ronda)}
+            idNombre={idNombre}
+            titulo={`${compNombre} — ${fase.nombre} — ${ronda}`}
+          />
         ))}
         {rondas.length === 0 && (
           <div className="card"><div className="empty">Sin partidos configurados aún.</div></div>
@@ -3712,14 +3764,22 @@ function AdminCompeticiones({ federacion, participantes }) {
     ok(`Grupos generados: ${grupoRows.length} equipos, ${partidoRows.length} partidos`);
   };
 
-  const añadirEliminatoria = async () => {
-    if (!eLocal || !eVisit || !nRonda) { ok('Rellena todos los campos'); return; }
+  const añadirPartido = async (grupo = null, ronda = null) => {
+    if (!eLocal || !eVisit) { ok('Selecciona local y visitante'); return; }
+    if (ronda !== null && !nRonda) { ok('Escribe el nombre de la ronda'); return; }
     await sb.from('fase_partidos').insert({
-      fase_id: faseId, jornada: Number(jPartido), ronda: nRonda,
+      fase_id: faseId, jornada: Number(jPartido),
       local_id: eLocal, visitante_id: eVisit, es_neutral: esNeutral,
+      ...(grupo ? { grupo } : {}),
+      ...(ronda !== null ? { ronda: nRonda } : {}),
     });
     await cargarFaseDatos(faseId);
     ok('Partido añadido');
+  };
+
+  const eliminarPartido = async (id) => {
+    await sb.from('fase_partidos').delete().eq('id', id);
+    await cargarFaseDatos(faseId);
   };
 
   const faseActual = fases.find(f => f.id === faseId);
@@ -3869,6 +3929,45 @@ function AdminCompeticiones({ federacion, participantes }) {
                   {partidos.length} partidos (J{Math.min(...partidos.map(p=>p.jornada))}–J{Math.max(...partidos.map(p=>p.jornada))})
                 </p>
               )}
+
+              <div style={{marginTop:'1rem', borderTop:'1px solid var(--borde)', paddingTop:'1rem'}}>
+                <p style={{fontSize:'.83rem', color:'var(--texto2)', marginBottom:'.5rem', fontWeight:600}}>Añadir partido individual:</p>
+                <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.75rem'}}>
+                  <select value={eLocal} onChange={e => setELocal(e.target.value)} style={inputStyle}>
+                    <option value="">Local…</option>
+                    {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <span style={{fontWeight:700, fontSize:'.85rem'}}>vs</span>
+                  <select value={eVisit} onChange={e => setEVisit(e.target.value)} style={inputStyle}>
+                    <option value="">Visitante…</option>
+                    {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <label style={{fontSize:'.83rem', display:'flex', alignItems:'center', gap:'.3rem'}}>
+                    J:<input type="number" value={jPartido} onChange={e => setJPartido(e.target.value)}
+                             style={{...inputStyle, width:60}} min={1} />
+                  </label>
+                  <label style={{fontSize:'.83rem', display:'flex', alignItems:'center', gap:'.3rem', cursor:'pointer'}}>
+                    <input type="checkbox" checked={esNeutral} onChange={e => setEsNeutral(e.target.checked)} /> Neutral
+                  </label>
+                  <button style={btnStyle} onClick={() => añadirPartido()}>Añadir</button>
+                </div>
+                {partidos.length > 0 && (
+                  <table>
+                    <thead><tr><th>J</th><th>Local</th><th></th><th>Visitante</th><th></th></tr></thead>
+                    <tbody>
+                      {[...partidos].sort((a,b)=>a.jornada-b.jornada).map(pt => (
+                        <tr key={pt.id}>
+                          <td style={{color:'var(--texto2)', fontSize:'.83rem'}}>J{pt.jornada}</td>
+                          <td>{idNombre[pt.local_id] || '?'}</td>
+                          <td style={{textAlign:'center', color:'var(--texto2)', fontSize:'.8rem'}}>vs</td>
+                          <td>{idNombre[pt.visitante_id] || '?'}</td>
+                          <td><button style={{...delStyle, padding:'.15rem .5rem'}} onClick={() => eliminarPartido(pt.id)}>×</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           )}
 
@@ -3927,6 +4026,48 @@ function AdminCompeticiones({ federacion, participantes }) {
                   {gruposDatos.length} equipos asignados, {partidos.length} partidos generados
                 </p>
               )}
+
+              <div style={{marginTop:'1rem', borderTop:'1px solid var(--borde)', paddingTop:'1rem'}}>
+                <p style={{fontSize:'.83rem', color:'var(--texto2)', marginBottom:'.5rem', fontWeight:600}}>Añadir partido individual:</p>
+                <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.75rem'}}>
+                  <select value={eLocal} onChange={e => setELocal(e.target.value)} style={inputStyle}>
+                    <option value="">Local…</option>
+                    {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <span style={{fontWeight:700, fontSize:'.85rem'}}>vs</span>
+                  <select value={eVisit} onChange={e => setEVisit(e.target.value)} style={inputStyle}>
+                    <option value="">Visitante…</option>
+                    {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <label style={{fontSize:'.83rem', display:'flex', alignItems:'center', gap:'.3rem'}}>
+                    J:<input type="number" value={jPartido} onChange={e => setJPartido(e.target.value)}
+                             style={{...inputStyle, width:60}} min={1} />
+                  </label>
+                  <select value={asignG[eLocal] || ''} onChange={e => {}} style={inputStyle}
+                          title="Grupo (auto del equipo local)">
+                    <option value="">Grupo…</option>
+                    {'ABCDEFGH'.slice(0, numGrupos).split('').map(l => <option key={l} value={l}>Grupo {l}</option>)}
+                  </select>
+                  <button style={btnStyle} onClick={() => añadirPartido(asignG[eLocal] || 'A')}>Añadir</button>
+                </div>
+                {partidos.length > 0 && (
+                  <table>
+                    <thead><tr><th>J</th><th>Grp</th><th>Local</th><th></th><th>Visitante</th><th></th></tr></thead>
+                    <tbody>
+                      {[...partidos].sort((a,b) => (a.grupo||'').localeCompare(b.grupo||'') || a.jornada-b.jornada).map(pt => (
+                        <tr key={pt.id}>
+                          <td style={{color:'var(--texto2)', fontSize:'.83rem'}}>J{pt.jornada}</td>
+                          <td style={{fontWeight:600, color:'var(--verde)'}}>{pt.grupo}</td>
+                          <td>{idNombre[pt.local_id] || '?'}</td>
+                          <td style={{textAlign:'center', color:'var(--texto2)', fontSize:'.8rem'}}>vs</td>
+                          <td>{idNombre[pt.visitante_id] || '?'}</td>
+                          <td><button style={{...delStyle, padding:'.15rem .5rem'}} onClick={() => eliminarPartido(pt.id)}>×</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           )}
 
@@ -3958,7 +4099,7 @@ function AdminCompeticiones({ federacion, participantes }) {
                   <input type="checkbox" checked={esNeutral} onChange={e => setEsNeutral(e.target.checked)} />
                   Neutral
                 </label>
-                <button style={btnStyle} onClick={añadirEliminatoria}>Añadir</button>
+                <button style={btnStyle} onClick={() => añadirPartido(null, true)}>Añadir</button>
               </div>
               {partidos.length > 0 && (
                 <table>
@@ -3972,10 +4113,7 @@ function AdminCompeticiones({ federacion, participantes }) {
                         <td>{idNombre[pt.visitante_id] || '?'}</td>
                         <td style={{textAlign:'center', color:'var(--texto2)'}}>J{pt.jornada}</td>
                         <td>
-                          <button style={{...delStyle, padding:'.15rem .5rem'}} onClick={async () => {
-                            await sb.from('fase_partidos').delete().eq('id', pt.id);
-                            await cargarFaseDatos(faseId);
-                          }}>×</button>
+                          <button style={{...delStyle, padding:'.15rem .5rem'}} onClick={() => eliminarPartido(pt.id)}>×</button>
                         </td>
                       </tr>
                     ))}

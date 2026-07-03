@@ -3403,12 +3403,15 @@ function AdminLiga({ participantes, federacion, onParticipantesChange }) {
 }
 
 // ── ADMIN — MI FEDERACIÓN ──────────────────────────────────────
-function AdminFederacion({ federacion, onFederacionUpdate }) {
-  const [nombre, setNombre]     = useState(federacion?.nombre || '');
-  const [presup, setPresup]     = useState(String(federacion?.presupuesto_inicial ?? 100000000));
-  const [jornada, setJornada]   = useState(String(federacion?.jornada_actual ?? 1));
-  const [msg, setMsg]           = useState('');
-  const [copiado, setCopiado]   = useState(false);
+function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], onParticipantesChange }) {
+  const [nombre, setNombre]       = useState(federacion?.nombre || '');
+  const [presup, setPresup]       = useState(String(federacion?.presupuesto_inicial ?? 100000000));
+  const [jornada, setJornada]     = useState(String(federacion?.jornada_actual ?? 1));
+  const [msg, setMsg]             = useState('');
+  const [copiado, setCopiado]     = useState(false);
+  const [nuevoEq, setNuevoEq]     = useState({ nombre:'', estadio:'', entrenador:'' });
+  const [msgEq, setMsgEq]         = useState('');
+  const [eliminando, setEliminando] = useState(null);
 
   const copiar = () => {
     navigator.clipboard.writeText(federacion?.codigo || '').then(() => {
@@ -3483,6 +3486,80 @@ function AdminFederacion({ federacion, onFederacionUpdate }) {
         </div>
         <button className="btn-ok" onClick={guardar}>Guardar</button>
         {msg && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msg}</span>}
+      </div>
+    </div>
+
+    {/* ── Equipos de la federación ── */}
+    <div className="card">
+      <h2>Equipos de la federación</h2>
+      {participantes.length > 0 && (
+        <table style={{marginBottom:'1rem'}}>
+          <thead>
+            <tr><th>Equipo</th><th>Usuario</th><th></th></tr>
+          </thead>
+          <tbody>
+            {participantes.map(p => (
+              <tr key={p.id}>
+                <td style={{fontWeight:600}}>{p.nombre}</td>
+                <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
+                  {p.user_id ? 'Registrado' : 'Sin usuario'}
+                </td>
+                <td style={{textAlign:'right'}}>
+                  <button disabled={eliminando === p.id}
+                          onClick={async () => {
+                            if (!confirm(`¿Eliminar "${p.nombre}"?`)) return;
+                            setEliminando(p.id);
+                            await sb.from('participantes').delete().eq('id', p.id);
+                            setEliminando(null);
+                            onParticipantesChange?.();
+                          }}
+                          style={{background:'none', border:'none', color:'#dc3545',
+                                  cursor:'pointer', fontSize:'.82rem'}}>
+                    Eliminar
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+        Añade un equipo sin usuario (para completar la liga, bots, etc.).
+      </p>
+      {msgEq && (
+        <div style={{color: msgEq.includes('Error') ? '#dc3545' : 'var(--verde)',
+                     fontWeight:600, marginBottom:'.75rem', fontSize:'.88rem'}}>
+          {msgEq}
+        </div>
+      )}
+      <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap'}}>
+        <input placeholder="Nombre del equipo *" value={nuevoEq.nombre}
+               onChange={e => setNuevoEq(p => ({...p, nombre: e.target.value}))}
+               style={{flex:1, minWidth:150, padding:'.4rem .7rem',
+                       border:'1.5px solid var(--borde)', borderRadius:8}} />
+        <input placeholder="Estadio" value={nuevoEq.estadio}
+               onChange={e => setNuevoEq(p => ({...p, estadio: e.target.value}))}
+               style={{flex:1, minWidth:120, padding:'.4rem .7rem',
+                       border:'1.5px solid var(--borde)', borderRadius:8}} />
+        <input placeholder="Entrenador" value={nuevoEq.entrenador}
+               onChange={e => setNuevoEq(p => ({...p, entrenador: e.target.value}))}
+               style={{flex:1, minWidth:120, padding:'.4rem .7rem',
+                       border:'1.5px solid var(--borde)', borderRadius:8}} />
+        <button className="btn-ok" onClick={async () => {
+          if (!nuevoEq.nombre.trim()) { setMsgEq('El nombre es obligatorio'); return; }
+          const { error } = await sb.from('participantes').insert({
+            nombre:        nuevoEq.nombre.trim(),
+            federacion_id: federacion.id,
+            presupuesto:   federacion.presupuesto_inicial ?? 100000000,
+            estadio:       nuevoEq.estadio.trim()    || null,
+            entrenador:    nuevoEq.entrenador.trim() || null,
+          });
+          if (error) { setMsgEq('Error: ' + error.message); return; }
+          setNuevoEq({ nombre:'', estadio:'', entrenador:'' });
+          setMsgEq('Equipo creado');
+          setTimeout(() => setMsgEq(''), 2500);
+          onParticipantesChange?.();
+        }}>Crear equipo</button>
       </div>
     </div>
   );
@@ -3913,40 +3990,28 @@ function AdminCompeticiones({ federacion, participantes }) {
 
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange }) {
-  const [subtab, setSubtab]           = useState('federacion');
-  const [hayCompeticiones, setHayComp] = useState(false);
-
-  useEffect(() => {
-    if (!sb || !federacion?.id) return;
-    sb.from('competiciones').select('id', { count: 'exact', head: true })
-      .eq('federacion_id', federacion.id)
-      .then(({ count }) => setHayComp((count || 0) > 0));
-  }, [federacion]);
-
-  const tabs = [
-    ['federacion',   'Mi Federación'],
-    ...(hayCompeticiones ? [['liga', 'Liga']] : []),
-    ['puntos',       'Clasificación'],
-    ['presupuestos', 'Presupuestos'],
-    ['calendario',   'Calendario'],
-    ['pujas',        'Pujas'],
-    ['cierres',      'Cierres'],
-    ['mercado',      'Mercado'],
-    ['competiciones','Competiciones'],
-  ];
+  const [subtab, setSubtab] = useState('federacion');
 
   return (
     <div>
       <div className="tabs">
-        {tabs.map(([k, l]) => (
+        {[
+          ['federacion',   'Mi Federación'],
+          ['puntos',       'Clasificación'],
+          ['presupuestos', 'Presupuestos'],
+          ['calendario',   'Calendario'],
+          ['pujas',        'Pujas'],
+          ['cierres',      'Cierres'],
+          ['mercado',      'Mercado'],
+          ['competiciones','Competiciones'],
+        ].map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
                   onClick={() => setSubtab(k)}>
             {l}
           </button>
         ))}
       </div>
-      {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
-      {subtab === 'liga'          && <AdminLiga participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} />}
+      {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
       {subtab === 'puntos'        && <Puntos participantes={participantes} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'calendario'    && <AdminCalendario participantes={participantes} federacionId={federacion?.id} />}
@@ -4003,7 +4068,7 @@ function App() {
   const recargarParticipantes = async () => {
     if (!sb || !federacion?.id) { setParticipantes([]); return; }
     const { data } = await sb.from('participantes')
-      .select('id, nombre, division_id, escudo_url, estadio, entrenador')
+      .select('id, nombre, division_id, escudo_url, estadio, entrenador, user_id')
       .eq('federacion_id', federacion.id)
       .order('nombre');
     const lista = data || [];

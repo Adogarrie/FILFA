@@ -907,127 +907,170 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
 // ── PUNTOS ─────────────────────────────────────────────────────
 function Puntos({ participantes }) {
-  const [jornada, setJornada]   = useState(1);
-  const [puntos, setPuntos]     = useState({});   // { participante_id: valor_string }
+  const [jornada, setJornada]     = useState(1);
+  const [jugadores, setJugadores] = useState([]);   // todos los jugadores reales
+  const [ptsJug, setPtsJug]       = useState({});   // { jugador_id: pts_string }
+  const [aliMapa, setAliMapa]     = useState({});   // { participante_id: Set(jugador_id titulares) }
   const [guardando, setGuardando] = useState(false);
-  const [guardado, setGuardado]   = useState(false);
+  const [msg, setMsg]             = useState('');
 
-  // Cargar puntos existentes cuando cambia la jornada
+  // Cargar jugadores reales una vez
   useEffect(() => {
-    if (!sb || participantes.length === 0) return;
-    sb.from('clasificacion')
-      .select('participante_id, puntos_jornada')
-      .eq('jornada', jornada)
-      .then(({ data }) => {
-        const mapa = {};
-        (data || []).forEach(r => { mapa[r.participante_id] = String(r.puntos_jornada); });
-        setPuntos(mapa);
-        setGuardado(false);
+    if (!sb) return;
+    sb.from('jugadores').select('id, nombre, equipo, posicion')
+      .order('equipo').order('posicion')
+      .then(({ data }) => setJugadores(data || []));
+  }, []);
+
+  // Cargar puntos de esta jornada + alineaciones
+  useEffect(() => {
+    if (!sb || jugadores.length === 0 || participantes.length === 0) return;
+    const partIds = participantes.map(p => p.id);
+    Promise.all([
+      sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada),
+      sb.from('alineaciones').select('participante_id, jugador_id, es_titular')
+        .eq('jornada', jornada).in('participante_id', partIds),
+    ]).then(([{ data: pts }, { data: alis }]) => {
+      const mapa = {};
+      (pts || []).forEach(r => { mapa[r.jugador_id] = String(r.pts); });
+      setPtsJug(mapa);
+
+      const am = {};
+      (alis || []).forEach(a => {
+        if (a.es_titular) {
+          if (!am[a.participante_id]) am[a.participante_id] = new Set();
+          am[a.participante_id].add(a.jugador_id);
+        }
       });
-  }, [jornada, participantes]);
+      setAliMapa(am);
+    });
+  }, [jornada, jugadores, participantes]);
 
   const guardar = async () => {
     if (!sb) return;
     setGuardando(true);
 
-    const registros = participantes
-      .filter(p => puntos[p.id] !== undefined && puntos[p.id] !== '')
-      .map(p => ({
-        participante_id: p.id,
-        jornada,
-        puntos_jornada: parseInt(puntos[p.id]) || 0,
-      }));
+    // 1. Guardar puntos por jugador
+    const rows = Object.entries(ptsJug)
+      .filter(([, v]) => v !== '' && v !== undefined)
+      .map(([jid, v]) => ({ jugador_id: Number(jid), jornada, pts: Number(v) || 0 }));
+    if (rows.length > 0) {
+      const { error } = await sb.from('puntos_jugador')
+        .upsert(rows, { onConflict: 'jugador_id,jornada' });
+      if (error) { alert('Error: ' + error.message); setGuardando(false); return; }
+    }
 
-    const { error } = await sb.from('clasificacion')
-      .upsert(registros, { onConflict: 'participante_id,jornada' });
+    // 2. Recalcular totales por equipo fantasy (titulares)
+    const ptsMapa = Object.fromEntries(rows.map(r => [r.jugador_id, r.pts]));
+    const clasRows = participantes.map(p => {
+      const tits = aliMapa[p.id] || new Set();
+      const total = [...tits].reduce((s, jid) => s + (ptsMapa[jid] ?? Number(ptsJug[jid]) ?? 0), 0);
+      return { participante_id: p.id, jornada, puntos_jornada: Math.round(total) };
+    });
+    await sb.from('clasificacion').upsert(clasRows, { onConflict: 'participante_id,jornada' });
 
     setGuardando(false);
-    if (error) alert('Error al guardar: ' + error.message);
-    else setGuardado(true);
+    setMsg('Guardado. Totales recalculados.');
+    setTimeout(() => setMsg(''), 3000);
   };
 
-  const setPts = (id, val) => {
-    setPuntos(prev => ({ ...prev, [id]: val }));
-    setGuardado(false);
-  };
+  // Agrupar jugadores por equipo real
+  const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
 
-  const primera = participantes.filter(p => p.division_id === 1);
-  const segunda = participantes.filter(p => p.division_id === 2);
+  // Totales por equipo fantasy (en tiempo real)
+  const totales = Object.fromEntries(participantes.map(p => {
+    const tits = aliMapa[p.id] || new Set();
+    const sum  = [...tits].reduce((s, jid) => s + (Number(ptsJug[jid]) || 0), 0);
+    return [p.id, sum];
+  }));
 
-  const TablaDiv = ({ lista, titulo }) => (
-    <div className="card">
-      <h2>{titulo}</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Equipo</th>
-            <th style={{textAlign:'right', width:'140px'}}>Puntos jornada {jornada}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lista.map(p => (
-            <tr key={p.id}>
-              <td style={{fontWeight:600}}>{p.nombre}</td>
-              <td style={{textAlign:'right'}}>
-                <input
-                  type="number"
-                  min="0"
-                  value={puntos[p.id] ?? ''}
-                  onChange={e => setPts(p.id, e.target.value)}
-                  placeholder="—"
-                  style={{
-                    width:'80px', textAlign:'right', padding:'.3rem .5rem',
-                    border:'1.5px solid var(--borde)', borderRadius:'8px',
-                    fontSize:'.95rem', fontWeight:600,
-                  }}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const iS = { width:72, textAlign:'right', padding:'.28rem .4rem',
+               border:'1.5px solid var(--borde)', borderRadius:7, fontSize:'.9rem', fontWeight:600 };
 
   return (
     <div>
+      {/* Selector de jornada */}
       <div className="card" style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
         <span style={{fontWeight:600}}>Jornada:</span>
-        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
-          {Array.from({length: 38}, (_, i) => i + 1).map(j => (
+        <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap'}}>
+          {Array.from({length:38}, (_, i) => i + 1).map(j => (
             <button key={j} onClick={() => setJornada(j)}
-              style={{
-                padding:'.3rem .6rem', borderRadius:'8px', fontSize:'.82rem',
-                border:'1.5px solid var(--borde)', cursor:'pointer',
-                background: jornada === j ? 'var(--verde)' : '#fff',
-                color: jornada === j ? '#fff' : 'var(--texto)',
-                fontWeight: jornada === j ? 700 : 400,
-              }}>
+                    style={{padding:'.28rem .55rem', borderRadius:7, fontSize:'.78rem',
+                            border:'1.5px solid var(--borde)', cursor:'pointer',
+                            background: jornada===j ? 'var(--verde)' : '#fff',
+                            color: jornada===j ? '#fff' : 'var(--texto)',
+                            fontWeight: jornada===j ? 700 : 400}}>
               {j}
             </button>
           ))}
         </div>
       </div>
 
-      {participantes.length === 0
-        ? <div className="card"><div className="empty">Cargando participantes...</div></div>
-        : <>
-            <TablaDiv lista={primera} titulo="Primera Division" />
-            <TablaDiv lista={segunda} titulo="Segunda Division" />
-            <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>
-              {guardado && <span style={{color:'var(--verde)', fontWeight:600}}>Guardado correctamente</span>}
-              <button onClick={guardar} disabled={guardando}
-                style={{
-                  background:'var(--verde)', color:'#fff', border:'none',
-                  padding:'.6rem 1.5rem', borderRadius:'10px', fontSize:'1rem',
-                  fontWeight:700, cursor: guardando ? 'wait' : 'pointer',
-                  opacity: guardando ? .7 : 1,
-                }}>
-                {guardando ? 'Guardando...' : 'Guardar jornada ' + jornada}
-              </button>
-            </div>
-          </>
-      }
+      {/* Puntos por jugador real, agrupados por equipo real */}
+      {equiposReales.map(equipo => {
+        const jugsEq = jugadores.filter(j => j.equipo === equipo);
+        return (
+          <div key={equipo} className="card" style={{paddingBottom:'.75rem'}}>
+            <h2 style={{fontSize:'.95rem', marginBottom:'.6rem'}}>{equipo}</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Jugador</th><th>Pos</th>
+                  <th style={{textAlign:'right'}}>Pts J{jornada}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jugsEq.map(j => (
+                  <tr key={j.id}>
+                    <td style={{fontWeight:600}}>{j.nombre}</td>
+                    <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>{j.posicion}</td>
+                    <td style={{textAlign:'right'}}>
+                      <input type="number" min="0" value={ptsJug[j.id] ?? ''}
+                             onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
+                             placeholder="0" style={iS} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+
+      {jugadores.length === 0 && (
+        <div className="card"><div className="empty">No hay jugadores en la base de datos.</div></div>
+      )}
+
+      {/* Totales por equipo fantasy */}
+      <div className="card">
+        <h2>Totales de equipo — Jornada {jornada}</h2>
+        <p style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+          Suma de puntos de titulares según alineación. Baremo: &lt;36 pts → 0 goles · 36 pts → 1 · +9 pts → +1 gol. Local no neutral: +5 pts.
+        </p>
+        <table>
+          <thead><tr><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Pts titulares</th><th style={{textAlign:'right'}}>Goles eq.</th><th style={{textAlign:'right'}}>Goles+local</th></tr></thead>
+          <tbody>
+            {[...participantes].sort((a,b) => totales[b.id] - totales[a.id]).map(p => (
+              <tr key={p.id}>
+                <td style={{fontWeight:600}}>{p.nombre}</td>
+                <td style={{textAlign:'right', fontWeight:700}}>{totales[p.id]}</td>
+                <td style={{textAlign:'right', color:'var(--verde)'}}>{ptsAGoles(totales[p.id])}</td>
+                <td style={{textAlign:'right', color:'#856404'}}>{ptsAGoles(totales[p.id]+5)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>
+        {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
+        <button onClick={guardar} disabled={guardando}
+                style={{background:'var(--verde)', color:'#fff', border:'none',
+                        padding:'.6rem 1.5rem', borderRadius:10, fontSize:'1rem',
+                        fontWeight:700, cursor: guardando ? 'wait' : 'pointer', opacity: guardando ? .7 : 1}}>
+          {guardando ? 'Guardando...' : `Guardar J${jornada} y recalcular`}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1822,8 +1865,9 @@ function FaseVista({ fase, faseData, idNombre, compNombre }) {
       return { ...f, jugado: true, resultadoReal: true, gL: f.goles_local, gV: f.goles_visitante };
     }
     // Fallback: derivar de puntos fantasy de la clasificación
-    const ptsLRec = (clasMap[f.local_id] || {})[f.jornada];
-    const ptsVRec = (clasMap[f.visitante_id] || {})[f.jornada];
+    const jornadaF = f.jornada_fantasy ?? f.jornada;
+    const ptsLRec = (clasMap[f.local_id] || {})[jornadaF];
+    const ptsVRec = (clasMap[f.visitante_id] || {})[jornadaF];
     const jugado  = ptsLRec !== undefined || ptsVRec !== undefined;
     const ptsL    = ptsLRec ?? 0, ptsV = ptsVRec ?? 0;
     const efL     = f.es_neutral ? ptsL : ptsL + 5;
@@ -1978,7 +2022,8 @@ function Competiciones({ participantes, federacion, miParticipanteId }) {
         ...(gd || []).map(g => g.participante_id),
         ...partidos.flatMap(f => [f.local_id, f.visitante_id]),
       ])];
-      const jornadas = [...new Set(partidos.map(p => p.jornada))];
+      // Incluir tanto jornadas del partido como jornadas fantasy vinculadas
+      const jornadas = [...new Set(partidos.flatMap(p => [p.jornada_fantasy ?? p.jornada]))];
       let clasMap = {};
       if (pids.length > 0 && jornadas.length > 0) {
         const { data: clas } = await sb.from('clasificacion')
@@ -3761,6 +3806,7 @@ function TablaPartidosAdmin({ partidos, participantes, idNombre, onSave, onDelet
       local_id:        pt.local_id,
       visitante_id:    pt.visitante_id,
       jornada:         pt.jornada,
+      jornada_fantasy: pt.jornada_fantasy ?? '',
       es_neutral:      !!pt.es_neutral,
       goles_local:     pt.goles_local ?? '',
       goles_visitante: pt.goles_visitante ?? '',
@@ -3775,6 +3821,7 @@ function TablaPartidosAdmin({ partidos, participantes, idNombre, onSave, onDelet
       local_id:        editForm.local_id,
       visitante_id:    editForm.visitante_id,
       jornada:         Number(editForm.jornada),
+      jornada_fantasy: editForm.jornada_fantasy === '' ? null : Number(editForm.jornada_fantasy),
       es_neutral:      editForm.es_neutral,
       goles_local:     editForm.goles_local === '' ? null : Number(editForm.goles_local),
       goles_visitante: editForm.goles_visitante === '' ? null : Number(editForm.goles_visitante),
@@ -3823,7 +3870,10 @@ function TablaPartidosAdmin({ partidos, participantes, idNombre, onSave, onDelet
                     </label>
                   )}
                   <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem'}}>
-                    J:<input type="number" value={editForm.jornada} onChange={e => setEditForm(f => ({...f, jornada:e.target.value}))} style={{...iS, width:52}} min={1} />
+                    J comp:<input type="number" value={editForm.jornada} onChange={e => setEditForm(f => ({...f, jornada:e.target.value}))} style={{...iS, width:52}} min={1} />
+                  </label>
+                  <label style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.8rem'}} title="Jornada fantasy que determina el resultado (vacío=igual a J comp)">
+                    J fantasy:<input type="number" value={editForm.jornada_fantasy} onChange={e => setEditForm(f => ({...f, jornada_fantasy:e.target.value}))} style={{...iS, width:52}} min={1} max={38} placeholder="=" />
                   </label>
                   <select value={editForm.local_id} onChange={e => setEditForm(f => ({...f, local_id:e.target.value}))} style={iS}>
                     {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
@@ -3851,7 +3901,11 @@ function TablaPartidosAdmin({ partidos, participantes, idNombre, onSave, onDelet
             <tr key={pt.id}>
               {mostrarRonda && <td style={{fontWeight:600, fontSize:'.8rem'}}>{pt.ronda}</td>}
               {mostrarGrupo && <td style={{fontWeight:700, color:'var(--verde)'}}>{pt.grupo}</td>}
-              <td style={{color:'var(--texto2)'}}>J{pt.jornada}</td>
+              <td style={{color:'var(--texto2)', whiteSpace:'nowrap'}}>
+                J{pt.jornada}
+                {pt.jornada_fantasy && pt.jornada_fantasy !== pt.jornada &&
+                  <span style={{fontSize:'.7rem', color:'#7c3aed', marginLeft:'.3rem'}}>→F{pt.jornada_fantasy}</span>}
+              </td>
               <td>{f(pt.local_id)}</td>
               <td style={{textAlign:'center', fontWeight:700}}>
                 {pt.finalizado && pt.goles_local !== null

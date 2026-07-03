@@ -3913,22 +3913,32 @@ function AdminCompeticiones({ federacion, participantes }) {
 
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange }) {
-  const [subtab, setSubtab] = useState('federacion');
+  const [subtab, setSubtab]           = useState('federacion');
+  const [hayCompeticiones, setHayComp] = useState(false);
+
+  useEffect(() => {
+    if (!sb || !federacion?.id) return;
+    sb.from('competiciones').select('id', { count: 'exact', head: true })
+      .eq('federacion_id', federacion.id)
+      .then(({ count }) => setHayComp((count || 0) > 0));
+  }, [federacion]);
+
+  const tabs = [
+    ['federacion',   'Mi Federación'],
+    ...(hayCompeticiones ? [['liga', 'Liga']] : []),
+    ['puntos',       'Clasificación'],
+    ['presupuestos', 'Presupuestos'],
+    ['calendario',   'Calendario'],
+    ['pujas',        'Pujas'],
+    ['cierres',      'Cierres'],
+    ['mercado',      'Mercado'],
+    ['competiciones','Competiciones'],
+  ];
 
   return (
     <div>
       <div className="tabs">
-        {[
-          ['federacion',   'Mi Federación'],
-          ['liga',         'Liga'],
-          ['puntos',       'Clasificación'],
-          ['presupuestos', 'Presupuestos'],
-          ['calendario',   'Calendario'],
-          ['pujas',        'Pujas'],
-          ['cierres',      'Cierres'],
-          ['mercado',        'Mercado'],
-          ['competiciones',  'Competiciones'],
-        ].map(([k, l]) => (
+        {tabs.map(([k, l]) => (
           <button key={k} className={`tab ${subtab === k ? 'active' : ''}`}
                   onClick={() => setSubtab(k)}>
             {l}

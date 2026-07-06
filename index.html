@@ -905,97 +905,149 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   );
 }
 
-// ── PUNTOS ─────────────────────────────────────────────────────
-// ── CALENDARIO FANTASY — vista pública por jornada y acumulado ──
+// ── CALENDARIO FANTASY ─────────────────────────────────────────
 function CalendarioFantasy({ participantes }) {
-  const [clas, setClas]   = useState([]);   // todos los registros de clasificacion de esta fed
-  const [vista, setVista] = useState('jornada');
-  const [jornada, setJornada] = useState(null);
+  const [clas, setClas]         = useState([]);
+  const [vista, setVista]       = useState('jornada');
+  const [jornada, setJornada]   = useState(1);
+  const [jugadores, setJugadores] = useState([]);   // jugadores reales: { id, nombre, equipo, posicion }
+  const [abierto, setAbierto]   = useState(null);   // participante_id expandido
+  const [detalle, setDetalle]   = useState({});     // { [pid_jornada]: { alis, ptsMap } }
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('jugadores').select('id, nombre, equipo, posicion')
+      .then(({ data }) => setJugadores(data || []));
+  }, []);
 
   useEffect(() => {
     if (!sb || participantes.length === 0) return;
     sb.from('clasificacion')
       .select('participante_id, jornada, puntos_jornada')
       .in('participante_id', participantes.map(p => p.id))
-      .then(({ data }) => {
-        const rows = data || [];
-        setClas(rows);
-        // Seleccionar la última jornada con datos
-        const js = [...new Set(rows.map(r => r.jornada))].sort((a, b) => a - b);
-        setJornada(prev => prev && js.includes(prev) ? prev : (js[js.length - 1] ?? 1));
-      });
+      .then(({ data }) => setClas(data || []));
   }, [participantes]);
 
-  const idNombre = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
-  const jornadasConDatos = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
+  const abrirEquipo = async (pid) => {
+    if (abierto === pid) { setAbierto(null); return; }
+    setAbierto(pid);
+    const key = `${pid}_${jornada}`;
+    if (detalle[key]) return;
+    const [{ data: alis }, { data: pts }] = await Promise.all([
+      sb.from('alineaciones').select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', jornada),
+      sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada),
+    ]);
+    const ptsMap = Object.fromEntries((pts || []).map(r => [r.jugador_id, Number(r.pts)]));
+    setDetalle(d => ({ ...d, [key]: { alis: alis || [], ptsMap } }));
+  };
 
-  // Datos de la jornada activa
+  // Reset expanded row when jornada changes
+  useEffect(() => { setAbierto(null); }, [jornada]);
+
   const filasJornada = [...participantes].map(p => ({
-    id: p.id,
-    nombre: p.nombre,
+    id: p.id, nombre: p.nombre,
     pts: clas.find(r => r.participante_id === p.id && r.jornada === jornada)?.puntos_jornada ?? null,
   })).sort((a, b) => (b.pts ?? -1) - (a.pts ?? -1));
 
-  // Acumulado
   const filasAcum = [...participantes].map(p => {
-    const registros = clas.filter(r => r.participante_id === p.id);
-    return { id: p.id, nombre: p.nombre, total: registros.reduce((s, r) => s + r.puntos_jornada, 0), jornadas: registros.length };
+    const regs = clas.filter(r => r.participante_id === p.id);
+    return { id: p.id, nombre: p.nombre, total: regs.reduce((s, r) => s + r.puntos_jornada, 0), jornadas: regs.length };
   }).sort((a, b) => b.total - a.total);
 
-  const btnJ = (j) => ({
-    padding: '.25rem .55rem', borderRadius: 7, fontSize: '.78rem', cursor: 'pointer',
-    border: '1.5px solid var(--borde)',
-    background: jornada === j ? 'var(--verde)' : '#fff',
-    color: jornada === j ? '#fff' : 'var(--texto)',
+  const jornadasConDatos = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
+
+  const btnJornada = (j) => ({
+    padding: '.22rem .5rem', borderRadius: 6, fontSize: '.75rem', cursor: 'pointer',
+    border: '1.5px solid ' + (jornadasConDatos.includes(j) ? 'var(--verde)' : 'var(--borde)'),
+    background: jornada === j ? 'var(--verde)' : jornadasConDatos.includes(j) ? '#f0fdf4' : '#fff',
+    color: jornada === j ? '#fff' : jornadasConDatos.includes(j) ? '#166534' : 'var(--texto2)',
     fontWeight: jornada === j ? 700 : 400,
   });
+
+  const DetalleEquipo = ({ pid }) => {
+    const key = `${pid}_${jornada}`;
+    const info = detalle[key];
+    if (!info) return <tr><td colSpan={3} style={{padding:'.5rem', color:'var(--texto2)', fontSize:'.82rem'}}>Cargando…</td></tr>;
+    const titulares  = info.alis.filter(a => a.es_titular).map(a => a.jugador_id);
+    const suplentes  = info.alis.filter(a => !a.es_titular).map(a => a.jugador_id);
+    const idJug = Object.fromEntries(jugadores.map(j => [j.id, j]));
+    const filaJug = (jid, esTitular) => {
+      const jug = idJug[jid];
+      if (!jug) return null;
+      const pts = info.ptsMap[jid];
+      return (
+        <tr key={jid} style={{background: esTitular ? '#f0fdf4' : '#fafafa'}}>
+          <td style={{paddingLeft:'2rem', fontSize:'.8rem', color: esTitular ? 'var(--texto)' : 'var(--texto2)'}}>
+            {esTitular ? '▶' : '○'} {jug.nombre}
+            <span style={{marginLeft:'.4rem', fontSize:'.72rem', color:'var(--texto2)'}}>{jug.posicion}</span>
+          </td>
+          <td style={{fontSize:'.75rem', color:'var(--texto2)'}}>{jug.equipo}</td>
+          <td style={{textAlign:'right', fontWeight: pts !== undefined ? 700 : 400,
+                      color: pts !== undefined ? 'var(--texto)' : 'var(--texto2)', fontSize:'.85rem'}}>
+            {pts !== undefined ? pts : '—'}
+          </td>
+        </tr>
+      );
+    };
+    return (
+      <>
+        {titulares.length === 0 && suplentes.length === 0
+          ? <tr><td colSpan={3} style={{padding:'.4rem .4rem .4rem 2rem', color:'var(--texto2)', fontSize:'.8rem'}}>Sin alineación registrada esta jornada.</td></tr>
+          : <>
+              {titulares.length > 0 && <tr><td colSpan={3} style={{paddingLeft:'2rem', paddingTop:'.3rem', fontSize:'.72rem', fontWeight:700, color:'var(--verde)', letterSpacing:'.04em'}}>TITULARES</td></tr>}
+              {titulares.map(jid => filaJug(jid, true))}
+              {suplentes.length > 0 && <tr><td colSpan={3} style={{paddingLeft:'2rem', paddingTop:'.3rem', fontSize:'.72rem', fontWeight:700, color:'var(--texto2)', letterSpacing:'.04em'}}>SUPLENTES</td></tr>}
+              {suplentes.map(jid => filaJug(jid, false))}
+            </>
+        }
+      </>
+    );
+  };
 
   return (
     <div>
       <div className="tabs">
-        <button className={`tab ${vista === 'jornada' ? 'active' : ''}`} onClick={() => setVista('jornada')}>Por jornada</button>
-        <button className={`tab ${vista === 'acumulado' ? 'active' : ''}`} onClick={() => setVista('acumulado')}>Acumulado</button>
+        <button className={`tab ${vista==='jornada'?'active':''}`} onClick={() => setVista('jornada')}>Por jornada</button>
+        <button className={`tab ${vista==='acumulado'?'active':''}`} onClick={() => setVista('acumulado')}>Acumulado</button>
       </div>
 
       {vista === 'jornada' && (
         <div>
-          {jornadasConDatos.length === 0
-            ? <div className="card"><div className="empty">Aún no hay puntuaciones introducidas.</div></div>
-            : <>
-                <div className="card" style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap', paddingBottom:'.75rem'}}>
-                  <span style={{fontWeight:600, fontSize:'.9rem'}}>Jornada:</span>
-                  <div style={{display:'flex', gap:'.3rem', flexWrap:'wrap'}}>
-                    {jornadasConDatos.map(j => (
-                      <button key={j} onClick={() => setJornada(j)} style={btnJ(j)}>J{j}</button>
-                    ))}
-                  </div>
-                </div>
-                <div className="card">
-                  <h2>Jornada {jornada}</h2>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Pos</th><th>Equipo</th>
-                        <th style={{textAlign:'right'}}>Puntos</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filasJornada.map((e, i) => (
-                        <tr key={e.id} style={{background: i === 0 ? 'rgba(26,127,55,.06)' : undefined}}>
-                          <td><Medalla pos={i + 1} /></td>
-                          <td style={{fontWeight: 600}}>{e.nombre}</td>
-                          <td style={{textAlign:'right', fontWeight: e.pts !== null ? 800 : 400,
-                                      fontSize: e.pts !== null ? '1.1rem' : '1rem',
-                                      color: e.pts !== null ? 'var(--texto)' : 'var(--texto2)'}}>
-                            {e.pts !== null ? e.pts : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-          }
+          <div className="card" style={{paddingBottom:'.6rem'}}>
+            <div style={{display:'flex', gap:'.25rem', flexWrap:'wrap'}}>
+              {Array.from({length:38}, (_, i) => i + 1).map(j => (
+                <button key={j} onClick={() => setJornada(j)} style={btnJornada(j)}>J{j}</button>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <h2>Jornada {jornada}{!jornadasConDatos.includes(jornada) && <span style={{fontWeight:400, color:'var(--texto2)', fontSize:'.8rem', marginLeft:'.5rem'}}>(sin datos)</span>}</h2>
+            <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.6rem'}}>Pincha en un equipo para ver su alineación y puntos de cada jugador.</p>
+            <table>
+              <thead>
+                <tr><th>Pos</th><th>Equipo</th><th style={{textAlign:'right'}}>Puntos</th></tr>
+              </thead>
+              <tbody>
+                {filasJornada.map((e, i) => (
+                  <React.Fragment key={e.id}>
+                    <tr onClick={() => abrirEquipo(e.id)}
+                        style={{cursor:'pointer', background: abierto===e.id ? '#eff6ff' : i===0 ? 'rgba(26,127,55,.05)' : undefined,
+                                borderBottom: abierto===e.id ? 'none' : undefined}}>
+                      <td><Medalla pos={i + 1} /></td>
+                      <td style={{fontWeight:600}}>
+                        {abierto===e.id ? '▾ ' : '▸ '}{e.nombre}
+                      </td>
+                      <td style={{textAlign:'right', fontWeight: e.pts!==null?800:400, fontSize: e.pts!==null?'1.08rem':'1rem',
+                                  color: e.pts!==null?'var(--texto)':'var(--texto2)'}}>
+                        {e.pts !== null ? e.pts : '—'}
+                      </td>
+                    </tr>
+                    {abierto === e.id && <DetalleEquipo pid={e.id} />}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -1015,7 +1067,7 @@ function CalendarioFantasy({ participantes }) {
                 </thead>
                 <tbody>
                   {filasAcum.map((e, i) => (
-                    <tr key={e.id} style={{background: i === 0 ? 'rgba(26,127,55,.06)' : undefined}}>
+                    <tr key={e.id} style={{background: i===0?'rgba(26,127,55,.06)':undefined}}>
                       <td><Medalla pos={i + 1} /></td>
                       <td style={{fontWeight:600}}>{e.nombre}</td>
                       <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.total}</td>
@@ -1034,15 +1086,26 @@ function CalendarioFantasy({ participantes }) {
   );
 }
 
-// ── PUNTOS — entrada de puntos por equipo fantasy por jornada ──
-function Puntos({ participantes, canEdit = false }) {
+// ── PUNTOS — admin: puntos por equipo + resumen por jugador ────
+function Puntos({ participantes }) {
+  const [subtab, setSubtab]   = useState('equipos');
   const [jornada, setJornada] = useState(1);
   const [datos, setDatos]     = useState({});   // { participante_id: pts_string }
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]         = useState('');
+  const [jugadores, setJugadores] = useState([]);
+  const [ptsTot, setPtsTot]   = useState({});   // { jugador_id: total_pts }
+  const [cargandoJug, setCargandoJug] = useState(false);
 
   useEffect(() => {
-    if (!sb || participantes.length === 0) return;
+    if (!sb) return;
+    sb.from('jugadores').select('id, nombre, equipo, posicion').order('equipo').order('posicion')
+      .then(({ data }) => setJugadores(data || []));
+  }, []);
+
+  // Cargar pts por equipo fantasy para la jornada seleccionada
+  useEffect(() => {
+    if (!sb || participantes.length === 0 || subtab !== 'equipos') return;
     sb.from('clasificacion')
       .select('participante_id, puntos_jornada')
       .eq('jornada', jornada)
@@ -1052,92 +1115,227 @@ function Puntos({ participantes, canEdit = false }) {
         (data || []).forEach(r => { m[r.participante_id] = String(r.puntos_jornada); });
         setDatos(m);
       });
-  }, [jornada, participantes]);
+  }, [jornada, participantes, subtab]);
 
-  const guardar = async () => {
-    if (!sb || !canEdit) return;
+  // Cargar totales por jugador (suma de todas las jornadas)
+  useEffect(() => {
+    if (!sb || subtab !== 'jugadores' || jugadores.length === 0) return;
+    setCargandoJug(true);
+    sb.from('puntos_jugador').select('jugador_id, pts')
+      .then(({ data }) => {
+        const tot = {};
+        (data || []).forEach(r => { tot[r.jugador_id] = (tot[r.jugador_id] || 0) + Number(r.pts); });
+        setPtsTot(tot);
+        setCargandoJug(false);
+      });
+  }, [subtab, jugadores]);
+
+  const guardarEquipos = async () => {
+    if (!sb) return;
     setGuardando(true);
     const rows = participantes.map(p => ({
-      participante_id: p.id,
-      jornada,
-      puntos_jornada: Number(datos[p.id]) || 0,
+      participante_id: p.id, jornada, puntos_jornada: Number(datos[p.id]) || 0,
     }));
     const { error } = await sb.from('clasificacion').upsert(rows, { onConflict: 'participante_id,jornada' });
     setGuardando(false);
     if (error) { alert('Error: ' + error.message); return; }
-    setMsg('Guardado correctamente.');
+    setMsg('Guardado.');
     setTimeout(() => setMsg(''), 3000);
   };
 
-  const iS = { width: 80, textAlign: 'right', padding: '.28rem .4rem',
-               border: '1.5px solid var(--borde)', borderRadius: 7, fontSize: '.92rem', fontWeight: 600 };
+  const iS = { width:80, textAlign:'right', padding:'.25rem .4rem',
+               border:'1.5px solid var(--borde)', borderRadius:7, fontSize:'.9rem', fontWeight:600 };
 
-  const ordenados = [...participantes].sort((a, b) =>
-    (Number(datos[b.id]) || 0) - (Number(datos[a.id]) || 0)
-  );
+  const ordenados = [...participantes].sort((a, b) => (Number(datos[b.id])||0) - (Number(datos[a.id])||0));
+  const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
 
   return (
     <div>
-      {/* Selector de jornada */}
+      <div className="tabs">
+        <button className={`tab ${subtab==='equipos'?'active':''}`} onClick={() => setSubtab('equipos')}>Puntos por equipo fantasy</button>
+        <button className={`tab ${subtab==='jugadores'?'active':''}`} onClick={() => setSubtab('jugadores')}>Puntos por jugador (totales)</button>
+      </div>
+
+      {subtab === 'equipos' && (
+        <div>
+          <div className="card" style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap'}}>
+            <span style={{fontWeight:600}}>Jornada:</span>
+            <div style={{display:'flex', gap:'.28rem', flexWrap:'wrap'}}>
+              {Array.from({length:38}, (_, i) => i+1).map(j => (
+                <button key={j} onClick={() => { setJornada(j); setMsg(''); }}
+                        style={{padding:'.22rem .48rem', borderRadius:6, fontSize:'.75rem',
+                                border:'1.5px solid var(--borde)', cursor:'pointer',
+                                background: jornada===j?'var(--verde)':'#fff',
+                                color: jornada===j?'#fff':'var(--texto)', fontWeight: jornada===j?700:400}}>
+                  {j}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <h2>Puntos equipo — Jornada {jornada}</h2>
+            <table>
+              <thead><tr><th>Pos</th><th>Equipo</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
+              <tbody>
+                {ordenados.map((p, i) => (
+                  <tr key={p.id}>
+                    <td><Medalla pos={i+1} /></td>
+                    <td style={{fontWeight:600}}>{p.nombre}</td>
+                    <td style={{textAlign:'right'}}>
+                      <input type="number" min="0" value={datos[p.id] ?? ''}
+                             onChange={e => { setDatos(d => ({...d, [p.id]: e.target.value})); setMsg(''); }}
+                             placeholder="0" style={iS} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{display:'flex', gap:'.75rem', alignItems:'center', marginTop:'1rem'}}>
+              {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
+              <button onClick={guardarEquipos} disabled={guardando}
+                      style={{background:'var(--verde)', color:'#fff', border:'none',
+                              padding:'.45rem 1.3rem', borderRadius:8, fontWeight:700, cursor:'pointer',
+                              opacity: guardando?.7:1}}>
+                {guardando ? 'Guardando…' : `Guardar J${jornada}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {subtab === 'jugadores' && (
+        <div className="card">
+          <h2>Puntos totales por jugador (todas las jornadas)</h2>
+          {cargandoJug ? <Spinner /> : (
+            equiposReales.map(equipo => {
+              const jugsEq = jugadores.filter(j => j.equipo === equipo)
+                                      .map(j => ({...j, total: ptsTot[j.id] || 0}))
+                                      .sort((a, b) => b.total - a.total);
+              return (
+                <div key={equipo} style={{marginBottom:'1.25rem'}}>
+                  <div style={{fontWeight:700, fontSize:'.85rem', color:'var(--texto2)',
+                               textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.3rem'}}>
+                    {equipo}
+                  </div>
+                  <table>
+                    <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Total pts</th></tr></thead>
+                    <tbody>
+                      {jugsEq.map(j => (
+                        <tr key={j.id}>
+                          <td style={{fontWeight:600}}>{j.nombre}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
+                          <td style={{textAlign:'right', fontWeight: j.total?700:400,
+                                      color: j.total?'var(--texto)':'var(--texto2)'}}>{j.total || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
+function AdminPtsJugadores() {
+  const [jornada, setJornada] = useState(1);
+  const [jugadores, setJugadores] = useState([]);
+  const [ptsJug, setPtsJug]   = useState({});   // { jugador_id: pts_string }
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg]         = useState('');
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('jugadores').select('id, nombre, equipo, posicion').order('equipo').order('posicion')
+      .then(({ data }) => setJugadores(data || []));
+  }, []);
+
+  useEffect(() => {
+    if (!sb || jugadores.length === 0) return;
+    sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada)
+      .then(({ data }) => {
+        const m = {};
+        (data || []).forEach(r => { m[r.jugador_id] = String(r.pts); });
+        setPtsJug(m);
+      });
+  }, [jornada, jugadores]);
+
+  const guardar = async () => {
+    if (!sb) return;
+    setGuardando(true);
+    const rows = Object.entries(ptsJug)
+      .filter(([, v]) => v !== '' && v !== undefined)
+      .map(([jid, v]) => ({ jugador_id: jid, jornada, pts: Number(v) || 0 }));
+    if (rows.length > 0) {
+      const { error } = await sb.from('puntos_jugador').upsert(rows, { onConflict: 'jugador_id,jornada' });
+      if (error) { alert('Error: ' + error.message); setGuardando(false); return; }
+    }
+    setGuardando(false);
+    setMsg(`Jornada ${jornada} guardada.`);
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
+  const iS = { width:72, textAlign:'right', padding:'.25rem .4rem',
+               border:'1.5px solid var(--borde)', borderRadius:7, fontSize:'.88rem', fontWeight:600 };
+
+  return (
+    <div>
       <div className="card" style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap'}}>
         <span style={{fontWeight:600}}>Jornada:</span>
-        <div style={{display:'flex', gap:'.3rem', flexWrap:'wrap'}}>
-          {Array.from({length: 38}, (_, i) => i + 1).map(j => (
+        <div style={{display:'flex', gap:'.28rem', flexWrap:'wrap'}}>
+          {Array.from({length:38}, (_, i) => i+1).map(j => (
             <button key={j} onClick={() => { setJornada(j); setMsg(''); }}
-                    style={{padding:'.25rem .5rem', borderRadius:7, fontSize:'.76rem',
+                    style={{padding:'.22rem .48rem', borderRadius:6, fontSize:'.75rem',
                             border:'1.5px solid var(--borde)', cursor:'pointer',
-                            background: jornada===j ? 'var(--verde)' : '#fff',
-                            color: jornada===j ? '#fff' : 'var(--texto)',
-                            fontWeight: jornada===j ? 700 : 400}}>
+                            background: jornada===j?'var(--verde)':'#fff',
+                            color: jornada===j?'#fff':'var(--texto)', fontWeight: jornada===j?700:400}}>
               {j}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="card">
-        <h2>Puntos — Jornada {jornada}</h2>
-        {!canEdit && <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.75rem'}}>Solo el administrador puede editar los puntos.</p>}
-        <table>
-          <thead>
-            <tr>
-              <th>Pos</th>
-              <th>Equipo</th>
-              <th style={{textAlign:'right'}}>Pts J{jornada}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ordenados.map((p, i) => (
-              <tr key={p.id}>
-                <td><Medalla pos={i + 1} /></td>
-                <td style={{fontWeight:600}}>{p.nombre}</td>
-                <td style={{textAlign:'right'}}>
-                  {canEdit
-                    ? <input type="number" min="0" value={datos[p.id] ?? ''}
-                             onChange={e => { setDatos(d => ({...d, [p.id]: e.target.value})); setMsg(''); }}
-                             placeholder="0" style={iS} />
-                    : <span style={{fontWeight: datos[p.id] ? 800 : 400,
-                                    fontSize: datos[p.id] ? '1.05rem' : '1rem',
-                                    color: datos[p.id] ? 'var(--texto)' : 'var(--texto2)'}}>
-                        {datos[p.id] || '—'}
-                      </span>
-                  }
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {canEdit && (
-          <div style={{display:'flex', gap:'.75rem', alignItems:'center', marginTop:'1rem', flexWrap:'wrap'}}>
-            {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
-            <button onClick={guardar} disabled={guardando}
-                    style={{background:'var(--verde)', color:'#fff', border:'none',
-                            padding:'.5rem 1.4rem', borderRadius:9, fontSize:'1rem',
-                            fontWeight:700, cursor: guardando ? 'wait' : 'pointer', opacity: guardando ? .7 : 1}}>
-              {guardando ? 'Guardando...' : `Guardar J${jornada}`}
-            </button>
-          </div>
-        )}
+      {jugadores.length === 0
+        ? <div className="card"><div className="empty">No hay jugadores en la base de datos.</div></div>
+        : equiposReales.map(equipo => {
+            const jugsEq = jugadores.filter(j => j.equipo === equipo);
+            return (
+              <div key={equipo} className="card" style={{paddingBottom:'.75rem'}}>
+                <h2 style={{fontSize:'.92rem', marginBottom:'.5rem'}}>{equipo}</h2>
+                <table>
+                  <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
+                  <tbody>
+                    {jugsEq.map(j => (
+                      <tr key={j.id}>
+                        <td style={{fontWeight:600}}>{j.nombre}</td>
+                        <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
+                        <td style={{textAlign:'right'}}>
+                          <input type="number" min="0" value={ptsJug[j.id] ?? ''}
+                                 onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
+                                 placeholder="0" style={iS} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })
+      }
+
+      <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>
+        {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
+        <button onClick={guardar} disabled={guardando}
+                style={{background:'var(--verde)', color:'#fff', border:'none',
+                        padding:'.55rem 1.5rem', borderRadius:9, fontSize:'1rem',
+                        fontWeight:700, cursor: guardando?'wait':'pointer', opacity: guardando?.7:1}}>
+          {guardando ? 'Guardando…' : `Guardar J${jornada}`}
+        </button>
       </div>
     </div>
   );
@@ -4563,6 +4761,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
   // [key, label, soloAdmin]
   const TABS_DEF = [
     ['federacion',   'Mi Federación', true],
+    ['ptsjug',       'Pts Jugadores', true],
     ['presupuestos', 'Presupuestos',  false],
     ['pujas',        'Pujas',         false],
     ['cierres',      'Cierres',       false],
@@ -4590,6 +4789,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
         ))}
       </div>
       {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
+      {subtab === 'ptsjug'        && <AdminPtsJugadores />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
       {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}

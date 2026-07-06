@@ -463,6 +463,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       alert('Tu plantilla ya tiene 15 jugadores. No puedes realizar más pujas.');
       setModalPuja(null); return;
     }
+    // Verificar que el jugador sigue libre (no fichado desde que se abrió el mercado)
+    const { data: yaFichado } = await sb.from('plantillas')
+      .select('id').eq('jugador_id', modalPuja.id).limit(1);
+    if (yaFichado?.length > 0) {
+      alert('Este jugador ya ha sido fichado por otro equipo.');
+      setModalPuja(null); cargar(); return;
+    }
     const cantidad = parseFloat(String(cantidadPuja).replace(',', '.'));
     const minimo   = modalPuja.valor_mercado || 0;
     if (isNaN(cantidad) || cantidad < minimo) {
@@ -2268,7 +2275,7 @@ function AdminPujas({ participantes, federacion }) {
     setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();
-    if (verHistorial) cargarHistorial();
+    cargarHistorial();
   };
 
   const descartarPujas = async (jugadorId) => {

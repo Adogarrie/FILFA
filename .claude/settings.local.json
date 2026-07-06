@@ -8,7 +8,12 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(python:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep -E \"credentials.json|\\\\.env$|jugadores_cache\")",
+      "Bash(git mv *)",
+      "Bash(node -e ' *)",
+      "Bash(npx --yes @babel/core /tmp/filfa_check.jsx --presets @babel/preset-react --no-babelrc -o /tmp/filfa_check.out.js)",
+      "Bash(where python *)"
     ]
   }
 }

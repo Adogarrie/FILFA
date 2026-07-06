@@ -1023,159 +1023,6 @@ function CalendarioFantasy({ participantes }) {
   );
 }
 
-// ── PUNTOS — admin: puntos por equipo + resumen por jugador ────
-function Puntos({ participantes }) {
-  const [subtab, setSubtab]   = useState('equipos');
-  const [jornada, setJornada] = useState(1);
-  const [datos, setDatos]     = useState({});   // { participante_id: pts_string }
-  const [guardando, setGuardando] = useState(false);
-  const [msg, setMsg]         = useState('');
-  const [jugadores, setJugadores] = useState([]);
-  const [ptsTot, setPtsTot]   = useState({});   // { jugador_id: total_pts }
-  const [cargandoJug, setCargandoJug] = useState(false);
-
-  useEffect(() => {
-    if (!sb) return;
-    sb.from('jugadores').select('id, nombre, equipo, posicion').order('equipo').order('posicion')
-      .then(({ data }) => setJugadores(data || []));
-  }, []);
-
-  // Cargar pts por equipo fantasy para la jornada seleccionada
-  useEffect(() => {
-    if (!sb || participantes.length === 0 || subtab !== 'equipos') return;
-    sb.from('clasificacion')
-      .select('participante_id, puntos_jornada')
-      .eq('jornada', jornada)
-      .in('participante_id', participantes.map(p => p.id))
-      .then(({ data }) => {
-        const m = {};
-        (data || []).forEach(r => { m[r.participante_id] = String(r.puntos_jornada); });
-        setDatos(m);
-      });
-  }, [jornada, participantes, subtab]);
-
-  // Cargar totales por jugador (suma de todas las jornadas)
-  useEffect(() => {
-    if (!sb || subtab !== 'jugadores' || jugadores.length === 0) return;
-    setCargandoJug(true);
-    sb.from('puntos_jugador').select('jugador_id, pts')
-      .then(({ data }) => {
-        const tot = {};
-        (data || []).forEach(r => { tot[r.jugador_id] = (tot[r.jugador_id] || 0) + Number(r.pts); });
-        setPtsTot(tot);
-        setCargandoJug(false);
-      });
-  }, [subtab, jugadores]);
-
-  const guardarEquipos = async () => {
-    if (!sb) return;
-    setGuardando(true);
-    const rows = participantes.map(p => ({
-      participante_id: p.id, jornada, puntos_jornada: Number(datos[p.id]) || 0,
-    }));
-    const { error } = await sb.from('clasificacion').upsert(rows, { onConflict: 'participante_id,jornada' });
-    setGuardando(false);
-    if (error) { alert('Error: ' + error.message); return; }
-    setMsg('Guardado.');
-    setTimeout(() => setMsg(''), 3000);
-  };
-
-  const iS = { width:80, textAlign:'right', padding:'.25rem .4rem',
-               border:'1.5px solid var(--borde)', borderRadius:7, fontSize:'.9rem', fontWeight:600 };
-
-  const ordenados = [...participantes].sort((a, b) => (Number(datos[b.id])||0) - (Number(datos[a.id])||0));
-  const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
-
-  return (
-    <div>
-      <div className="tabs">
-        <button className={`tab ${subtab==='equipos'?'active':''}`} onClick={() => setSubtab('equipos')}>Puntos por equipo fantasy</button>
-        <button className={`tab ${subtab==='jugadores'?'active':''}`} onClick={() => setSubtab('jugadores')}>Puntos por jugador (totales)</button>
-      </div>
-
-      {subtab === 'equipos' && (
-        <div>
-          <div className="card" style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap'}}>
-            <span style={{fontWeight:600}}>Jornada:</span>
-            <div style={{display:'flex', gap:'.28rem', flexWrap:'wrap'}}>
-              {Array.from({length:38}, (_, i) => i+1).map(j => (
-                <button key={j} onClick={() => { setJornada(j); setMsg(''); }}
-                        style={{padding:'.22rem .48rem', borderRadius:6, fontSize:'.75rem',
-                                border:'1.5px solid var(--borde)', cursor:'pointer',
-                                background: jornada===j?'var(--verde)':'#fff',
-                                color: jornada===j?'#fff':'var(--texto)', fontWeight: jornada===j?700:400}}>
-                  {j}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="card">
-            <h2>Puntos equipo — Jornada {jornada}</h2>
-            <table>
-              <thead><tr><th>Pos</th><th>Equipo</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
-              <tbody>
-                {ordenados.map((p, i) => (
-                  <tr key={p.id}>
-                    <td><Medalla pos={i+1} /></td>
-                    <td style={{fontWeight:600}}>{p.nombre}</td>
-                    <td style={{textAlign:'right'}}>
-                      <input type="number" min="0" value={datos[p.id] ?? ''}
-                             onChange={e => { setDatos(d => ({...d, [p.id]: e.target.value})); setMsg(''); }}
-                             placeholder="0" style={iS} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{display:'flex', gap:'.75rem', alignItems:'center', marginTop:'1rem'}}>
-              {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
-              <button onClick={guardarEquipos} disabled={guardando}
-                      style={{background:'var(--verde)', color:'#fff', border:'none',
-                              padding:'.45rem 1.3rem', borderRadius:8, fontWeight:700, cursor:'pointer',
-                              opacity: guardando?.7:1}}>
-                {guardando ? 'Guardando…' : `Guardar J${jornada}`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {subtab === 'jugadores' && (
-        <div className="card">
-          <h2>Puntos totales por jugador (todas las jornadas)</h2>
-          {cargandoJug ? <Spinner /> : (
-            equiposReales.map(equipo => {
-              const jugsEq = jugadores.filter(j => j.equipo === equipo)
-                                      .map(j => ({...j, total: ptsTot[j.id] || 0}))
-                                      .sort((a, b) => b.total - a.total);
-              return (
-                <div key={equipo} style={{marginBottom:'1.25rem'}}>
-                  <div style={{fontWeight:700, fontSize:'.85rem', color:'var(--texto2)',
-                               textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.3rem'}}>
-                    {equipo}
-                  </div>
-                  <table>
-                    <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Total pts</th></tr></thead>
-                    <tbody>
-                      {jugsEq.map(j => (
-                        <tr key={j.id}>
-                          <td style={{fontWeight:600}}>{j.nombre}</td>
-                          <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
-                          <td style={{textAlign:'right', fontWeight: j.total?700:400,
-                                      color: j.total?'var(--texto)':'var(--texto2)'}}>{j.total || '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
 function AdminPtsJugadores({ participantes }) {
@@ -2798,7 +2645,7 @@ function App() {
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
   const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Calendario',
-                       ...(isAdmin || isModerador ? ['Puntos', 'Admin'] : [])];
+                       ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
   return (
@@ -2862,9 +2709,6 @@ function App() {
         )}
         {vista === 'Calendario' && (
           <CalendarioFantasy participantes={participantes} />
-        )}
-        {vista === 'Puntos' && (isAdmin || isModerador) && (
-          <Puntos participantes={participantes} canEdit={true} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (
           <AdminPanel participantes={participantes}

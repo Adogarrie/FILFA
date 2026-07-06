@@ -583,7 +583,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     const conteo = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
     (miPlantilla || []).forEach(p => { const pos = p.jugadores?.posicion; if (pos) conteo[pos] = (conteo[pos]||0) + 1; });
 
-    const MAX_POS = { POR: 2, DEF: 5, MED: 4, DEL: 4 };
+    const MAX_POS = { POR: 1, DEF: 5, MED: 4, DEL: 4 };
     const MIN_POS = { POR: 1, DEF: 4, MED: 3, DEL: 2 };
 
     // Cuántos de cada posición se necesitan aún y cuántos se permiten añadir

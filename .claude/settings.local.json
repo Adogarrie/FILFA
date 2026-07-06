@@ -17,7 +17,9 @@
       "Skill(run)",
       "Bash(chromium-cli --help)",
       "PowerShell(Get-Command *)",
-      "Bash(pkill -f \"http.server 8731\")"
+      "Bash(pkill -f \"http.server 8731\")",
+      "Bash(cp extracted_style.css extracted_style_fixed.css)",
+      "Bash(cat)"
     ]
   }
 }

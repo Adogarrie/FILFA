@@ -46,7 +46,8 @@
 
     /* Tarjeta */
     .card { background: #fff; border-radius: 12px; border: 1px solid var(--borde);
-            padding: 1.25rem; margin-bottom: 1rem; }
+            padding: 1.25rem; margin-bottom: 1rem;
+            overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--verde); }
 
     /* Tabs */
@@ -140,6 +141,24 @@
                   color:#fff; padding:.28rem .7rem; border-radius:20px;
                   cursor:pointer; font-size:.78rem; white-space:nowrap; }
     .btn-logout:hover { background:rgba(255,255,255,.3); }
+
+    /* ── Responsive móvil ─────────────────────────────────────── */
+    @media (max-width: 640px) {
+      main { padding: 0 .6rem; margin: 1rem auto; }
+      .card { padding: 1rem .85rem; }
+      nav { padding: .5rem .75rem; }
+      nav h1 { flex-basis: 100%; font-size: 1rem; padding: .25rem 0 .5rem; }
+      .nav-selector, .nav-user {
+        flex-basis: 100%; justify-content: space-between;
+        border-left: none; margin-left: 0; padding-left: 0;
+        margin-top: .35rem; padding-top: .5rem;
+        border-top: 1px solid rgba(255,255,255,.25);
+      }
+      table { font-size: .8rem; }
+      th, td { padding: .45rem .5rem; }
+      .filtros input, .filtros select { width: 100%; min-width: 0; }
+      .login-card { padding: 2rem 1.25rem; }
+    }
   </style>
 </head>
 <body>

@@ -3152,6 +3152,122 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
   );
 }
 
+// ── SELECTOR DE FEDERACIONES ───────────────────────────────────
+
+function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccionar, onNueva, onLogout }) {
+  const [posiciones, setPosiciones] = useState({});
+  const [cargando, setCargando]     = useState(true);
+
+  useEffect(() => { cargarPos(); }, [misParticipantes]);
+
+  const cargarPos = async () => {
+    if (!sb || misParticipantes.length === 0) { setCargando(false); return; }
+    const fedIds = [...new Set(misParticipantes.map(p => p.federacion_id).filter(Boolean))];
+    const [{ data: allParts }, { data: clas }] = await Promise.all([
+      sb.from('participantes').select('id, federacion_id').in('federacion_id', fedIds),
+      sb.from('clasificacion').select('participante_id, puntos_jornada'),
+    ]);
+    const pts = {};
+    for (const r of (clas || [])) pts[r.participante_id] = (pts[r.participante_id] || 0) + (r.puntos_jornada || 0);
+    const posMap = {};
+    for (const fedId of fedIds) {
+      const ranked = (allParts || []).filter(p => p.federacion_id === fedId)
+        .map(p => ({ id: p.id, pts: pts[p.id] || 0 }))
+        .sort((a, b) => b.pts - a.pts);
+      ranked.forEach((r, i) => { posMap[r.id] = i + 1; });
+    }
+    setPosiciones(posMap);
+    setCargando(false);
+  };
+
+  const fmtV = v => v >= 1e6 ? (v/1e6).toFixed(1).replace('.',',')+'M€'
+                  : v >= 1e3 ? Math.round(v/1e3)+'K€' : v+'€';
+
+  // Admin feds sin participante propio
+  const adminSinEquipo = (adminFeds || []).filter(f => !misParticipantes.find(p => p.federacion_id === f.id));
+
+  return (
+    <div style={{minHeight:'100vh', background:'var(--fondo)', padding:'2rem 1rem'}}>
+      <div style={{maxWidth:680, margin:'0 auto'}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'2rem'}}>
+          <h1 style={{margin:0, fontSize:'1.6rem', color:'var(--texto)'}}>Mis Federaciones</h1>
+          <div style={{display:'flex', gap:'.5rem'}}>
+            <button className="btn-ok" onClick={onNueva}>+ Unirse / Crear</button>
+            <button className="btn-cancel" onClick={onLogout}>Salir</button>
+          </div>
+        </div>
+
+        {cargando ? <Spinner /> :
+         misParticipantes.length === 0 && adminSinEquipo.length === 0 ? (
+          <div style={{textAlign:'center', padding:'3rem', color:'var(--texto2)'}}>
+            <p style={{marginBottom:'1.5rem'}}>No perteneces a ninguna federación todavía.</p>
+            <button className="btn-ok" onClick={onNueva}>Unirse o crear una federación</button>
+          </div>
+        ) : (
+          <div style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
+            {misParticipantes.map(p => {
+              const fed  = p.federacion;
+              const pos  = posiciones[p.id];
+              const esAdmin = fed?.admin_user_id === authUser?.id;
+              return (
+                <div key={p.id} className="card"
+                     style={{display:'flex', alignItems:'center', gap:'1.25rem', cursor:'pointer',
+                             transition:'box-shadow .15s', padding:'1rem 1.25rem'}}
+                     onClick={() => onSeleccionar(p, fed)}>
+                  <div style={{width:52, height:52, flexShrink:0, borderRadius:10, overflow:'hidden',
+                               background:'var(--borde)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                    {p.escudo_url
+                      ? <img src={p.escudo_url} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="" />
+                      : <span style={{fontSize:'1.5rem'}}>⚽</span>}
+                  </div>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontWeight:700, fontSize:'1rem', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
+                      {fed?.nombre || 'Federación'}
+                      {esAdmin && <span style={{fontSize:'.72rem', background:'var(--acento)', color:'#fff',
+                                               borderRadius:6, padding:'.1rem .45rem'}}>Admin</span>}
+                    </div>
+                    <div style={{color:'var(--texto2)', fontSize:'.85rem', marginTop:'.15rem', overflow:'hidden',
+                                 textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                      {p.nombre}
+                    </div>
+                    <div style={{display:'flex', gap:'1rem', marginTop:'.4rem', fontSize:'.82rem', flexWrap:'wrap'}}>
+                      <span style={{color:'var(--verde)', fontWeight:700}}>{fmtV(p.presupuesto || 0)}</span>
+                      <span style={{color:'var(--texto2)'}}>
+                        {p.division_id === 1 ? 'Primera' : p.division_id === 2 ? 'Segunda' : `Div ${p.division_id}`}
+                      </span>
+                      {pos && <span style={{color: pos <= 3 ? '#d97706' : 'var(--texto2)', fontWeight: pos <= 3 ? 700 : 400}}>
+                        {pos}º clasificado
+                      </span>}
+                    </div>
+                  </div>
+                  <span style={{color:'var(--acento)', fontSize:'1.4rem', flexShrink:0}}>›</span>
+                </div>
+              );
+            })}
+            {adminSinEquipo.map(f => (
+              <div key={f.id} className="card"
+                   style={{display:'flex', alignItems:'center', gap:'1.25rem', cursor:'pointer', padding:'1rem 1.25rem'}}
+                   onClick={() => onSeleccionar(null, f)}>
+                <div style={{width:52, height:52, flexShrink:0, borderRadius:10, background:'var(--borde)',
+                             display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.5rem'}}>⚙️</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700, fontSize:'1rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
+                    {f.nombre}
+                    <span style={{fontSize:'.72rem', background:'var(--acento)', color:'#fff',
+                                  borderRadius:6, padding:'.1rem .45rem'}}>Admin</span>
+                  </div>
+                  <div style={{color:'var(--texto2)', fontSize:'.85rem', marginTop:'.15rem'}}>Sin equipo registrado</div>
+                </div>
+                <span style={{color:'var(--acento)', fontSize:'1.4rem'}}>›</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────
 
 function App() {
@@ -3159,33 +3275,69 @@ function App() {
   const [participantes, setParticipantes]   = useState([]);
   const [participanteId, setParticipanteId] = useState('');
   const [federacion, setFederacion]         = useState(null);
+  const [misParticipantes, setMisParticipantes] = useState([]);
+  const [adminFeds, setAdminFeds]           = useState([]);
+  const [verOnboarding, setVerOnboarding]   = useState(false);
 
   const [authUser, setAuthUser]       = useState(null);
   const [session, setSession]         = useState(null);
   const [sesionLista, setSesionLista] = useState(false);
 
+  const seleccionarFederacion = async (part, fed, userOverride) => {
+    const u = userOverride || authUser;
+    let esMod = false;
+    if (part?.id && part?.federacion_id) {
+      const { data: modRow } = await sb.from('moderadores').select('id')
+        .eq('federacion_id', part.federacion_id).eq('participante_id', part.id).maybeSingle();
+      esMod = !!modRow;
+    }
+    setFederacion(fed || null);
+    setSession({ email: u?.email || '', participante_id: part?.id || null, es_moderador: esMod });
+    setVerOnboarding(false);
+    setVista('Mi Plantilla');
+    if (part?.id) localStorage.setItem('filfa_part_id', part.id);
+  };
+
   const cargarPerfil = async (user) => {
     setAuthUser(user);
-    const { data: part } = await sb.from('participantes')
-      .select('id, nombre, federacion_id')
-      .eq('user_id', user.id)
-      .maybeSingle();
+    // Cargar TODOS los participantes del usuario
+    const [{ data: parts }, { data: adminFedData }] = await Promise.all([
+      sb.from('participantes')
+        .select('id, nombre, federacion_id, presupuesto, division_id, escudo_url')
+        .eq('user_id', user.id).order('created_at'),
+      sb.from('federaciones').select('*').eq('admin_user_id', user.id),
+    ]);
 
-    let fedData = null;
-    let esMod   = false;
-    if (part?.federacion_id) {
-      const [{ data: fd }, { data: modRow }] = await Promise.all([
-        sb.from('federaciones').select('*').eq('id', part.federacion_id).single(),
-        sb.from('moderadores').select('id')
-          .eq('federacion_id', part.federacion_id)
-          .eq('participante_id', part.id)
-          .maybeSingle(),
-      ]);
-      fedData = fd;
-      esMod   = !!modRow;
+    const lista = parts || [];
+    const aFeds = adminFedData || [];
+
+    // Cargar datos de las federaciones
+    const fedIds = [...new Set(lista.map(p => p.federacion_id).filter(Boolean))];
+    let feds = [];
+    if (fedIds.length > 0) {
+      const { data: fedData } = await sb.from('federaciones').select('*').in('id', fedIds);
+      feds = fedData || [];
     }
-    setFederacion(fedData);
-    setSession({ email: user.email, participante_id: part?.id || null, es_moderador: esMod });
+    const combinado = lista.map(p => ({ ...p, federacion: feds.find(f => f.id === p.federacion_id) || null }));
+
+    setMisParticipantes(combinado);
+    setAdminFeds(aFeds);
+
+    // Intentar restaurar última federación seleccionada
+    const savedId = localStorage.getItem('filfa_part_id');
+    const saved   = combinado.find(p => p.id === savedId);
+
+    if (saved) {
+      await seleccionarFederacion(saved, saved.federacion, user);
+    } else if (combinado.length === 1) {
+      await seleccionarFederacion(combinado[0], combinado[0].federacion, user);
+    } else if (combinado.length === 0 && aFeds.length === 1) {
+      await seleccionarFederacion(null, aFeds[0], user);
+    } else {
+      // Múltiples federaciones o ninguna → mostrar selector
+      setSession({ email: user.email, participante_id: null, es_moderador: false });
+      setFederacion(null);
+    }
   };
 
   useEffect(() => {
@@ -3224,11 +3376,33 @@ function App() {
   const handleLogout = async () => {
     await sb.auth.signOut();
     setSession(null); setAuthUser(null); setFederacion(null);
+    setMisParticipantes([]); setAdminFeds([]); setVerOnboarding(false);
+    localStorage.removeItem('filfa_part_id');
   };
 
   if (sb && !sesionLista) return <Spinner />;
   if (!session) return <Login onLogin={handleLogin} />;
-  if (!session.participante_id) {
+
+  // Sin federación activa → selector o onboarding
+  if (!federacion || verOnboarding) {
+    const tieneAlgo = misParticipantes.length > 0 || adminFeds.length > 0;
+    if (!tieneAlgo || verOnboarding) {
+      return <FederacionOnboarding user={authUser}
+                                   onDone={() => { cargarPerfil(authUser); setVerOnboarding(false); }}
+                                   onLogout={handleLogout} />;
+    }
+    return <SelectorFederacion
+      misParticipantes={misParticipantes}
+      adminFeds={adminFeds}
+      authUser={authUser}
+      onSeleccionar={(part, fed) => seleccionarFederacion(part, fed)}
+      onNueva={() => setVerOnboarding(true)}
+      onLogout={handleLogout} />;
+  }
+
+  // Admin sin equipo propio en esta federación → onboarding
+  const isAdminCheck = federacion?.admin_user_id === authUser?.id;
+  if (!session.participante_id && !isAdminCheck) {
     return <FederacionOnboarding user={authUser}
                                  onDone={() => cargarPerfil(authUser)}
                                  onLogout={handleLogout} />;
@@ -3268,6 +3442,13 @@ function App() {
 
         <div className="nav-user">
           <span>{isAdmin ? '⚙ Admin' : isModerador ? '⚙ Mod' : session.email}</span>
+          {(misParticipantes.length > 1 || adminFeds.length > 0) && (
+            <button className="btn-logout"
+                    onClick={() => { setFederacion(null); setSession(s => ({...s, participante_id: null})); }}
+                    title="Cambiar de federación">
+              Federaciones
+            </button>
+          )}
           <button className="btn-logout" onClick={handleLogout}>Salir</button>
         </div>
       </nav>

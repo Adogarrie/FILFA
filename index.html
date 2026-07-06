@@ -413,7 +413,6 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     const s = new Set();
     for (const p of todasPlantillas) {
       if (p.jugadores?.posicion !== 'POR') continue;
-      if (p.participante_id === participanteId) continue; // la mía propia no cuenta
       const fantasia = participantes.find(x => x.id === p.participante_id);
       if (fantasia?.division_id === miDiv) s.add(p.jugadores.equipo);
     }

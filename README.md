@@ -9,7 +9,7 @@ App para gestionar tu liga fantasy de LaLiga: mercado de jugadores, plantillas, 
 | Fase | Descripción | Estado |
 |---|---|---|
 | 1 | Scraper de jugadores y valores (Transfermarkt) | ✅ Funcionando |
-| 2 | Puntuaciones por jornada | ⏸ Manual via CSV (automático pendiente) |
+| 2 | Puntuaciones por jornada | ✅ Manual desde la app (Admin → Pts Jugadores) |
 | 3 | App web (clasificación, plantillas, mercado) | ✅ Funcionando |
 
 ---
@@ -29,11 +29,18 @@ App para gestionar tu liga fantasy de LaLiga: mercado de jugadores, plantillas, 
 FILFA/
 ├── index.html                 # App web (abrir en el navegador)
 ├── transfermarkt_scraper.py   # Fase 1: jugadores y valores de mercado
-├── importar_puntos.py         # Fase 2: importar puntos desde CSV manual
+├── cargar_jugadores.py        # Sube el resultado del scraper a Supabase
+├── actualizar_temporada.py    # Refresca valores/activos en cada ventana de mercado
 ├── supabase_schema.sql        # Base de datos (ejecutar en Supabase)
 ├── requirements.txt           # Dependencias Python
-└── .env.example               # Plantilla de configuración
+├── .env.example               # Plantilla de configuración
+└── legacy/                    # Scripts y SQL de features descontinuadas (ver legacy/README.md)
 ```
+
+Los puntos por jornada se introducen ahora directamente desde la app, en
+**Admin → Pts Jugadores** (puntos por jugador → recalcula la clasificación de
+cada equipo según su alineación de titulares). El antiguo flujo por CSV
+(`importar_puntos.py`) ha quedado obsoleto y se movió a `legacy/python/`.
 
 ---
 
@@ -153,41 +160,21 @@ El script tarda 2-3 minutos. Al terminar, la hoja tendrá todos los jugadores de
 
 ---
 
-## Paso 5 — Fase 2: Puntuaciones por jornada (manual)
+## Paso 5 — Fase 2: Puntuaciones por jornada
 
-La API de LaLiga Fantasy requiere autenticación y no es pública. Los puntos se introducen manualmente mediante un CSV tras cada jornada.
+La API de LaLiga Fantasy requiere autenticación y no es pública, así que los
+puntos se introducen a mano tras cada jornada — pero directamente en la app,
+sin CSV ni scripts:
 
-### Formato del CSV
+1. Entra como admin (o moderador, si el admin activó ese permiso en
+   Admin → Mercado) y ve a **Admin → Pts Jugadores**.
+2. Elige la jornada y escribe los puntos de cada jugador (los datos de
+   [fantasy.laliga.com](https://fantasy.laliga.com) → Estadísticas →
+   Jugadores son la fuente más rápida).
+3. Pulsa **Guardar**. La app recalcula automáticamente los puntos de cada
+   equipo fantasy a partir de los titulares que cada uno alineó esa jornada.
 
-Crea un archivo `puntos_j15.csv` (o el nombre que quieras):
-
-```csv
-Nombre,Puntos
-Bellingham,18
-Vinicius,22
-Lewandowski,15
-Ter Stegen,10
-```
-
-### Cómo obtener los datos rápido
-
-En [fantasy.laliga.com](https://fantasy.laliga.com):
-1. Ve a **Estadísticas → Jugadores**
-2. Filtra por la jornada
-3. Selecciona toda la tabla (Ctrl+A) y copia (Ctrl+C)
-4. Pega en Excel o Google Sheets y exporta como CSV
-
-### Ejecutar la importación
-
-```bash
-# Importar y guardar en Supabase
-python importar_puntos.py --jornada 15 --csv puntos_j15.csv
-
-# Solo comprobar el CSV sin guardar
-python importar_puntos.py --jornada 15 --csv puntos_j15.csv --prueba
-```
-
-> **Cuándo ejecutarlo:** el lunes o martes tras cada jornada, cuando los puntos estén definitivos.
+> **Cuándo hacerlo:** el lunes o martes tras cada jornada, cuando los puntos estén definitivos.
 
 ---
 
@@ -242,13 +229,13 @@ Una vez dados de alta, aparecerán en el selector de participante de la app.
 
 ```
 Lunes/Martes tras la jornada
-  └─> Exportar puntos desde fantasy.laliga.com a CSV
-        └─> python importar_puntos.py --jornada N --csv puntos_jN.csv
-              └─> La app actualiza la clasificación automáticamente
+  └─> Admin → Pts Jugadores en la app: puntos de cada jugador
+        └─> La app recalcula la clasificación de cada equipo automáticamente
 
 Ventana de mercado (enero/verano)
   └─> python transfermarkt_scraper.py
-        └─> Valores de mercado actualizados en Google Sheets y BD
+        └─> python cargar_jugadores.py / actualizar_temporada.py
+              └─> Valores de mercado actualizados en la BD
 ```
 
 ---

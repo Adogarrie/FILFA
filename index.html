@@ -183,8 +183,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [modalVenta, setModalVenta] = useState(null);
 
   const cargar = () => {
-    if (!participanteId) { setJugadores([]); return; }
-    if (!sb) { setJugadores('demo'); return; }
+    if (!participanteId || !sb) { setJugadores([]); return; }
     sb.from('plantillas')
       .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado)')
       .eq('participante_id', participanteId)
@@ -233,7 +232,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   // Admin actuando sobre equipo ajeno → poderes de admin; sobre su propio equipo → presidente
   const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
 
-  const lista = jugadores === 'demo' ? DEMO_PLANTILLA : jugadores.map(p => ({
+  const lista = jugadores.map(p => ({
     id:         p.id,
     jugador_id: p.jugador_id,
     nombre:     p.jugadores?.nombre || '',
@@ -243,10 +242,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     compra:     p.precio_compra || 0,
   }));
 
-  // Usa presupuesto de BD; fallback calculado solo en demo
-  const presupuestoDisplay = jugadores === 'demo'
-    ? 100_000_000 - lista.reduce((s, j) => s + (j.compra || 0), 0)
-    : (presupuesto ?? null);
+  const presupuestoDisplay = presupuesto ?? null;
 
   return (
     <div>
@@ -363,7 +359,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   const [resultadoSorteo, setResultadoSorteo] = useState(null);
 
   const cargar = async () => {
-    if (!sb) { setJugadores(DEMO_MERCADO); setTodasPlantillas([]); return; }
+    if (!sb) { setJugadores([]); setTodasPlantillas([]); return; }
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }] = await Promise.all([
       sb.from('jugadores').select('*').eq('activo', true),
@@ -1930,11 +1926,6 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
   );
 }
 
-// (componente legacy Onboarding conservado como alias — no se usa)
-function Onboarding({ user, onDone, onLogout }) {
-  return <FederacionOnboarding user={user} onDone={onDone} onLogout={onLogout} />;
-}
-
 // ── ALINEACIÓN ─────────────────────────────────────────────────
 function Alineacion({ participanteId, jornadaActual, federacionId }) {
   const [jornada, setJornada]     = useState(jornadaActual || 1);
@@ -2598,7 +2589,6 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
   const [ventas,   setVentas]   = useState(!!federacion?.ventas_habilitadas);
   const [sorteo,   setSorteo]   = useState(!!federacion?.sorteo_habilitado);
   const [ptsMod,   setPtsMod]   = useState(!!federacion?.puntos_mod_habilitado);
-  const [ofertas,  setOfertas]  = useState(!!federacion?.ofertas_habilitadas);
   const [msg, setMsg]           = useState('');
 
   const cambiar = async (campo, valor, setEstado) => {
@@ -2654,12 +2644,6 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
         desc="Permite a los moderadores acceder a la pestaña 'Pts Jugadores' en Admin."
         activo={ptsMod}
         onChange={v => cambiar('puntos_mod_habilitado', v, setPtsMod)}
-      />
-      <Opcion
-        label="Ofertas entre equipos"
-        desc="Permite a los equipos hacer ofertas económicas por jugadores de otros equipos de la federación."
-        activo={ofertas}
-        onChange={v => cambiar('ofertas_habilitadas', v, setOfertas)}
       />
     </div>
   );

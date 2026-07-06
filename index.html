@@ -1178,10 +1178,10 @@ function Puntos({ participantes }) {
 }
 
 // ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
-function AdminPtsJugadores() {
+function AdminPtsJugadores({ participantes }) {
   const [jornada, setJornada] = useState(1);
   const [jugadores, setJugadores] = useState([]);
-  const [ptsJug, setPtsJug]   = useState({});   // { jugador_id: pts_string }
+  const [ptsJug, setPtsJug]   = useState({});
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]         = useState('');
 
@@ -1204,6 +1204,8 @@ function AdminPtsJugadores() {
   const guardar = async () => {
     if (!sb) return;
     setGuardando(true);
+
+    // 1. Guardar pts por jugador
     const rows = Object.entries(ptsJug)
       .filter(([, v]) => v !== '' && v !== undefined)
       .map(([jid, v]) => ({ jugador_id: jid, jornada, pts: Number(v) || 0 }));
@@ -1211,9 +1213,34 @@ function AdminPtsJugadores() {
       const { error } = await sb.from('puntos_jugador').upsert(rows, { onConflict: 'jugador_id,jornada' });
       if (error) { alert('Error: ' + error.message); setGuardando(false); return; }
     }
+
+    // 2. Recalcular totales de cada equipo fantasy desde sus titulares
+    if (participantes && participantes.length > 0) {
+      const partIds = participantes.map(p => p.id);
+      const { data: alis } = await sb.from('alineaciones')
+        .select('participante_id, jugador_id')
+        .eq('jornada', jornada)
+        .eq('es_titular', true)
+        .in('participante_id', partIds);
+
+      const ptsMapa = Object.fromEntries(rows.map(r => [r.jugador_id, r.pts]));
+      const alisPorEquipo = {};
+      (alis || []).forEach(a => {
+        if (!alisPorEquipo[a.participante_id]) alisPorEquipo[a.participante_id] = [];
+        alisPorEquipo[a.participante_id].push(a.jugador_id);
+      });
+
+      const clasRows = participantes.map(p => ({
+        participante_id: p.id,
+        jornada,
+        puntos_jornada: (alisPorEquipo[p.id] || []).reduce((s, jid) => s + (ptsMapa[jid] ?? 0), 0),
+      }));
+      await sb.from('clasificacion').upsert(clasRows, { onConflict: 'participante_id,jornada' });
+    }
+
     setGuardando(false);
-    setMsg(`Jornada ${jornada} guardada.`);
-    setTimeout(() => setMsg(''), 3000);
+    setMsg(`J${jornada} guardada y totales de equipo actualizados.`);
+    setTimeout(() => setMsg(''), 4000);
   };
 
   const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
@@ -2677,7 +2704,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
         ))}
       </div>
       {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
-      {subtab === 'ptsjug'        && <AdminPtsJugadores />}
+      {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
       {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}

@@ -1940,7 +1940,8 @@ function Alineacion({ participanteId, jornadaActual }) {
   const [jornada, setJornada]     = useState(jornadaActual || 1);
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
-  const [estado, setEstado]       = useState({});  // id → 'T'|'S'|'F'
+  const [estado, setEstado]       = useState({});      // id → 'T'|'S'|'F'
+  const [ordenSup, setOrdenSup]   = useState({});      // id → 1|2|3|4
   const [cargandoAli, setCargandoAli] = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
@@ -1962,7 +1963,7 @@ function Alineacion({ participanteId, jornadaActual }) {
     const cargar = async () => {
       setCargandoAli(true);
       const [{ data: ali }, { data: cierreRow }] = await Promise.all([
-        sb.from('alineaciones').select('jugador_id, es_titular')
+        sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente')
           .eq('participante_id', participanteId).eq('jornada', jornada),
         sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle(),
       ]);
@@ -1982,17 +1983,22 @@ function Alineacion({ participanteId, jornadaActual }) {
           .limit(1);
         if (ref?.length > 0) {
           const { data: ultima } = await sb.from('alineaciones')
-            .select('jugador_id, es_titular')
+            .select('jugador_id, es_titular, orden_suplente')
             .eq('participante_id', participanteId)
             .eq('jornada', ref[0].jornada);
           fuente = ultima || [];
         }
       }
 
-      for (const a of fuente)
-        if (Object.prototype.hasOwnProperty.call(e, a.jugador_id))
+      const ord = {};
+      for (const a of fuente) {
+        if (Object.prototype.hasOwnProperty.call(e, a.jugador_id)) {
           e[a.jugador_id] = a.es_titular ? 'T' : 'S';
+          if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
+        }
+      }
       setEstado(e);
+      setOrdenSup(ord);
       setCargandoAli(false);
     };
     cargar();
@@ -2013,10 +2019,36 @@ function Alineacion({ participanteId, jornadaActual }) {
 
   const setJugadorEstado = (id, op) => {
     if (bloqueado) return;
-    if (op === 'T' && nT >= 11 && estado[id] !== 'T') { alert('Ya tienes 11 titulares.'); return; }
-    if (op === 'S' && nS >= 4  && estado[id] !== 'S') { alert('Máximo 4 suplentes.'); return; }
-    setEstado(prev => ({ ...prev, [id]: op }));
+    const prev = estado[id];
+    if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
+    if (op === 'S' && nS >= 4  && prev !== 'S') { alert('Máximo 4 suplentes.'); return; }
+    setEstado(e => ({ ...e, [id]: op }));
+    if (op === 'S' && prev !== 'S') {
+      // Asignar siguiente posición disponible
+      setOrdenSup(o => {
+        const max = Object.values(o).reduce((m, v) => Math.max(m, v), 0);
+        return { ...o, [id]: max + 1 };
+      });
+    } else if (op !== 'S' && prev === 'S') {
+      // Eliminar y compactar
+      setOrdenSup(o => {
+        const quitado = o[id];
+        const nuevo = { ...o };
+        delete nuevo[id];
+        for (const k of Object.keys(nuevo)) if (nuevo[k] > quitado) nuevo[k]--;
+        return nuevo;
+      });
+    }
     setMsg('');
+  };
+
+  const moverSuplente = (id, dir) => { // dir: -1 sube, +1 baja
+    const pos = ordenSup[id];
+    const nueva = pos + dir;
+    if (nueva < 1 || nueva > nS) return;
+    const otro = Object.entries(ordenSup).find(([, v]) => v === nueva)?.[0];
+    if (!otro) return;
+    setOrdenSup(o => ({ ...o, [id]: nueva, [otro]: pos }));
   };
 
   const guardar = async () => {
@@ -2031,6 +2063,7 @@ function Alineacion({ participanteId, jornadaActual }) {
       .map(([jugadorId, v]) => ({
         participante_id: participanteId, jornada,
         jugador_id: jugadorId, es_titular: v === 'T',
+        orden_suplente: v === 'S' ? (ordenSup[jugadorId] ?? null) : null,
       }));
     const { error: errDel } = await sb.from('alineaciones').delete()
       .eq('participante_id', participanteId).eq('jornada', jornada);
@@ -2048,11 +2081,14 @@ function Alineacion({ participanteId, jornadaActual }) {
 
   const incompleta = nT > 0 && nT !== 11;
 
-  const seciones = [
+  const secciones = [
     { key: 'T', label: `Titulares (${nT}/11)`, color: '#198754' },
     { key: 'S', label: `Suplentes (${nS}/4)`,  color: '#fd7e14' },
     { key: 'F', label: 'Sin convocar',           color: 'var(--texto2)' },
   ];
+  const supsOrdenados = (plantilla || [])
+    .filter(j => estado[j.id] === 'S')
+    .sort((a, b) => (ordenSup[a.id] ?? 99) - (ordenSup[b.id] ?? 99));
 
   return (
     <div className="card">
@@ -2098,8 +2134,10 @@ function Alineacion({ participanteId, jornadaActual }) {
               <div className="empty">Tu plantilla está vacía. Ficha jugadores primero.</div>
             )}
 
-            {seciones.map(({ key, label, color }) => {
-              const jugs = plantilla.filter(j => estado[j.id] === key);
+            {secciones.map(({ key, label, color }) => {
+              const jugs = key === 'S'
+                ? supsOrdenados
+                : plantilla.filter(j => estado[j.id] === key);
               if (!jugs.length) return null;
               return (
                 <div key={key} style={{marginBottom:'1rem'}}>
@@ -2111,11 +2149,32 @@ function Alineacion({ participanteId, jornadaActual }) {
                     <tbody>
                       {jugs.map(j => (
                         <tr key={j.id}>
+                          {key === 'S' && (
+                            <td style={{width:28, textAlign:'center', fontWeight:700, fontSize:'.85rem', color}}>
+                              {ordenSup[j.id]}°
+                            </td>
+                          )}
                           <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
                           <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
                           <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
                           {!bloqueado && (
                             <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                              {key === 'S' && (
+                                <>
+                                  <button onClick={() => moverSuplente(j.id, -1)}
+                                          disabled={ordenSup[j.id] === 1}
+                                          style={{marginLeft:3, padding:'.2rem .45rem', fontSize:'.75rem',
+                                                  border:'1.5px solid var(--borde)', borderRadius:6,
+                                                  cursor: ordenSup[j.id] === 1 ? 'default' : 'pointer',
+                                                  background:'#fff', opacity: ordenSup[j.id] === 1 ? .35 : 1}}>▲</button>
+                                  <button onClick={() => moverSuplente(j.id, +1)}
+                                          disabled={ordenSup[j.id] === nS}
+                                          style={{marginLeft:2, padding:'.2rem .45rem', fontSize:'.75rem',
+                                                  border:'1.5px solid var(--borde)', borderRadius:6,
+                                                  cursor: ordenSup[j.id] === nS ? 'default' : 'pointer',
+                                                  background:'#fff', opacity: ordenSup[j.id] === nS ? .35 : 1}}>▼</button>
+                                </>
+                              )}
                               {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
                                 <button key={op} onClick={() => setJugadorEstado(j.id, op)}
                                         style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',

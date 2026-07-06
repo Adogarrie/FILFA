@@ -1936,7 +1936,7 @@ function Onboarding({ user, onDone, onLogout }) {
 }
 
 // ── ALINEACIÓN ─────────────────────────────────────────────────
-function Alineacion({ participanteId, jornadaActual }) {
+function Alineacion({ participanteId, jornadaActual, federacionId }) {
   const [jornada, setJornada]     = useState(jornadaActual || 1);
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
@@ -1965,7 +1965,8 @@ function Alineacion({ participanteId, jornadaActual }) {
       const [{ data: ali }, { data: cierreRow }] = await Promise.all([
         sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente')
           .eq('participante_id', participanteId).eq('jornada', jornada),
-        sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle(),
+        sb.from('jornadas_cierre').select('cierre')
+          .eq('federacion_id', federacionId).eq('jornada', jornada).maybeSingle(),
       ]);
       setCierre(cierreRow?.cierre || null);
 
@@ -2532,21 +2533,26 @@ function AdminCierres({ federacion }) {
   const [cierre, setCierre]   = useState('');
   const [msg, setMsg]         = useState('');
 
+  const fedId = federacion?.id;
+
   const cargar = () => {
-    if (!sb) return;
-    sb.from('jornadas_cierre').select('cierre').eq('jornada', jornada).maybeSingle()
+    if (!sb || !fedId) return;
+    sb.from('jornadas_cierre').select('cierre')
+      .eq('federacion_id', fedId).eq('jornada', jornada).maybeSingle()
       .then(({ data }) => setCierre(data?.cierre ? data.cierre.slice(0, 16) : ''));
   };
-  useEffect(cargar, [jornada]);
+  useEffect(cargar, [jornada, fedId]);
 
   const guardar = async () => {
-    if (!sb) return;
+    if (!sb || !fedId) return;
     if (!cierre) {
-      await sb.from('jornadas_cierre').delete().eq('jornada', jornada);
+      await sb.from('jornadas_cierre').delete()
+        .eq('federacion_id', fedId).eq('jornada', jornada);
       setMsg('Cierre eliminado');
     } else {
       await sb.from('jornadas_cierre')
-        .upsert({ jornada, cierre: new Date(cierre).toISOString() }, { onConflict: 'jornada' });
+        .upsert({ federacion_id: fedId, jornada, cierre: new Date(cierre).toISOString() },
+                { onConflict: 'federacion_id,jornada' });
       setMsg('Cierre guardado');
     }
     setTimeout(() => setMsg(''), 3000);
@@ -3562,7 +3568,8 @@ function App() {
         )}
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}
-                      jornadaActual={federacion?.jornada_actual || 1} />
+                      jornadaActual={federacion?.jornada_actual || 1}
+                      federacionId={federacion?.id} />
         )}
         {vista === 'Equipos' && (
           <Equipos participantes={participantes} miParticipanteId={participanteId}

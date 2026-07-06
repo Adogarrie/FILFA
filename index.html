@@ -181,6 +181,8 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [jugadores, setJugadores] = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
   const [modalVenta, setModalVenta] = useState(null);
+  const [modalVentaTodo, setModalVentaTodo] = useState(false);
+  const [vendiendoTodo, setVendiendoTodo] = useState(false);
 
   const cargar = () => {
     if (!participanteId || !sb) { setJugadores([]); return; }
@@ -227,6 +229,34 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     setModalVenta(null);
   };
 
+  const confirmarVentaTodo = async () => {
+    if (!isAdmin || lista.length === 0) return;
+    setVendiendoTodo(true);
+    const total = lista.reduce((s, j) => s + (j.valor || 0), 0);
+    const { error } = await sb.from('plantillas')
+      .delete()
+      .eq('participante_id', participanteId);
+    if (error) {
+      alert('Error al vender la plantilla: ' + error.message);
+      setVendiendoTodo(false);
+      return;
+    }
+    const nuevo = (presupuesto || 0) + total;
+    const { error: errPres } = await sb.from('participantes')
+      .update({ presupuesto: nuevo })
+      .eq('id', participanteId);
+    if (errPres) console.error('Error actualizando presupuesto:', errPres);
+    else setPresupuesto(nuevo);
+    publicar(
+      federacion?.id,
+      'venta',
+      `${participanteNombre} vende toda su plantilla al mercado (${lista.length} jugadores) por ${fmt(total)} (acción del administrador)`
+    );
+    setVendiendoTodo(false);
+    setModalVentaTodo(false);
+    cargar();
+  };
+
   if (jugadores === null) return <Spinner />;
 
   // Admin actuando sobre equipo ajeno → poderes de admin; sobre su propio equipo → presidente
@@ -259,7 +289,17 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         </div>
       </div>
       <div className="card">
-        <h2>Plantilla de {participanteNombre || '—'}</h2>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
+          <h2 style={{margin:0}}>Plantilla de {participanteNombre || '—'}</h2>
+          {isAdmin && lista.length > 0 && (
+            <button onClick={() => setModalVentaTodo(true)}
+                    style={{background:'#d93025', color:'#fff', border:'none',
+                            padding:'.4rem .9rem', borderRadius:'8px',
+                            cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+              Vender toda la plantilla
+            </button>
+          )}
+        </div>
         {!isActingAsAdmin && !federacion?.ventas_habilitadas && lista.length > 0 && (
           <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
                        borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
@@ -331,6 +371,30 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                   style={{background:'#d93025'}}
                   onClick={confirmarVenta}>
                   Confirmar venta
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {modalVentaTodo && (
+          <div className="overlay" onClick={() => !vendiendoTodo && setModalVentaTodo(false)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h3>Vender toda la plantilla</h3>
+              <p>
+                Se venderán al mercado los <strong>{lista.length}</strong> jugadores de{' '}
+                <strong>{participanteNombre}</strong>, devolviendo un total de{' '}
+                <strong>{fmt(lista.reduce((s, j) => s + (j.valor || 0), 0))}</strong> a su presupuesto.<br/>
+                Esta acción no se puede deshacer.
+              </p>
+              <div className="modal-btns">
+                <button className="btn-cancel" disabled={vendiendoTodo}
+                        onClick={() => setModalVentaTodo(false)}>
+                  Cancelar
+                </button>
+                <button className="btn-ok" style={{background:'#d93025'}}
+                        disabled={vendiendoTodo} onClick={confirmarVentaTodo}>
+                  {vendiendoTodo ? 'Vendiendo…' : 'Confirmar venta total'}
                 </button>
               </div>
             </div>

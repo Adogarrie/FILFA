@@ -13,7 +13,11 @@
       "Bash(git mv *)",
       "Bash(node -e ' *)",
       "Bash(npx --yes @babel/core /tmp/filfa_check.jsx --presets @babel/preset-react --no-babelrc -o /tmp/filfa_check.out.js)",
-      "Bash(where python *)"
+      "Bash(where python *)",
+      "Skill(run)",
+      "Bash(chromium-cli --help)",
+      "PowerShell(Get-Command *)",
+      "Bash(pkill -f \"http.server 8731\")"
     ]
   }
 }

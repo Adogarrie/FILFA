@@ -4564,11 +4564,9 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
   const TABS_DEF = [
     ['federacion',   'Mi Federación', true],
     ['presupuestos', 'Presupuestos',  false],
-    ['calendario',   'Calendario',    false],
     ['pujas',        'Pujas',         false],
     ['cierres',      'Cierres',       false],
     ['mercado',      'Mercado',       true],
-    ['competiciones','Competiciones', false],
   ];
   const tabs    = TABS_DEF.filter(([,, soloAdmin]) => !isModerador || !soloAdmin);
   const primera = tabs[0]?.[0] || 'competiciones';
@@ -4593,11 +4591,9 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       </div>
       {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
-      {subtab === 'calendario'    && <AdminCalendario participantes={participantes} federacionId={federacion?.id} />}
       {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
       {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}
       {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
-      {subtab === 'competiciones' && <AdminCompeticiones federacion={federacion} participantes={participantes} />}
     </div>
   );
 }
@@ -4686,8 +4682,8 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Calendario', 'Competiciones', 'Puntos',
-                       ...(isAdmin || isModerador ? ['Admin'] : [])];
+  const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Calendario',
+                       ...(isAdmin || isModerador ? ['Puntos', 'Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
   return (
@@ -4756,8 +4752,8 @@ function App() {
         {vista === 'Calendario' && (
           <CalendarioFantasy participantes={participantes} />
         )}
-        {vista === 'Puntos' && (
-          <Puntos participantes={participantes} canEdit={isAdmin || isModerador} />
+        {vista === 'Puntos' && (isAdmin || isModerador) && (
+          <Puntos participantes={participantes} canEdit={true} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (
           <AdminPanel participantes={participantes}

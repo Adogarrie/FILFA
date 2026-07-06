@@ -2800,15 +2800,28 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
   const [plantilla, setPlantilla] = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
   const [clas, setClas]           = useState([]);
-  const [editPrecios, setEditPrecios] = useState({});  // plantillaRowId → precio string
+  const [editPrecios, setEditPrecios] = useState({});
   const [jornadaEdit, setJornadaEdit] = useState(1);
   const [ptsEdit, setPtsEdit]     = useState('');
   const [penTipo, setPenTipo]     = useState('presupuesto');
   const [penCantidad, setPenCantidad] = useState('');
   const [penMotivo, setPenMotivo] = useState('');
   const [msg, setMsg]             = useState('');
+  const [divisiones, setDivisiones] = useState([]);
 
   const flash = txt => { setMsg(txt); setTimeout(() => setMsg(''), 3000); };
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from('divisiones').select('id, nombre').order('id')
+      .then(({ data }) => setDivisiones(data || []));
+  }, []);
+
+  const cambiarDivision = async (nuevoId) => {
+    await sb.from('participantes').update({ division_id: Number(nuevoId) }).eq('id', selId);
+    onParticipantesChange?.();
+    flash('División actualizada');
+  };
 
   const cargar = async () => {
     if (!sb || !selId) return;
@@ -2906,6 +2919,16 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
                   style={{padding:'.35rem .6rem', borderRadius:8, border:'1.5px solid var(--borde)'}}>
             {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
+          {divisiones.length > 0 && (
+            <div style={{display:'flex', gap:'.4rem', alignItems:'center'}}>
+              <label style={{fontWeight:600, fontSize:'.9rem'}}>División:</label>
+              <select value={equipo?.division_id || ''}
+                      onChange={e => cambiarDivision(e.target.value)}
+                      style={{padding:'.3rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)', fontSize:'.85rem'}}>
+                {divisiones.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+              </select>
+            </div>
+          )}
           {presupuesto !== null && (
             <span style={{fontSize:'.9rem', color:'var(--verde)', fontWeight:700}}>
               Presupuesto: {fmt(presupuesto)}

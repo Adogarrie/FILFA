@@ -2788,10 +2788,19 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
                 <td style={{textAlign:'right'}}>
                   <button disabled={eliminando === p.id}
                           onClick={async () => {
-                            if (!confirm(`¿Eliminar "${p.nombre}"?`)) return;
+                            if (!confirm(`¿Eliminar "${p.nombre}"? Se borrará también su plantilla, alineaciones, pujas e historial de puntos.`)) return;
                             setEliminando(p.id);
-                            await sb.from('participantes').delete().eq('id', p.id);
+                            const { error, count } = await sb.from('participantes')
+                              .delete({ count: 'exact' }).eq('id', p.id);
                             setEliminando(null);
+                            if (error) {
+                              alert('Error al eliminar: ' + error.message);
+                              return;
+                            }
+                            if (!count) {
+                              alert('No se ha podido eliminar el equipo. Puede que falten permisos (RLS) en Supabase — revisa que se haya ejecutado supabase_admin_liga.sql.');
+                              return;
+                            }
                             onParticipantesChange?.();
                           }}
                           style={{background:'none', border:'none', color:'#dc3545',

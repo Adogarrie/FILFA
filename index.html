@@ -207,7 +207,6 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     if (error) {
       alert('Error al vender: ' + error.message);
     } else {
-      // Devolver valor actual de mercado al presupuesto
       const valorVenta = modalVenta.valor || 0;
       const nuevo = (presupuesto || 0) + valorVenta;
       const { error: errPres } = await sb.from('participantes')
@@ -215,6 +214,15 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         .eq('id', participanteId);
       if (errPres) console.error('Error actualizando presupuesto:', errPres);
       else setPresupuesto(nuevo);
+      // Tablón
+      const nombreJug = modalVenta.posicion === 'POR'
+        ? `Portería ${modalVenta.equipo}`
+        : `${modalVenta.nombre} (${modalVenta.equipo})`;
+      publicar(
+        federacion?.id,
+        'venta',
+        `${participanteNombre} vende a ${nombreJug} al mercado por ${fmt(valorVenta)}`
+      );
       cargar();
     }
     setModalVenta(null);
@@ -2815,8 +2823,17 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
     if (!confirm(`¿Liberar a ${nombreJug}?`)) return;
     const row = plantilla.find(r => r.id === rowId);
     const valor = row?.precio_compra || 0;
+    const posicion = row?.jugadores?.posicion || '';
+    const equipoReal = row?.jugadores?.equipo || '';
     await sb.from('plantillas').delete().eq('id', rowId);
     await sb.from('participantes').update({ presupuesto: (presupuesto || 0) + valor }).eq('id', selId);
+    // Tablón
+    const textoJug = posicion === 'POR' ? `Portería ${equipoReal}` : `${nombreJug} (${equipoReal})`;
+    publicar(
+      federacion?.id,
+      'venta',
+      `${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)} (acción del administrador)`
+    );
     onParticipantesChange?.();
     cargar();
     flash('Jugador liberado');

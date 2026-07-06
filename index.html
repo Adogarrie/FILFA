@@ -405,7 +405,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     return s;
   }, [todasPlantillas, participanteId]);
 
-  const miPlantillaLlena = misJugadoresIds.size >= 15;
+  const miPlantillaLlena = misJugadoresIds.size >= 14;
 
   // Equipos LaLiga cuya portería ya está cogida por alguien de MI división
   const porteríasBloqueadas = useMemo(() => {
@@ -458,8 +458,8 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     // Verificar límite de plantilla (doble check contra la BD por si el estado local está desactualizado)
     const { data: plantActual } = await sb.from('plantillas')
       .select('id').eq('participante_id', participanteId);
-    if ((plantActual?.length || 0) >= 15) {
-      alert('Tu plantilla ya tiene 15 jugadores. No puedes realizar más pujas.');
+    if ((plantActual?.length || 0) >= 14) {
+      alert('Tu plantilla ya tiene 14 jugadores. No puedes realizar más pujas.');
       setModalPuja(null); return;
     }
     // Verificar que el jugador sigue libre (no fichado desde que se abrió el mercado)
@@ -513,9 +513,9 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion)').eq('participante_id', participanteId);
 
-    // Límite 15 jugadores
-    if ((miPlantilla?.length || 0) >= 15) {
-      alert('Tu equipo ya tiene 15 jugadores (máximo permitido).');
+    // Límite 14 jugadores
+    if ((miPlantilla?.length || 0) >= 14) {
+      alert('Tu equipo ya tiene 14 jugadores (máximo permitido).');
       setModal(null);
       return;
     }
@@ -572,10 +572,11 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion)').eq('participante_id', participanteId);
-    const huecos = 15 - (miPlantilla?.length || 0);
+    const TARGET = 14;
+    const huecos = TARGET - (miPlantilla?.length || 0);
 
     if (huecos <= 0) {
-      alert('Tu plantilla ya tiene 15 jugadores.');
+      alert('Tu plantilla ya tiene 14 jugadores.');
       setSorteando(false); setModalSorteo(false); return;
     }
 
@@ -586,7 +587,6 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     const MAX_POS = { POR: 1, DEF: 5, MED: 4, DEL: 4 };
     const MIN_POS = { POR: 1, DEF: 4, MED: 3, DEL: 2 };
 
-    // Cuántos de cada posición se necesitan aún y cuántos se permiten añadir
     const necesarios = {};
     const cupoMax    = {};
     for (const pos of ['POR','DEF','MED','DEL']) {
@@ -594,7 +594,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       cupoMax[pos]    = Math.max(0, MAX_POS[pos] - (conteo[pos]||0));
     }
 
-    // Pool por posición (jugadores libres, mezclados aleatoriamente)
+    // Pool por posición mezclado aleatoriamente
     const shuffle = arr => {
       const a = [...arr];
       for (let i = a.length - 1; i > 0; i--) {
@@ -608,42 +608,77 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       poolPOS[pos] = shuffle(lista.filter(j => j.posicion === pos));
     }
 
-    const elegidos = [];
+    // Coste mínimo para rellenar `n` huecos más dado el estado actual de cupos y pools
+    // Devuelve Infinity si no hay suficientes jugadores disponibles
+    const minCostToFill = (n, ceActual) => {
+      if (n <= 0) return 0;
+      const candidatos = [];
+      for (const pos of ['POR','DEF','MED','DEL']) {
+        const cap = cupoMax[pos] - (ceActual[pos] || 0);
+        if (cap <= 0) continue;
+        [...poolPOS[pos]]
+          .sort((a, b) => (a.valor_mercado || 0) - (b.valor_mercado || 0))
+          .slice(0, cap)
+          .forEach(j => candidatos.push(j.valor_mercado || 0));
+      }
+      candidatos.sort((a, b) => a - b);
+      if (candidatos.length < n) return Infinity;
+      return candidatos.slice(0, n).reduce((s, v) => s + v, 0);
+    };
+
+    const elegidos   = [];
     const conteoEleg = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
 
-    const pickOne = (pos) => {
-      const idx = poolPOS[pos].findIndex(j => (j.valor_mercado || 0) <= presupuestoRestante);
+    // Intenta fichar un jugador de `pos` garantizando que queden fondos para los siguientes huecos
+    const pickOne = (pos, slotsAfter) => {
+      const idx = poolPOS[pos].findIndex(j => {
+        const cost = j.valor_mercado || 0;
+        if (cost > presupuestoRestante) return false;
+        const ce2 = { ...conteoEleg, [pos]: (conteoEleg[pos] || 0) + 1 };
+        return presupuestoRestante - cost >= minCostToFill(slotsAfter, ce2);
+      });
       if (idx === -1) return false;
       const j = poolPOS[pos].splice(idx, 1)[0];
       elegidos.push(j);
       presupuestoRestante -= j.valor_mercado || 0;
-      conteoEleg[pos]++;
+      conteoEleg[pos] = (conteoEleg[pos] || 0) + 1;
       return true;
     };
 
-    // Fase 1: cubrir mínimos obligatorios
+    // Fase 1: cubrir mínimos
     for (const pos of ['POR','DEF','MED','DEL']) {
       for (let i = 0; i < necesarios[pos]; i++) {
-        if (!pickOne(pos)) {
-          alert(`No hay ${pos} disponibles dentro de tu presupuesto para cumplir el mínimo requerido.`);
+        const slotsAfter = huecos - elegidos.length - 1;
+        if (!pickOne(pos, slotsAfter)) {
+          alert(`Presupuesto insuficiente para completar la plantilla de ${TARGET} jugadores (falta ${pos}).`);
           setSorteando(false); setModalSorteo(false); return;
         }
       }
     }
 
-    // Fase 2: rellenar huecos restantes de forma aleatoria (dentro de cupos)
+    // Fase 2: rellenar huecos restantes de forma aleatoria con look-ahead de presupuesto
     const restantes = huecos - elegidos.length;
     for (let i = 0; i < restantes; i++) {
-      const posDisp = ['POR','DEF','MED','DEL'].filter(pos =>
-        conteoEleg[pos] < cupoMax[pos] && poolPOS[pos].some(j => (j.valor_mercado||0) <= presupuestoRestante)
-      );
-      if (posDisp.length === 0) break;
+      const slotsAfter = restantes - i - 1;
+      const posDisp = ['POR','DEF','MED','DEL'].filter(pos => {
+        if (conteoEleg[pos] >= cupoMax[pos]) return false;
+        return poolPOS[pos].some(j => {
+          const cost = j.valor_mercado || 0;
+          if (cost > presupuestoRestante) return false;
+          const ce2 = { ...conteoEleg, [pos]: (conteoEleg[pos] || 0) + 1 };
+          return presupuestoRestante - cost >= minCostToFill(slotsAfter, ce2);
+        });
+      });
+      if (posDisp.length === 0) {
+        alert(`Presupuesto insuficiente para completar la plantilla de ${TARGET} jugadores.`);
+        setSorteando(false); setModalSorteo(false); return;
+      }
       const pos = posDisp[Math.floor(Math.random() * posDisp.length)];
-      pickOne(pos);
+      pickOne(pos, slotsAfter);
     }
 
-    if (elegidos.length === 0) {
-      alert('No se pudo fichar a ningún jugador libre con el presupuesto disponible.');
+    if (elegidos.length < huecos) {
+      alert(`No fue posible completar la plantilla de ${TARGET} jugadores con el presupuesto disponible.`);
       setSorteando(false); setModalSorteo(false); return;
     }
 
@@ -674,7 +709,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   // Admin viendo equipo ajeno → poderes de admin; su propio equipo → actúa como presidente
   const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
 
-  const huecosRestantes = 15 - misJugadoresIds.size;
+  const huecosRestantes = 14 - misJugadoresIds.size;
 
   return (
     <div>
@@ -2231,8 +2266,8 @@ function AdminPujas({ participantes, federacion }) {
     // 2. Límite 15
     const { data: plant } = await sb.from('plantillas')
       .select('id').eq('participante_id', ganador.participante_id);
-    if ((plant?.length || 0) >= 15) {
-      alert(`${ganador.equipo} ya tiene 15 jugadores.`);
+    if ((plant?.length || 0) >= 14) {
+      alert(`${ganador.equipo} ya tiene 14 jugadores.`);
       setResolviendo(null); return;
     }
     // 3. División (porteros)

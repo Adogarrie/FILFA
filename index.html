@@ -2166,6 +2166,7 @@ function AdminPresupuestos({ participantes }) {
 function AdminPujas({ participantes, federacion }) {
   const [pujas, setPujas]           = useState(null);
   const [resolviendo, setResolviendo] = useState(null);
+  const [resueltos, setResueltos]   = useState(new Set()); // jugador_ids ya adjudicados esta sesión
   const [historial, setHistorial]   = useState([]);
   const [verHistorial, setVerHistorial] = useState(false);
 
@@ -2203,13 +2204,14 @@ function AdminPujas({ participantes, federacion }) {
     const m = {};
     for (const p of pujas) {
       const jid = p.jugador_id;
+      if (resueltos.has(jid)) continue; // ya adjudicado en esta sesión, no mostrar
       if (!m[jid]) m[jid] = { jugador: p.jugadores, bids: [] };
       m[jid].bids.push({ ...p, equipo: p.participantes?.nombre });
     }
     for (const jid in m) m[jid].bids.sort((a,b) => b.cantidad - a.cantidad);
     return Object.values(m).sort((a,b) =>
       (POS_ORDEN[a.jugador?.posicion]||9) - (POS_ORDEN[b.jugador?.posicion]||9));
-  }, [pujas]);
+  }, [pujas, resueltos]);
 
   const resolver = async (jugadorId, ganador) => {
     setResolviendo(jugadorId);
@@ -2261,9 +2263,9 @@ function AdminPujas({ participantes, federacion }) {
     const jugTablon = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
     const nomJug = jugTablon?.posicion === 'POR' ? `Portería ${jugTablon?.equipo}` : jugTablon?.nombre;
     publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
-    // Eliminar las pujas de este jugador del estado local inmediatamente
-    // para que el botón no vuelva a quedar activo antes de que cargar() termine
-    setPujas(prev => (prev || []).filter(p => p.jugador_id !== jugadorId));
+    // Marcar como resuelto en estado local: desaparece inmediatamente del listado
+    // independientemente de si cargar() trae datos desactualizados del servidor
+    setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();
   };

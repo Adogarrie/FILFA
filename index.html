@@ -1470,7 +1470,8 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
 // Función utilitaria global para registrar acciones
 async function publicar(federacionId, tipo, texto, actorNombre) {
   if (!sb || !federacionId) return;
-  await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null });
+  const { error } = await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null });
+  if (error) console.error('[Tablón] Error al publicar:', error.message, { tipo, texto });
 }
 
 function Tablon({ federacionId }) {

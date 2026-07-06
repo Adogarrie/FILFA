@@ -1998,9 +1998,18 @@ function Alineacion({ participanteId, jornadaActual }) {
     cargar();
   }, [participanteId, jornada, plantilla]);
 
+  const FORMACIONES = [[5,4,1],[5,3,2],[5,2,3],[4,5,1],[4,4,2],[4,3,3],[4,2,4],[3,5,2],[3,6,1],[3,4,3],[3,3,4]];
+
   const bloqueado = !!(cierre && new Date() > new Date(cierre));
   const nT = Object.values(estado).filter(v => v === 'T').length;
   const nS = Object.values(estado).filter(v => v === 'S').length;
+
+  const titPos = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
+  for (const j of (plantilla || [])) if (estado[j.id] === 'T') titPos[j.posicion]++;
+  const formActual  = [titPos.DEF, titPos.MED, titPos.DEL];
+  const formStr     = formActual.join('-');
+  const formCompleta = nT === 11 && titPos.POR === 1;
+  const formValida  = formCompleta && FORMACIONES.some(f => f[0]===formActual[0] && f[1]===formActual[1] && f[2]===formActual[2]);
 
   const setJugadorEstado = (id, op) => {
     if (bloqueado) return;
@@ -2012,6 +2021,10 @@ function Alineacion({ participanteId, jornadaActual }) {
 
   const guardar = async () => {
     if (bloqueado || !sb) return;
+    if (nT === 11 && !formValida) {
+      alert(`Formación ${formStr} no válida.\nFormaciones permitidas: ${FORMACIONES.map(f => f.join('-')).join(', ')}`);
+      return;
+    }
     setGuardando(true);
     const registros = Object.entries(estado)
       .filter(([, v]) => v === 'T' || v === 'S')
@@ -2033,7 +2046,7 @@ function Alineacion({ participanteId, jornadaActual }) {
 
   if (plantilla === null) return <Spinner />;
 
-  const incompleta = nT > 0 && nT !== 11; // aviso, no bloqueo
+  const incompleta = nT > 0 && nT !== 11;
 
   const seciones = [
     { key: 'T', label: `Titulares (${nT}/11)`, color: '#198754' },
@@ -2059,11 +2072,22 @@ function Alineacion({ participanteId, jornadaActual }) {
               </span>
             : <span style={{color:'#198754', fontWeight:600}}>🟢 Sin hora de cierre</span>}
         </div>
-        <div style={{marginLeft:'auto', fontSize:'.9rem'}}>
-          <strong style={{color: nT===11 ? '#198754' : '#dc3545'}}>{nT}/11</strong>
-          <span style={{color:'var(--texto2)'}}> tit &nbsp;·&nbsp; </span>
-          <strong>{nS}/4</strong>
-          <span style={{color:'var(--texto2)'}}> sup</span>
+        <div style={{marginLeft:'auto', fontSize:'.9rem', display:'flex', gap:'.75rem', alignItems:'center', flexWrap:'wrap'}}>
+          {nT > 0 && (
+            <span style={{fontWeight:700, padding:'.2rem .55rem', borderRadius:7,
+                          background: formValida ? '#d1e7dd' : formCompleta ? '#f8d7da' : '#fff3cd',
+                          color:      formValida ? '#0a3622' : formCompleta ? '#842029' : '#664d03'}}>
+              {titPos.POR > 0 ? `1-${formStr}` : formStr}
+              {formCompleta && !formValida && ' ✗'}
+              {formValida && ' ✓'}
+            </span>
+          )}
+          <span>
+            <strong style={{color: nT===11 ? '#198754' : 'inherit'}}>{nT}/11</strong>
+            <span style={{color:'var(--texto2)'}}> tit &nbsp;·&nbsp; </span>
+            <strong>{nS}/4</strong>
+            <span style={{color:'var(--texto2)'}}> sup</span>
+          </span>
         </div>
       </div>
 
@@ -2120,6 +2144,11 @@ function Alineacion({ participanteId, jornadaActual }) {
                 {incompleta && (
                   <span style={{color:'#856404', fontSize:'.85rem'}}>
                     ⚠ Faltan titulares ({nT}/11)
+                  </span>
+                )}
+                {formCompleta && !formValida && (
+                  <span style={{color:'#dc3545', fontSize:'.85rem'}}>
+                    ✗ Formación {formStr} no válida
                   </span>
                 )}
                 {msg && <span style={{color:'#198754', fontSize:'.9rem'}}>{msg}</span>}

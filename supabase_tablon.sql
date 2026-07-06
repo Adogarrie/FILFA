@@ -22,7 +22,7 @@ create index if not exists anuncios_fed_idx on anuncios(federacion_id, created_a
 
 alter table anuncios enable row level security;
 
--- Lectura pública dentro de la federación (autenticados)
+drop policy if exists "Ver anuncios de la federación" on anuncios;
 create policy "Ver anuncios de la federación"
   on anuncios for select
   using (
@@ -33,7 +33,7 @@ create policy "Ver anuncios de la federación"
     )
   );
 
--- Escritura: admin o moderador
+drop policy if exists "Insertar anuncios" on anuncios;
 create policy "Insertar anuncios"
   on anuncios for insert
   with check (

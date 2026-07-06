@@ -2268,6 +2268,7 @@ function AdminPujas({ participantes, federacion }) {
     setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();
+    if (verHistorial) cargarHistorial();
   };
 
   const descartarPujas = async (jugadorId) => {

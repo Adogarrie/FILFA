@@ -2249,8 +2249,8 @@ function AdminPujas({ participantes, federacion }) {
     await sb.from('pujas').update({ resuelta: true, ganadora: false }).eq('jugador_id', jugadorId);
     await sb.from('pujas').update({ ganadora: true }).eq('id', ganador.id);
     // 7. Tablón
-    const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
-    const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    const jugTablon = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
+    const nomJug = jugTablon?.posicion === 'POR' ? `Portería ${jugTablon?.equipo}` : jugTablon?.nombre;
     publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
     setResolviendo(null);
     cargar();

@@ -2261,6 +2261,9 @@ function AdminPujas({ participantes, federacion }) {
     const jugTablon = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
     const nomJug = jugTablon?.posicion === 'POR' ? `Portería ${jugTablon?.equipo}` : jugTablon?.nombre;
     publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
+    // Eliminar las pujas de este jugador del estado local inmediatamente
+    // para que el botón no vuelva a quedar activo antes de que cargar() termine
+    setPujas(prev => (prev || []).filter(p => p.jugador_id !== jugadorId));
     setResolviendo(null);
     cargar();
   };

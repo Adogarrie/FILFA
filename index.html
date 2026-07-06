@@ -559,37 +559,78 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion)').eq('participante_id', participanteId);
     const huecos = 15 - (miPlantilla?.length || 0);
-    let yaTengoPortero = (miPlantilla || []).some(p => p.jugadores?.posicion === 'POR');
 
     if (huecos <= 0) {
       alert('Tu plantilla ya tiene 15 jugadores.');
-      setSorteando(false); setModalSorteo(false);
-      return;
+      setSorteando(false); setModalSorteo(false); return;
     }
 
-    // Pool elegible: misma lista filtrada que ve el usuario (sin mis jugadores,
-    // sin no-porteros ya ocupados, sin porterías bloqueadas de mi división)
-    const pool = [...lista];
-    for (let i = pool.length - 1; i > 0; i--) {
-      const r = Math.floor(Math.random() * (i + 1));
-      [pool[i], pool[r]] = [pool[r], pool[i]];
+    // Composición actual del equipo
+    const conteo = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
+    (miPlantilla || []).forEach(p => { const pos = p.jugadores?.posicion; if (pos) conteo[pos] = (conteo[pos]||0) + 1; });
+
+    const MAX_POS = { POR: 2, DEF: 5, MED: 4, DEL: 4 };
+    const MIN_POS = { POR: 1, DEF: 4, MED: 3, DEL: 2 };
+
+    // Cuántos de cada posición se necesitan aún y cuántos se permiten añadir
+    const necesarios = {};
+    const cupoMax    = {};
+    for (const pos of ['POR','DEF','MED','DEL']) {
+      necesarios[pos] = Math.max(0, MIN_POS[pos] - (conteo[pos]||0));
+      cupoMax[pos]    = Math.max(0, MAX_POS[pos] - (conteo[pos]||0));
+    }
+
+    // Pool por posición (jugadores libres, mezclados aleatoriamente)
+    const shuffle = arr => {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const r = Math.floor(Math.random() * (i + 1));
+        [a[i], a[r]] = [a[r], a[i]];
+      }
+      return a;
+    };
+    const poolPOS = {};
+    for (const pos of ['POR','DEF','MED','DEL']) {
+      poolPOS[pos] = shuffle(lista.filter(j => j.posicion === pos));
     }
 
     const elegidos = [];
-    for (const j of pool) {
-      if (elegidos.length >= huecos) break;
-      if (j.posicion === 'POR' && yaTengoPortero) continue;
-      const coste = j.valor_mercado || 0;
-      if (coste > presupuestoRestante) continue;
+    const conteoEleg = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
+
+    const pickOne = (pos) => {
+      const idx = poolPOS[pos].findIndex(j => (j.valor_mercado || 0) <= presupuestoRestante);
+      if (idx === -1) return false;
+      const j = poolPOS[pos].splice(idx, 1)[0];
       elegidos.push(j);
-      presupuestoRestante -= coste;
-      if (j.posicion === 'POR') yaTengoPortero = true;
+      presupuestoRestante -= j.valor_mercado || 0;
+      conteoEleg[pos]++;
+      return true;
+    };
+
+    // Fase 1: cubrir mínimos obligatorios
+    for (const pos of ['POR','DEF','MED','DEL']) {
+      for (let i = 0; i < necesarios[pos]; i++) {
+        if (!pickOne(pos)) {
+          alert(`No hay ${pos} disponibles dentro de tu presupuesto para cumplir el mínimo requerido.`);
+          setSorteando(false); setModalSorteo(false); return;
+        }
+      }
+    }
+
+    // Fase 2: rellenar huecos restantes de forma aleatoria (dentro de cupos)
+    const restantes = huecos - elegidos.length;
+    for (let i = 0; i < restantes; i++) {
+      const posDisp = ['POR','DEF','MED','DEL'].filter(pos =>
+        conteoEleg[pos] < cupoMax[pos] && poolPOS[pos].some(j => (j.valor_mercado||0) <= presupuestoRestante)
+      );
+      if (posDisp.length === 0) break;
+      const pos = posDisp[Math.floor(Math.random() * posDisp.length)];
+      pickOne(pos);
     }
 
     if (elegidos.length === 0) {
       alert('No se pudo fichar a ningún jugador libre con el presupuesto disponible.');
-      setSorteando(false); setModalSorteo(false);
-      return;
+      setSorteando(false); setModalSorteo(false); return;
     }
 
     const { error } = await sb.from('plantillas').insert(
@@ -603,11 +644,10 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       alert('Error al fichar: ' + error.message);
     } else {
       const gastado = elegidos.reduce((s, j) => s + (j.valor_mercado || 0), 0);
-      const { error: errPres } = await sb.from('participantes')
-        .update({ presupuesto: presupuestoRestante })
-        .eq('id', participanteId);
-      if (errPres) console.error('Error actualizando presupuesto:', errPres);
+      await sb.from('participantes').update({ presupuesto: presupuestoRestante }).eq('id', participanteId);
       setResultadoSorteo({ jugadores: elegidos, gastado });
+      const miEquipo = participantes.find(p => p.id === participanteId);
+      publicar(federacion?.id, 'sorteo', `${miEquipo?.nombre || 'Un equipo'} ha rellenado su plantilla por sorteo (${elegidos.length} jugadores, ${fmt(gastado)})`);
       onFichaje && onFichaje();
       cargar();
     }
@@ -1025,7 +1065,7 @@ function CalendarioFantasy({ participantes }) {
 
 
 // ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
-function AdminPtsJugadores({ participantes }) {
+function AdminPtsJugadores({ participantes, federacion }) {
   const [jornada, setJornada] = useState(1);
   const [jugadores, setJugadores] = useState([]);
   const [ptsJug, setPtsJug]   = useState({});
@@ -1086,6 +1126,7 @@ function AdminPtsJugadores({ participantes }) {
     }
 
     setGuardando(false);
+    publicar(federacion?.id, 'puntos', `Puntos de jornada ${jornada} introducidos por el administrador`);
     setMsg(`J${jornada} guardada y totales de equipo actualizados.`);
     setTimeout(() => setMsg(''), 4000);
   };
@@ -1153,12 +1194,15 @@ function AdminPtsJugadores({ participantes }) {
 }
 
 // ── EQUIPOS ────────────────────────────────────────────────────
-function Equipos({ participantes, miParticipanteId, jornadaActual }) {
+function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onParticipantesChange }) {
   const [equipoId, setEquipoId]       = useState('');
   const [jugadores, setJugadores]     = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
   const [aliJornada, setAliJornada]   = useState(jornadaActual || 1);
-  const [alineacion, setAlineacion]   = useState(null); // null = cargando
+  const [alineacion, setAlineacion]   = useState(null);
+  const [editModal, setEditModal]     = useState(false);
+  const [editForm, setEditForm]       = useState({});
+  const [editMsg, setEditMsg]         = useState('');
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -1206,6 +1250,24 @@ function Equipos({ participantes, miParticipanteId, jornadaActual }) {
   }, [equipoId, aliJornada]);
 
   const equipo = participantes.find(p => p.id === equipoId);
+
+  const abrirEditar = () => {
+    setEditForm({ nombre: equipo?.nombre || '', estadio: equipo?.estadio || '', entrenador: equipo?.entrenador || '', escudo_url: equipo?.escudo_url || '' });
+    setEditMsg('');
+    setEditModal(true);
+  };
+
+  const guardarPerfil = async () => {
+    if (!sb || !equipoId) return;
+    const { data, error } = await sb.from('participantes')
+      .update({ nombre: editForm.nombre.trim(), estadio: editForm.estadio.trim(), entrenador: editForm.entrenador.trim(), escudo_url: editForm.escudo_url.trim() })
+      .eq('id', equipoId).select().single();
+    if (error) { setEditMsg('Error: ' + error.message); return; }
+    onParticipantesChange && onParticipantesChange();
+    setEditMsg('Guardado');
+    setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
+  };
+
   const lista = (jugadores || []).map(p => ({
     nombre:   p.jugadores?.nombre || '',
     equipo:   p.jugadores?.equipo || '',
@@ -1240,7 +1302,7 @@ function Equipos({ participantes, miParticipanteId, jornadaActual }) {
                  style={{width:72, height:72, borderRadius:10, objectFit:'cover',
                          border:'1.5px solid var(--borde)', flexShrink:0}} />
           )}
-          <div style={{flex:1, display:'flex', gap:'2rem', flexWrap:'wrap'}}>
+          <div style={{flex:1, display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'flex-end'}}>
             <div>
               <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
               <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
@@ -1263,6 +1325,39 @@ function Equipos({ participantes, miParticipanteId, jornadaActual }) {
                 <div style={{fontSize:'1rem', fontWeight:600}}>{equipo.entrenador}</div>
               </div>
             )}
+            {(isAdmin || equipoId === miParticipanteId) && (
+              <button onClick={abrirEditar}
+                      style={{marginLeft:'auto', padding:'.4rem .9rem', fontSize:'.82rem',
+                              borderRadius:8, border:'1.5px solid var(--borde)',
+                              background:'var(--gris)', cursor:'pointer', fontWeight:600}}>
+                Editar perfil
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {editModal && (
+        <div className="overlay" onClick={() => setEditModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Editar perfil del equipo</h3>
+            {['nombre','estadio','entrenador'].map(campo => (
+              <div key={campo} className="campo">
+                <label style={{textTransform:'capitalize'}}>{campo}</label>
+                <input value={editForm[campo] || ''}
+                       onChange={e => setEditForm(f => ({...f, [campo]: e.target.value}))} />
+              </div>
+            ))}
+            <div className="campo">
+              <label>URL del escudo</label>
+              <input placeholder="https://..." value={editForm.escudo_url || ''}
+                     onChange={e => setEditForm(f => ({...f, escudo_url: e.target.value}))} />
+            </div>
+            {editMsg && <div style={{color: editMsg.startsWith('Error') ? '#dc3545' : '#198754', fontSize:'.85rem', marginBottom:'.5rem'}}>{editMsg}</div>}
+            <div style={{display:'flex', gap:'.75rem', marginTop:'.5rem'}}>
+              <button className="btn-cancel" onClick={() => setEditModal(false)}>Cancelar</button>
+              <button className="btn-ok" onClick={guardarPerfil}>Guardar</button>
+            </div>
           </div>
         </div>
       )}
@@ -1359,6 +1454,82 @@ function Equipos({ participantes, miParticipanteId, jornadaActual }) {
             </>
         }
       </div>
+    </div>
+  );
+}
+
+// ── TABLÓN DE ANUNCIOS ─────────────────────────────────────────
+// Función utilitaria global para registrar acciones
+async function publicar(federacionId, tipo, texto, actorNombre) {
+  if (!sb || !federacionId) return;
+  await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null });
+}
+
+function Tablon({ federacionId }) {
+  const [anuncios, setAnuncios] = useState(null);
+  const [pagina, setPagina]    = useState(0);
+  const POR_PAG = 20;
+
+  const cargar = async () => {
+    if (!sb || !federacionId) return;
+    const { data } = await sb.from('anuncios')
+      .select('id, tipo, texto, actor_nombre, created_at')
+      .eq('federacion_id', federacionId)
+      .order('created_at', { ascending: false })
+      .range(pagina * POR_PAG, (pagina + 1) * POR_PAG - 1);
+    setAnuncios(prev => pagina === 0 ? (data || []) : [...(prev || []), ...(data || [])]);
+  };
+
+  useEffect(() => { setPagina(0); setAnuncios(null); }, [federacionId]);
+  useEffect(() => { cargar(); }, [federacionId, pagina]);
+
+  const ICONOS = { fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋', puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰', admin: '⚙️' };
+
+  const fmtFecha = ts => {
+    const d = new Date(ts);
+    return d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }) + ' ' +
+           d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <div className="card">
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem'}}>
+        <h2 style={{margin:0}}>Tablón de anuncios</h2>
+        <button onClick={() => { setPagina(0); setAnuncios(null); }}
+                style={{padding:'.3rem .8rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                        background:'#fff', cursor:'pointer', fontSize:'.85rem'}}>
+          Actualizar
+        </button>
+      </div>
+      {anuncios === null ? <Spinner /> : anuncios.length === 0
+        ? <div className="empty">Sin actividad todavía.</div>
+        : <>
+            <div style={{display:'flex', flexDirection:'column', gap:'.6rem'}}>
+              {anuncios.map(a => (
+                <div key={a.id} style={{display:'flex', gap:'.75rem', alignItems:'flex-start',
+                                        padding:'.65rem .9rem', background:'var(--gris)',
+                                        borderRadius:10, fontSize:'.88rem'}}>
+                  <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:500}}>{a.texto}</div>
+                    {a.actor_nombre && (
+                      <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>por {a.actor_nombre}</div>
+                    )}
+                  </div>
+                  <div style={{fontSize:'.75rem', color:'var(--texto2)', flexShrink:0, whiteSpace:'nowrap'}}>
+                    {fmtFecha(a.created_at)}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setPagina(p => p + 1)}
+                    style={{marginTop:'.9rem', width:'100%', padding:'.5rem',
+                            borderRadius:8, border:'1.5px solid var(--borde)',
+                            background:'#fff', cursor:'pointer', fontSize:'.85rem'}}>
+              Cargar más
+            </button>
+          </>
+      }
     </div>
   );
 }
@@ -1983,9 +2154,11 @@ function AdminPresupuestos({ participantes }) {
 }
 
 // ── ADMIN — PUJAS ──────────────────────────────────────────────
-function AdminPujas({ participantes }) {
-  const [pujas, setPujas]       = useState(null);
-  const [resolviendo, setResolviendo] = useState(null); // jugador_id en proceso
+function AdminPujas({ participantes, federacion }) {
+  const [pujas, setPujas]           = useState(null);
+  const [resolviendo, setResolviendo] = useState(null);
+  const [historial, setHistorial]   = useState([]);
+  const [verHistorial, setVerHistorial] = useState(false);
 
   const cargar = () => {
     if (!sb) return;
@@ -1998,6 +2171,21 @@ function AdminPujas({ participantes }) {
       .order('cantidad', { ascending: false })
       .then(({ data }) => setPujas(data || []));
   };
+
+  const cargarHistorial = () => {
+    if (!sb) return;
+    const partIds = participantes.map(p => p.id);
+    if (!partIds.length) { setHistorial([]); return; }
+    sb.from('pujas')
+      .select('id, participante_id, cantidad, ganadora, created_at, jugadores(nombre, equipo, posicion), participantes(nombre)')
+      .eq('resuelta', true)
+      .eq('ganadora', true)
+      .in('participante_id', partIds)
+      .order('created_at', { ascending: false })
+      .limit(50)
+      .then(({ data }) => setHistorial(data || []));
+  };
+
   useEffect(cargar, []);
 
   // Agrupar por jugador, bids ordenadas de mayor a menor
@@ -2060,6 +2248,10 @@ function AdminPujas({ participantes }) {
     // 6. Marcar todas las pujas de este jugador como resueltas
     await sb.from('pujas').update({ resuelta: true, ganadora: false }).eq('jugador_id', jugadorId);
     await sb.from('pujas').update({ ganadora: true }).eq('id', ganador.id);
+    // 7. Tablón
+    const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
+    const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
     setResolviendo(null);
     cargar();
   };
@@ -2073,13 +2265,55 @@ function AdminPujas({ participantes }) {
 
   return (
     <div className="card">
-      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem'}}>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem', flexWrap:'wrap', gap:'.5rem'}}>
         <h2 style={{margin:0}}>Pujas pendientes</h2>
-        <button onClick={cargar} style={{padding:'.3rem .8rem', borderRadius:6,
-                border:'1.5px solid var(--borde)', background:'#fff', cursor:'pointer', fontSize:'.85rem'}}>
-          Actualizar
-        </button>
+        <div style={{display:'flex', gap:'.5rem'}}>
+          <button onClick={cargar} style={{padding:'.3rem .8rem', borderRadius:6,
+                  border:'1.5px solid var(--borde)', background:'#fff', cursor:'pointer', fontSize:'.85rem'}}>
+            Actualizar
+          </button>
+          <button onClick={() => { setVerHistorial(v => !v); if (!verHistorial) cargarHistorial(); }}
+                  style={{padding:'.3rem .8rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                          background: verHistorial ? 'var(--verde)' : '#fff', color: verHistorial ? '#fff' : 'inherit',
+                          cursor:'pointer', fontSize:'.85rem'}}>
+            {verHistorial ? 'Ocultar historial' : 'Ver historial'}
+          </button>
+        </div>
       </div>
+
+      {verHistorial && (
+        <div style={{marginBottom:'1.5rem'}}>
+          <h3 style={{fontSize:'1rem', marginBottom:'.75rem'}}>Historial de pujas adjudicadas</h3>
+          {historial.length === 0
+            ? <div className="empty">Sin pujas resueltas aún.</div>
+            : <table style={{width:'100%', fontSize:'.85rem'}}>
+                <thead>
+                  <tr>
+                    <th style={{textAlign:'left'}}>Jugador</th>
+                    <th style={{textAlign:'left'}}>Equipo adjudicado</th>
+                    <th style={{textAlign:'right'}}>Cantidad</th>
+                    <th style={{textAlign:'left', color:'var(--texto2)'}}>Fecha</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historial.map(p => (
+                    <tr key={p.id}>
+                      <td style={{fontWeight:600}}>
+                        <span className={`badge ${p.jugadores?.posicion}`} style={{marginRight:6}}>{p.jugadores?.posicion}</span>
+                        {p.jugadores?.posicion === 'POR' ? `Portería ${p.jugadores?.equipo}` : p.jugadores?.nombre}
+                      </td>
+                      <td>{p.participantes?.nombre}</td>
+                      <td style={{textAlign:'right', fontWeight:700, color:'var(--verde)'}}>{fmt(p.cantidad)}</td>
+                      <td style={{color:'var(--texto2)', fontSize:'.78rem'}}>{new Date(p.created_at).toLocaleDateString('es-ES')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+          }
+          <hr style={{margin:'1rem 0', borderColor:'var(--borde)'}} />
+        </div>
+      )}
+
 
       {porJugador.length === 0 && (
         <div className="empty">No hay pujas pendientes.</div>
@@ -2206,9 +2440,11 @@ function AdminCierres({ federacion }) {
 
 // ── ADMIN — MERCADO (ventas + sorteo) ─────────────────────────
 function AdminMercado({ federacion, onFederacionUpdate }) {
-  const [ventas,  setVentas]  = useState(!!federacion?.ventas_habilitadas);
-  const [sorteo,  setSorteo]  = useState(!!federacion?.sorteo_habilitado);
-  const [msg, setMsg]         = useState('');
+  const [ventas,   setVentas]   = useState(!!federacion?.ventas_habilitadas);
+  const [sorteo,   setSorteo]   = useState(!!federacion?.sorteo_habilitado);
+  const [ptsMod,   setPtsMod]   = useState(!!federacion?.puntos_mod_habilitado);
+  const [ofertas,  setOfertas]  = useState(!!federacion?.ofertas_habilitadas);
+  const [msg, setMsg]           = useState('');
 
   const cambiar = async (campo, valor, setEstado) => {
     if (!sb || !federacion) return;
@@ -2257,6 +2493,18 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
         desc="Permite a cada equipo rellenar su plantilla con jugadores libres elegidos al azar, pagando su valor de mercado."
         activo={sorteo}
         onChange={v => cambiar('sorteo_habilitado', v, setSorteo)}
+      />
+      <Opcion
+        label="Moderadores pueden introducir puntos"
+        desc="Permite a los moderadores acceder a la pestaña 'Pts Jugadores' en Admin."
+        activo={ptsMod}
+        onChange={v => cambiar('puntos_mod_habilitado', v, setPtsMod)}
+      />
+      <Opcion
+        label="Ofertas entre equipos"
+        desc="Permite a los equipos hacer ofertas económicas por jugadores de otros equipos de la federación."
+        activo={ofertas}
+        onChange={v => cambiar('ofertas_habilitadas', v, setOfertas)}
       />
     </div>
   );
@@ -2519,17 +2767,267 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
 }
 
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
+// ── ADMIN EQUIPOS — editar plantilla, pts y penalizaciones ─────
+function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
+  const [selId, setSelId]         = useState(participantes[0]?.id || '');
+  const [subtab, setSubtab]       = useState('plantilla');
+  const [plantilla, setPlantilla] = useState(null);
+  const [presupuesto, setPresupuesto] = useState(null);
+  const [clas, setClas]           = useState([]);
+  const [editPrecios, setEditPrecios] = useState({});  // plantillaRowId → precio string
+  const [jornadaEdit, setJornadaEdit] = useState(1);
+  const [ptsEdit, setPtsEdit]     = useState('');
+  const [penTipo, setPenTipo]     = useState('presupuesto');
+  const [penCantidad, setPenCantidad] = useState('');
+  const [penMotivo, setPenMotivo] = useState('');
+  const [msg, setMsg]             = useState('');
+
+  const flash = txt => { setMsg(txt); setTimeout(() => setMsg(''), 3000); };
+
+  const cargar = async () => {
+    if (!sb || !selId) return;
+    setPlantilla(null);
+    const [{ data: pl }, { data: pd }, { data: cl }] = await Promise.all([
+      sb.from('plantillas').select('id, precio_compra, jugadores(id, nombre, equipo, posicion, valor_mercado)').eq('participante_id', selId).order('jugadores(posicion)'),
+      sb.from('participantes').select('presupuesto').eq('id', selId).single(),
+      sb.from('clasificacion').select('jornada, puntos_jornada').eq('participante_id', selId).order('jornada'),
+    ]);
+    setPlantilla(pl || []);
+    setPresupuesto(pd?.presupuesto ?? null);
+    setClas(cl || []);
+    const precios = {};
+    (pl || []).forEach(r => { precios[r.id] = String(r.precio_compra || 0); });
+    setEditPrecios(precios);
+  };
+
+  useEffect(() => { cargar(); }, [selId]);
+
+  // Guardar precio de compra de todos los jugadores
+  const guardarPrecios = async () => {
+    for (const [rowId, val] of Object.entries(editPrecios)) {
+      await sb.from('plantillas').update({ precio_compra: Number(val) || 0 }).eq('id', rowId);
+    }
+    flash('Precios guardados');
+  };
+
+  // Liberar jugador (eliminar de plantilla)
+  const liberarJugador = async (rowId, nombreJug) => {
+    if (!confirm(`¿Liberar a ${nombreJug}?`)) return;
+    const row = plantilla.find(r => r.id === rowId);
+    const valor = row?.precio_compra || 0;
+    await sb.from('plantillas').delete().eq('id', rowId);
+    await sb.from('participantes').update({ presupuesto: (presupuesto || 0) + valor }).eq('id', selId);
+    onParticipantesChange?.();
+    cargar();
+    flash('Jugador liberado');
+  };
+
+  // Modificar puntos de una jornada
+  const guardarPts = async () => {
+    if (ptsEdit === '') return;
+    const pts = Number(ptsEdit);
+    await sb.from('clasificacion').upsert({ participante_id: selId, jornada: jornadaEdit, puntos_jornada: pts }, { onConflict: 'participante_id,jornada' });
+    cargar();
+    flash(`Jornada ${jornadaEdit} → ${pts} pts guardado`);
+  };
+
+  // Eliminar fila de jornada
+  const borrarPts = async (jornada) => {
+    await sb.from('clasificacion').delete().eq('participante_id', selId).eq('jornada', jornada);
+    cargar();
+  };
+
+  // Añadir penalización
+  const aplicarPenalizacion = async () => {
+    const cant = Number(penCantidad);
+    if (!cant) { flash('Introduce una cantidad válida'); return; }
+    if (penTipo === 'presupuesto') {
+      const nuevo = (presupuesto || 0) - cant;
+      await sb.from('participantes').update({ presupuesto: nuevo }).eq('id', selId);
+      onParticipantesChange?.();
+      cargar();
+      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cant)}${penMotivo ? ` (${penMotivo})` : ''}`);
+      flash(`Penalización de ${fmt(cant)} aplicada al presupuesto`);
+    } else {
+      const jornadaActual = clas.length > 0 ? Math.max(...clas.map(r => r.jornada)) : 1;
+      const actual = clas.find(r => r.jornada === jornadaActual)?.puntos_jornada || 0;
+      await sb.from('clasificacion').upsert({ participante_id: selId, jornada: jornadaActual, puntos_jornada: actual - cant }, { onConflict: 'participante_id,jornada' });
+      cargar();
+      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de puntos: -${cant} pts${penMotivo ? ` (${penMotivo})` : ''}`);
+      flash(`Penalización de ${cant} pts aplicada en jornada ${jornadaActual}`);
+    }
+    setPenCantidad(''); setPenMotivo('');
+  };
+
+  const equipo = participantes.find(p => p.id === selId);
+  const totalPts = clas.reduce((s, r) => s + (r.puntos_jornada || 0), 0);
+
+  return (
+    <div>
+      <div className="card">
+        <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'center', marginBottom:'1rem'}}>
+          <label style={{fontWeight:600}}>Equipo:</label>
+          <select value={selId} onChange={e => setSelId(e.target.value)}
+                  style={{padding:'.35rem .6rem', borderRadius:8, border:'1.5px solid var(--borde)'}}>
+            {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          {presupuesto !== null && (
+            <span style={{fontSize:'.9rem', color:'var(--verde)', fontWeight:700}}>
+              Presupuesto: {fmt(presupuesto)}
+            </span>
+          )}
+          {clas.length > 0 && (
+            <span style={{fontSize:'.9rem', fontWeight:700}}>
+              Pts totales: {totalPts}
+            </span>
+          )}
+        </div>
+        <div className="tabs" style={{marginBottom:0}}>
+          {[['plantilla','Plantilla'],['puntos','Puntos por jornada'],['penalizaciones','Penalizaciones']].map(([k,l]) => (
+            <button key={k} className={`tab ${subtab===k?'active':''}`} onClick={() => setSubtab(k)}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {msg && <div style={{background:'#d1e7dd', color:'#0a3622', padding:'.5rem 1rem', borderRadius:8, marginBottom:'.5rem', fontSize:'.85rem'}}>{msg}</div>}
+
+      {subtab === 'plantilla' && (
+        <div className="card">
+          <h3 style={{marginBottom:'1rem'}}>Plantilla — {equipo?.nombre}</h3>
+          {plantilla === null ? <Spinner /> : plantilla.length === 0
+            ? <div className="empty">Plantilla vacía.</div>
+            : <>
+                <table>
+                  <thead><tr><th>Jugador</th><th>Pos</th><th>Equipo real</th><th style={{textAlign:'right'}}>Precio compra</th><th></th></tr></thead>
+                  <tbody>
+                    {plantilla.map(r => (
+                      <tr key={r.id}>
+                        <td style={{fontWeight:600}}>{r.jugadores?.posicion === 'POR' ? r.jugadores?.equipo : r.jugadores?.nombre}</td>
+                        <td><span className={`badge ${r.jugadores?.posicion}`}>{r.jugadores?.posicion}</span></td>
+                        <td style={{color:'var(--texto2)'}}>{r.jugadores?.posicion !== 'POR' ? r.jugadores?.equipo : ''}</td>
+                        <td style={{textAlign:'right'}}>
+                          <input type="number" value={editPrecios[r.id] ?? ''} min="0"
+                                 onChange={e => setEditPrecios(p => ({...p, [r.id]: e.target.value}))}
+                                 style={{width:100, padding:'.25rem .4rem', borderRadius:6, border:'1.5px solid var(--borde)', textAlign:'right'}} />
+                        </td>
+                        <td>
+                          <button onClick={() => liberarJugador(r.id, r.jugadores?.posicion === 'POR' ? r.jugadores?.equipo : r.jugadores?.nombre)}
+                                  style={{padding:'.25rem .6rem', borderRadius:6, border:'1.5px solid #dc3545', background:'#fff', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>
+                            Liberar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button className="btn-ok" style={{marginTop:'1rem'}} onClick={guardarPrecios}>Guardar precios</button>
+              </>
+          }
+        </div>
+      )}
+
+      {subtab === 'puntos' && (
+        <div className="card">
+          <h3 style={{marginBottom:'1rem'}}>Puntos por jornada — {equipo?.nombre}</h3>
+          <div style={{display:'flex', gap:'1rem', alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap'}}>
+            <div style={{display:'flex', gap:'.5rem', alignItems:'center'}}>
+              <label>Jornada:</label>
+              <select value={jornadaEdit} onChange={e => setJornadaEdit(Number(e.target.value))}
+                      style={{padding:'.3rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)'}}>
+                {Array.from({length:38},(_,i)=>i+1).map(j => <option key={j} value={j}>J{j}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex', gap:'.5rem', alignItems:'center'}}>
+              <label>Pts:</label>
+              <input type="number" value={ptsEdit} onChange={e => setPtsEdit(e.target.value)}
+                     style={{width:80, padding:'.3rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)', textAlign:'right'}} />
+            </div>
+            <button className="btn-ok" onClick={guardarPts}>Guardar</button>
+          </div>
+          {clas.length === 0
+            ? <div className="empty">Sin datos de clasificación.</div>
+            : <table>
+                <thead><tr><th>Jornada</th><th style={{textAlign:'right'}}>Pts</th><th></th></tr></thead>
+                <tbody>
+                  {clas.map(r => (
+                    <tr key={r.jornada}>
+                      <td>J{r.jornada}</td>
+                      <td style={{textAlign:'right', fontWeight:600}}>{r.puntos_jornada}</td>
+                      <td>
+                        <button onClick={() => borrarPts(r.jornada)}
+                                style={{padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'#fff', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>
+                          Borrar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  <tr style={{fontWeight:700, borderTop:'2px solid var(--borde)'}}>
+                    <td>Total</td>
+                    <td style={{textAlign:'right'}}>{totalPts}</td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+          }
+        </div>
+      )}
+
+      {subtab === 'penalizaciones' && (
+        <div className="card">
+          <h3 style={{marginBottom:'1rem'}}>Añadir penalización — {equipo?.nombre}</h3>
+          <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+            <div>
+              <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>Tipo</label>
+              <select value={penTipo} onChange={e => setPenTipo(e.target.value)}
+                      style={{padding:'.35rem .6rem', borderRadius:8, border:'1.5px solid var(--borde)'}}>
+                <option value="presupuesto">Presupuesto</option>
+                <option value="puntos">Puntos</option>
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>
+                Cantidad ({penTipo === 'presupuesto' ? '€' : 'pts'})
+              </label>
+              <input type="number" min="0" value={penCantidad} onChange={e => setPenCantidad(e.target.value)}
+                     style={{width:100, padding:'.35rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)'}} />
+            </div>
+            <div style={{flex:1, minWidth:160}}>
+              <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>Motivo (opcional)</label>
+              <input value={penMotivo} onChange={e => setPenMotivo(e.target.value)}
+                     style={{width:'100%', padding:'.35rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)'}} />
+            </div>
+            <button className="btn-ok" style={{background:'#dc3545'}} onClick={aplicarPenalizacion}>
+              Aplicar penalización
+            </button>
+          </div>
+          <p style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:'1rem'}}>
+            La penalización de presupuesto reduce directamente el presupuesto disponible del equipo.<br/>
+            La penalización de puntos se descuenta de la última jornada con datos.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador }) {
   // [key, label, soloAdmin]
   const TABS_DEF = [
     ['federacion',   'Mi Federación', true],
-    ['ptsjug',       'Pts Jugadores', true],
+    ['equipos',      'Equipos',       true],
+    ['ptsjug',       'Pts Jugadores', false],
     ['presupuestos', 'Presupuestos',  false],
     ['pujas',        'Pujas',         false],
     ['cierres',      'Cierres',       false],
     ['mercado',      'Mercado',       true],
   ];
-  const tabs    = TABS_DEF.filter(([,, soloAdmin]) => !isModerador || !soloAdmin);
+  // Moderadores solo ven tabs con soloAdmin=false, SALVO que la federacion tenga puntos_mod_habilitado
+  const ptsMod = federacion?.puntos_mod_habilitado;
+  const tabs = TABS_DEF.filter(([k,, soloAdmin]) => {
+    if (!isModerador) return true;
+    if (k === 'ptsjug') return ptsMod;
+    return !soloAdmin;
+  });
   const primera = tabs[0]?.[0] || 'federacion';
   const [subtab, setSubtab] = useState(primera);
 
@@ -2551,9 +3049,10 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
         ))}
       </div>
       {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
-      {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} />}
+      {subtab === 'equipos'       && <AdminEquipos participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} />}
+      {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} federacion={federacion} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
-      {subtab === 'pujas'         && <AdminPujas participantes={participantes} />}
+      {subtab === 'pujas'         && <AdminPujas participantes={participantes} federacion={federacion} />}
       {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}
       {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
     </div>
@@ -2644,7 +3143,7 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Calendario',
+  const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Calendario', 'Tablón',
                        ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -2705,10 +3204,15 @@ function App() {
         )}
         {vista === 'Equipos' && (
           <Equipos participantes={participantes} miParticipanteId={participanteId}
-                   jornadaActual={federacion?.jornada_actual || 1} />
+                   jornadaActual={federacion?.jornada_actual || 1}
+                   isAdmin={isAdmin}
+                   onParticipantesChange={recargarParticipantes} />
         )}
         {vista === 'Calendario' && (
           <CalendarioFantasy participantes={participantes} />
+        )}
+        {vista === 'Tablón' && (
+          <Tablon federacionId={federacion?.id} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (
           <AdminPanel participantes={participantes}

@@ -43,10 +43,10 @@ EQUIPOS_LALIGA = [
     ("villarreal-cf",          1050, "Villarreal CF"),
     ("real-betis-balompie",    150,  "Real Betis"),
     ("rc-celta-de-vigo",       940,  "Celta de Vigo"),
-    ("rcd-mallorca",           237,  "RCD Mallorca"),
+    ("racing-santander",           630,  "Racing Club de Santander"),
     ("sevilla-fc",             368,  "Sevilla FC"),
-    ("girona-fc",              12321,"Girona FC"),
-    ("real-oviedo",          2497,  "Real Oviedo"),
+    ("deportivo-la-coruna",              897,"Deportivo de la Coruña"),
+    ("fc-malaga",          1084,  "Malaga CF"),
     ("deportivo-alaves",       1108, "Deportivo Alaves"),
     ("rayo-vallecano",         367,  "Rayo Vallecano"),
     ("getafe-cf",              3709, "Getafe CF"),
@@ -88,7 +88,7 @@ def scrape_equipo(slug: str, tm_id: int, nombre: str) -> list[dict]:
     """Descarga la plantilla de un equipo desde Transfermarkt."""
     url = (
         f"https://www.transfermarkt.es/{slug}/kader/verein/{tm_id}"
-        f"/saison_id/2025/plus/1"
+        f"/saison_id/2026/plus/1"
     )
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20)

@@ -81,6 +81,7 @@
     .btn-fichar { background: var(--verde); color: #fff; border: none; padding: .35rem .8rem;
                   border-radius: 8px; cursor: pointer; font-size: .82rem; font-weight: 600; }
     .btn-fichar:hover { background: var(--verde2); }
+    .btn-fichar:disabled { background: #adb5bd; cursor: not-allowed; opacity: .7; }
 
     /* Modal */
     .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5);
@@ -440,21 +441,28 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   const [modalSorteo, setModalSorteo]       = useState(false);
   const [sorteando, setSorteando]           = useState(false);
   const [resultadoSorteo, setResultadoSorteo] = useState(null);
+  const [todasPendientes, setTodasPendientes] = useState([]);
+  const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
+  const [subtabMercado, setSubtabMercado]   = useState('jugadores');
 
   const cargar = async () => {
-    if (!sb) { setJugadores([]); setTodasPlantillas([]); return; }
+    if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
     const partIds = participantes.map(p => p.id);
-    const [{ data: jugs }, { data: plants }, { data: allPujas }] = await Promise.all([
+    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([
       sb.from('jugadores').select('*').eq('activo', true),
       partIds.length
-        ? sb.from('plantillas').select('participante_id, jugador_id, jugadores(posicion, equipo)').in('participante_id', partIds)
+        ? sb.from('plantillas').select('participante_id, jugador_id, jugadores(id, nombre, posicion, equipo)').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
       partIds.length
         ? sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false).in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
+      partIds.length
+        ? sb.from('fichajes_pendientes').select('id, participante_id, jugador_id, precio_compra, jugadores(id, nombre, posicion, equipo)').in('participante_id', partIds)
+        : Promise.resolve({ data: [] }),
     ]);
     setJugadores(jugs || []);
     setTodasPlantillas(plants || []);
+    setTodasPendientes(pends || []);
     setSorteoHabilitado(!!federacion?.sorteo_habilitado);
     const mp = {}, cp = {};
     for (const p of (allPujas || [])) {
@@ -467,36 +475,41 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   };
 
   useEffect(() => { cargar(); }, []);
+  useEffect(() => { setSubtabMercado('jugadores'); }, [participanteId]);
 
-  // IDs de jugadores no-POR que ya están en alguna plantilla
+  // IDs de jugadores no-POR en alguna plantilla o fichaje pendiente
   const noPorterosOcupados = useMemo(() => {
     const s = new Set();
     for (const p of todasPlantillas)
       if (p.jugadores?.posicion !== 'POR') s.add(p.jugador_id);
+    for (const p of todasPendientes)
+      if (p.jugadores?.posicion !== 'POR') s.add(p.jugador_id);
     return s;
-  }, [todasPlantillas]);
+  }, [todasPlantillas, todasPendientes]);
 
-  // IDs de jugadores que ya tiene MI equipo
+  // IDs de jugadores que ya tiene MI equipo (plantilla activa + pendientes ganados)
   const misJugadoresIds = useMemo(() => {
     const s = new Set();
     for (const p of todasPlantillas)
       if (p.participante_id === participanteId) s.add(p.jugador_id);
+    for (const p of todasPendientes)
+      if (p.participante_id === participanteId) s.add(p.jugador_id);
     return s;
-  }, [todasPlantillas, participanteId]);
+  }, [todasPlantillas, todasPendientes, participanteId]);
 
   const miPlantillaLlena = misJugadoresIds.size >= 14;
 
-  // Equipos LaLiga cuya portería ya está cogida por alguien de MI división
+  // Equipos LaLiga cuya portería ya está cogida (plantilla o pendiente) en MI división
   const porteríasBloqueadas = useMemo(() => {
     const miDiv = participantes.find(p => p.id === participanteId)?.division_id;
     const s = new Set();
-    for (const p of todasPlantillas) {
+    for (const p of [...todasPlantillas, ...todasPendientes]) {
       if (p.jugadores?.posicion !== 'POR') continue;
       const fantasia = participantes.find(x => x.id === p.participante_id);
       if (fantasia?.division_id === miDiv) s.add(p.jugadores.equipo);
     }
     return s;
-  }, [todasPlantillas, participanteId, participantes]);
+  }, [todasPlantillas, todasPendientes, participanteId, participantes]);
 
   const equiposLista = useMemo(() => {
     if (!jugadores) return [];
@@ -534,20 +547,14 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   // ── Pujar (usuarios) ──────────────────────────────────────────
   const confirmarPuja = async () => {
     if (!sb || !participanteId || !modalPuja) return;
-    // Verificar límite de plantilla (doble check contra la BD por si el estado local está desactualizado)
-    const { data: plantActual } = await sb.from('plantillas')
-      .select('id').eq('participante_id', participanteId);
-    if ((plantActual?.length || 0) >= 14) {
-      alert('Tu plantilla ya tiene 14 jugadores. No puedes realizar más pujas.');
-      setModalPuja(null); return;
-    }
-    // Verificar que el jugador sigue libre en esta federación
+    // Verificar que el jugador no está ya fichado (plantilla activa o pendiente) en esta federación
     const fedPartIds = (participantes || []).map(p => p.id);
     if (fedPartIds.length > 0) {
-      const { data: yaFichado, error: errFich } = await sb.from('plantillas')
-        .select('id').eq('jugador_id', modalPuja.id)
-        .in('participante_id', fedPartIds).limit(1);
-      if (!errFich && yaFichado?.length > 0) {
+      const [{ data: enPlantilla, error: e1 }, { data: enPendiente, error: e2 }] = await Promise.all([
+        sb.from('plantillas').select('id').eq('jugador_id', modalPuja.id).in('participante_id', fedPartIds).limit(1),
+        sb.from('fichajes_pendientes').select('id').eq('jugador_id', modalPuja.id).in('participante_id', fedPartIds).limit(1),
+      ]);
+      if ((!e1 && enPlantilla?.length > 0) || (!e2 && enPendiente?.length > 0)) {
         alert('Este jugador ya ha sido fichado por otro equipo.');
         setModalPuja(null); cargar(); return;
       }
@@ -793,16 +800,141 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   // Admin viendo equipo ajeno → poderes de admin; su propio equipo → actúa como presidente
   const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
 
-  const huecosRestantes = 14 - misJugadoresIds.size;
+  // Fichajes pendientes del equipo actual
+  const misFichajes = todasPendientes.filter(p => p.participante_id === participanteId);
+
+  // Jugadores del equipo actual (con nombre para el selector de baja)
+  const miPlantilla = todasPlantillas
+    .filter(p => p.participante_id === participanteId)
+    .map(p => ({
+      jugador_id: p.jugador_id,
+      nombre:     p.jugadores?.nombre  || '',
+      posicion:   p.jugadores?.posicion || '',
+      equipo:     p.jugadores?.equipo   || '',
+    }));
+
+  const activarFichaje = async (fichajeId, liberarJugadorId) => {
+    const { error } = await sb.rpc('activar_fichaje_pendiente', {
+      p_pendiente_id:       fichajeId,
+      p_liberar_jugador_id: liberarJugadorId || null,
+      p_federacion_id:      federacion?.id,
+    });
+    if (error) {
+      const msgs = {
+        plantilla_llena_indica_baja:    'El equipo está lleno. Selecciona qué jugador liberas.',
+        jugador_a_liberar_no_encontrado:'El jugador a liberar no está en la plantilla.',
+        no_autorizado:                  'No tienes permisos para esta acción.',
+      };
+      alert(msgs[error.message] || 'Error: ' + error.message);
+      return;
+    }
+    setLiberarSel(s => { const n = {...s}; delete n[fichajeId]; return n; });
+    cargar();
+  };
+
+  const anularFichaje = async (fichajeId) => {
+    if (!confirm('¿Anular este fichaje? El equipo recuperará el presupuesto y el jugador volverá al mercado libre.')) return;
+    const { error } = await sb.rpc('anular_fichaje_pendiente', {
+      p_pendiente_id:  fichajeId,
+      p_federacion_id: federacion?.id,
+    });
+    if (error) { alert('Error al anular: ' + error.message); return; }
+    cargar();
+  };
+
+  const plantillaActivaCnt = todasPlantillas.filter(p => p.participante_id === participanteId).length;
+  const huecosRestantes = 14 - plantillaActivaCnt;
 
   return (
     <div>
-      <div className="card">
+      {/* ── Subtabs: Jugadores / Liberar jugadores ── */}
+      {misFichajes.length > 0 && (
+        <div className="tabs" style={{marginBottom:'1rem'}}>
+          <button className={`tab ${subtabMercado==='jugadores'?'active':''}`}
+                  onClick={() => setSubtabMercado('jugadores')}>Jugadores</button>
+          <button className={`tab ${subtabMercado==='pendientes'?'active':''}`}
+                  onClick={() => setSubtabMercado('pendientes')}>
+            Liberar jugadores ({misFichajes.length})
+          </button>
+        </div>
+      )}
+
+      {/* ── Sección: Liberar jugadores ── */}
+      {subtabMercado === 'pendientes' && misFichajes.length > 0 && (
+        <div className="card">
+          <h2 style={{marginBottom:'.75rem'}}>Liberar jugadores</h2>
+          <p style={{color:'var(--texto2)', fontSize:'.88rem', marginBottom:'1.25rem'}}>
+            {miPlantilla.length >= 14
+              ? 'Tu plantilla está llena. Para cada fichaje pendiente selecciona qué jugador liberas para hacerle hueco.'
+              : `Tienes ${14 - miPlantilla.length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
+          </p>
+          {misFichajes.map(f => {
+            const jug = f.jugadores;
+            const plazasLibres = 14 - miPlantilla.length;
+            const sel = liberarSel[f.id] || '';
+            return (
+              <div key={f.id} style={{display:'flex', flexWrap:'wrap', alignItems:'flex-start',
+                                      gap:'.75rem', padding:'.9rem 0',
+                                      borderBottom:'1px solid var(--borde)'}}>
+                {/* Info jugador */}
+                <div style={{flex:'1 1 200px'}}>
+                  <div style={{fontWeight:700, fontSize:'.95rem'}}>
+                    {jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre}
+                  </div>
+                  <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>
+                    {jug?.posicion} · {jug?.equipo}
+                  </div>
+                  <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>
+                    Fichado por: <strong>{fmt(f.precio_compra)}</strong>
+                  </div>
+                </div>
+
+                {/* Acción */}
+                <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', alignItems:'center'}}>
+                  {plazasLibres > 0 ? (
+                    <span style={{fontSize:'.8rem', color:'#198754'}}>
+                      ✓ {plazasLibres} plaza(s) libre(s)
+                    </span>
+                  ) : (
+                    <select value={sel}
+                            onChange={e => setLiberarSel(s => ({...s, [f.id]: e.target.value}))}
+                            style={{padding:'.3rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)',
+                                    fontSize:'.85rem', maxWidth:220}}>
+                      <option value="">— Seleccionar quién sale —</option>
+                      {miPlantilla.map(p => (
+                        <option key={p.jugador_id} value={p.jugador_id}>
+                          {p.posicion === 'POR' ? `Portería ${p.equipo}` : p.nombre} ({p.posicion})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button className="btn-fichar"
+                          disabled={plazasLibres === 0 && !sel}
+                          onClick={() => activarFichaje(f.id, plazasLibres > 0 ? null : sel)}>
+                    Incorporar
+                  </button>
+                  {isAdmin && (
+                    <button onClick={() => anularFichaje(f.id)}
+                            style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid #dc3545',
+                                    background:'#fff', color:'#dc3545', cursor:'pointer',
+                                    fontSize:'.82rem', fontWeight:600}}>
+                      Anular
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Lista de jugadores (oculta cuando se muestra Liberar) ── */}
+      {subtabMercado === 'jugadores' && <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem', marginBottom:'1rem'}}>
           <h2 style={{margin:0}}>Mercado de jugadores</h2>
           {sorteoHabilitado && participanteId && federacion?.ventas_habilitadas && (
             <button className="btn-fichar" disabled={huecosRestantes <= 0}
-                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 15 jugadores' : ''}
+                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 14 jugadores' : ''}
                     onClick={() => setModalSorteo(true)}>
               🎲 Sorteo aleatorio
             </button>
@@ -894,8 +1026,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                     ) : (
                       <button className="btn-fichar"
                               onClick={() => { setModalPuja(j); setCantidadPuja(''); }}
-                              disabled={!participanteId || miPlantillaLlena}
-                              title={miPlantillaLlena ? 'Tu plantilla ya tiene 15 jugadores' : ''}>
+                              disabled={!participanteId}>
                         Pujar
                       </button>
                     )}
@@ -912,7 +1043,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
             )}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {/* Modal puja (usuarios) */}
       {modalPuja && (
@@ -2426,7 +2557,7 @@ function AdminPujas({ participantes, federacion }) {
   const resolver = async (jugadorId, ganador) => {
     setResolviendo(jugadorId);
 
-    const { error } = await sb.rpc('resolver_puja', {
+    const { data: rpcData, error } = await sb.rpc('resolver_puja', {
       p_jugador_id:    jugadorId,
       p_puja_id:       ganador.id,
       p_federacion_id: federacion?.id,
@@ -2436,7 +2567,6 @@ function AdminPujas({ participantes, federacion }) {
       const msgs = {
         puja_ya_resuelta:        'Esta puja ya fue adjudicada por otro administrador.',
         presupuesto_insuficiente: `${ganador.equipo} no tiene presupuesto suficiente.`,
-        plantilla_completa:      `${ganador.equipo} ya tiene 14 jugadores.`,
         porteria_ocupada:        'Esta portería ya está en otro equipo de la misma división.',
         no_autorizado:           'No tienes permisos para resolver pujas en esta federación.',
       };
@@ -2447,7 +2577,11 @@ function AdminPujas({ participantes, federacion }) {
 
     const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
     const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
-    publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
+    if (rpcData?.pendiente) {
+      publicar(federacion?.id, 'fichaje', `${ganador.equipo} gana la puja de ${nomJug} por ${fmt(ganador.cantidad)} (pendiente de plaza)`);
+    } else {
+      publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
+    }
     setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();

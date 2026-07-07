@@ -828,6 +828,17 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       alert(msgs[error.message] || 'Error: ' + error.message);
       return;
     }
+    const fp    = todasPendientes.find(p => p.id === fichajeId);
+    const jug   = fp?.jugadores;
+    const miEq  = participantes.find(p => p.id === participanteId);
+    const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    if (liberarJugadorId) {
+      const baja = miPlantilla.find(p => p.jugador_id === liberarJugadorId);
+      const nomBaja = baja?.posicion === 'POR' ? `Portería ${baja?.equipo}` : baja?.nombre;
+      publicar(federacion?.id, 'fichaje', `${miEq?.nombre} incorpora a ${nomJug} y libera a ${nomBaja}`);
+    } else {
+      publicar(federacion?.id, 'fichaje', `${miEq?.nombre} incorpora a ${nomJug}`);
+    }
     setLiberarSel(s => { const n = {...s}; delete n[fichajeId]; return n; });
     cargar();
   };
@@ -988,7 +999,39 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                   </td>
                   <td style={{whiteSpace:'nowrap'}}>
                     {isActingAsAdmin ? (
-                      <button className="btn-fichar" onClick={() => setModal(j)}>Fichar</button>
+                      /* Admin viendo equipo ajeno: pujas + fichaje directo */
+                      <span style={{display:'flex', gap:4, alignItems:'center', flexWrap:'wrap'}}>
+                        {miPuja ? (
+                          <>
+                            <span style={{fontSize:'.8rem', color:'#198754', fontWeight:600}}>
+                              {fmt(miPuja.cantidad)}
+                            </span>
+                            <button onClick={() => { setModalPuja(j); setCantidadPuja(String(miPuja.cantidad)); }}
+                                    style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
+                                            border:'1.5px solid #198754', background:'#fff',
+                                            color:'#198754', cursor:'pointer'}}>
+                              Editar
+                            </button>
+                            <button onClick={() => cancelarPuja(j.id)}
+                                    style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
+                                            border:'1.5px solid #dc3545', background:'#fff',
+                                            color:'#dc3545', cursor:'pointer'}}>
+                              ✕
+                            </button>
+                          </>
+                        ) : (
+                          <button className="btn-fichar"
+                                  onClick={() => { setModalPuja(j); setCantidadPuja(String(j.valor_mercado || 0)); }}>
+                            Pujar
+                          </button>
+                        )}
+                        <button onClick={() => setModal(j)}
+                                style={{padding:'.3rem .6rem', fontSize:'.78rem', borderRadius:7,
+                                        border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                        color:'var(--texto)', cursor:'pointer', fontWeight:600}}>
+                          Fichar
+                        </button>
+                      </span>
                     ) : !federacion?.ventas_habilitadas ? (
                       miPuja ? (
                         <span style={{display:'flex', gap:4, alignItems:'center'}}>
@@ -1025,7 +1068,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                       </span>
                     ) : (
                       <button className="btn-fichar"
-                              onClick={() => { setModalPuja(j); setCantidadPuja(''); }}
+                              onClick={() => { setModalPuja(j); setCantidadPuja(String(j.valor_mercado || 0)); }}
                               disabled={!participanteId}>
                         Pujar
                       </button>
@@ -1524,11 +1567,19 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
 
   const guardarPerfil = async () => {
     if (!sb || !equipoId) return;
+    const oldEnt  = equipo?.entrenador?.trim() || '';
+    const newEnt  = editForm.entrenador.trim();
+    const oldNom  = equipo?.nombre?.trim() || '';
+    const newNom  = editForm.nombre.trim();
     const { data, error } = await sb.from('participantes')
-      .update({ nombre: editForm.nombre.trim(), estadio: editForm.estadio.trim(), entrenador: editForm.entrenador.trim(), escudo_url: editForm.escudo_url.trim() })
+      .update({ nombre: newNom, estadio: editForm.estadio.trim(), entrenador: newEnt, escudo_url: editForm.escudo_url.trim() })
       .eq('id', equipoId).select().single();
     if (error) { setEditMsg('Error: ' + error.message); return; }
     onParticipantesChange && onParticipantesChange();
+    if (newEnt && newEnt !== oldEnt)
+      publicar(federacion?.id, 'admin', `${newNom || oldNom} nombra nuevo entrenador: ${newEnt}`);
+    if (newNom && newNom !== oldNom)
+      publicar(federacion?.id, 'admin', `El equipo "${oldNom}" pasa a llamarse "${newNom}"`);
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
   };
@@ -1987,6 +2038,7 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
     });
     setCargando(false);
     if (errPart) { setError('Error al crear el equipo: ' + errPart.message); return; }
+    publicar(fedActual.id, 'admin', `${nombreEquipo.trim()} se une a la federación`);
     onDone();
   };
 
@@ -3039,6 +3091,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             entrenador:    nuevoEq.entrenador.trim() || null,
           });
           if (error) { setMsgEq('Error: ' + error.message); return; }
+          publicar(federacion.id, 'admin', `Nuevo equipo creado: ${nuevoEq.nombre.trim()}`);
           setNuevoEq({ nombre:'', estadio:'', entrenador:'' });
           setMsgEq('Equipo creado');
           setTimeout(() => setMsgEq(''), 2500);

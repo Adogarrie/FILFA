@@ -444,9 +444,55 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   const [todasPendientes, setTodasPendientes] = useState([]);
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
+  const [countdown, setCountdown]           = useState('');
+
+  // Countdown hacia el próximo cierre
+  useEffect(() => {
+    if (!federacion?.hora_cierre_pujas) { setCountdown(''); return; }
+    const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
+    const getNext = () => {
+      const now  = new Date();
+      const next = new Date();
+      next.setHours(h, m, 0, 0);
+      if (next <= now) next.setDate(next.getDate() + 1);
+      return next;
+    };
+    const tick = () => {
+      const diff = getNext() - new Date();
+      const hh   = Math.floor(diff / 3600000);
+      const mm   = Math.floor((diff % 3600000) / 60000);
+      const ss   = Math.floor((diff % 60000) / 1000);
+      setCountdown(`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`);
+    };
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [federacion?.hora_cierre_pujas]);
+
+  // Disparar cargar() cuando llegue el cierre
+  useEffect(() => {
+    if (!federacion?.hora_cierre_pujas) return;
+    const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
+    const now  = new Date();
+    const next = new Date();
+    next.setHours(h, m, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    const ms = next - now + 3000; // +3s de margen
+    const t  = setTimeout(() => cargar(), ms);
+    return () => clearTimeout(t);
+  }, [federacion?.hora_cierre_pujas]);
 
   const cargar = async () => {
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
+    // Procesar cierre automático si hay hora configurada y ha pasado
+    if (federacion?.hora_cierre_pujas) {
+      const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
+      const now = new Date(), cierre = new Date();
+      cierre.setHours(h, m, 0, 0);
+      if (now >= cierre) {
+        await sb.rpc('procesar_cierre_pujas', { p_federacion_id: federacion.id });
+      }
+    }
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([
       sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true),
@@ -948,7 +994,18 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       {/* ── Lista de jugadores (oculta cuando se muestra Liberar) ── */}
       {subtabMercado === 'jugadores' && <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem', marginBottom:'1rem'}}>
-          <h2 style={{margin:0}}>Mercado de jugadores</h2>
+          <div>
+            <h2 style={{margin:0}}>Mercado de jugadores</h2>
+            {countdown && (
+              <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
+                Próximo cierre{' '}
+                <span style={{fontVariantNumeric:'tabular-nums', fontWeight:700,
+                              color: countdown.startsWith('00:') ? '#dc3545' : 'var(--texto)'}}>
+                  {countdown}
+                </span>
+              </div>
+            )}
+          </div>
           {sorteoHabilitado && participanteId && federacion?.ventas_habilitadas && (
             <button className="btn-fichar" disabled={huecosRestantes <= 0}
                     title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 14 jugadores' : ''}
@@ -2906,6 +2963,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [nombre, setNombre]       = useState(federacion?.nombre || '');
   const [presup, setPresup]       = useState(String(federacion?.presupuesto_inicial ?? 100000000));
   const [jornada, setJornada]     = useState(String(federacion?.jornada_actual ?? 1));
+  const [horaCierre, setHoraCierre] = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
   const [msg, setMsg]             = useState('');
   const [copiado, setCopiado]     = useState(false);
   const [nuevoEq, setNuevoEq]     = useState({ nombre:'', estadio:'', entrenador:'' });
@@ -2959,6 +3017,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         nombre:              nombre.trim() || federacion.nombre,
         presupuesto_inicial: parseFloat(presup) || federacion.presupuesto_inicial,
         jornada_actual:      parseInt(jornada)  || federacion.jornada_actual,
+        hora_cierre_pujas:   horaCierre || null,
       })
       .eq('id', federacion.id)
       .select().single();
@@ -3016,6 +3075,17 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
           <input type="number" min="1" max="38" value={jornada} onChange={e => setJornada(e.target.value)}
                  style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
                          border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+        </div>
+        <div style={{minWidth:110}}>
+          <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+            Cierre diario de pujas
+          </label>
+          <input type="time" value={horaCierre} onChange={e => setHoraCierre(e.target.value)}
+                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+          <div style={{fontSize:'.74rem', color:'var(--texto2)', marginTop:'.25rem'}}>
+            Hora (vacío = sin cierre automático)
+          </div>
         </div>
         <button className="btn-ok" onClick={guardar}>Guardar</button>
         {msg && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msg}</span>}

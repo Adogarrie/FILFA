@@ -13,9 +13,15 @@
 -- Ejecutar en: Supabase Dashboard → SQL Editor
 -- ═══════════════════════════════════════════════════════════════
 
--- ─── 1. Columna en federaciones ─────────────────────────────────
+-- ─── 1. Columnas ────────────────────────────────────────────────
 alter table federaciones
   add column if not exists hora_cierre_pujas time default null;
+
+-- created_at en pujas (necesario para el filtro de cierre)
+alter table pujas
+  add column if not exists created_at timestamptz default now();
+-- Actualizar filas existentes que puedan tener NULL
+update pujas set created_at = now() where created_at is null;
 
 -- ─── 2. Tabla de registro de cierres ────────────────────────────
 create table if not exists log_cierres_pujas (
@@ -31,6 +37,7 @@ alter table log_cierres_pujas enable row level security;
 
 grant select on log_cierres_pujas to authenticated;
 
+drop policy if exists "Ver log cierres" on log_cierres_pujas;
 create policy "Ver log cierres"
   on log_cierres_pujas for select using (true);
 
@@ -114,7 +121,7 @@ begin
       join participantes pa on pa.id = p.participante_id
      where pa.federacion_id = p_federacion_id
        and p.resuelta       = false
-       and p.created_at    <= v_ts
+       and (p.created_at is null or p.created_at <= v_ts)
   loop
     begin
       -- Puja ganadora: mayor cantidad, más antigua en caso de empate
@@ -124,7 +131,7 @@ begin
        where p.jugador_id      = v_jug_id
          and pa.federacion_id  = p_federacion_id
          and p.resuelta        = false
-         and p.created_at     <= v_ts
+         and (p.created_at is null or p.created_at <= v_ts)
        order by p.cantidad desc, p.created_at asc
        limit 1
        for update;
@@ -140,7 +147,7 @@ begin
       select posicion, equipo, nombre into v_pos, v_equipo, v_jug_nom
         from jugadores where id = v_jug_id;
 
-      -- Portería única por división
+      -- Portería única por división (plantilla activa + pendientes)
       if v_pos = 'POR' then
         select division_id into v_div
           from participantes where id = v_ganadora.participante_id;
@@ -148,6 +155,14 @@ begin
           select 1 from plantillas pl
           join participantes pa on pa.id = pl.participante_id
           join jugadores     ju on ju.id = pl.jugador_id
+          where ju.posicion      = 'POR'
+            and ju.equipo        = v_equipo
+            and pa.division_id   = v_div
+            and pa.federacion_id = p_federacion_id
+        ) or exists (
+          select 1 from fichajes_pendientes fp
+          join participantes pa on pa.id = fp.participante_id
+          join jugadores     ju on ju.id = fp.jugador_id
           where ju.posicion      = 'POR'
             and ju.equipo        = v_equipo
             and pa.division_id   = v_div

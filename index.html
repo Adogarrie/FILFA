@@ -484,14 +484,9 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   const cargar = async () => {
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
-    // Procesar cierre automático si el mercado está activo y la hora ha pasado
+    // Procesar cierre automático — el SQL decide si hay algo pendiente (idempotente)
     if (federacion?.hora_cierre_pujas && federacion?.ventas_habilitadas) {
-      const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
-      const now = new Date(), cierre = new Date();
-      cierre.setHours(h, m, 0, 0);
-      if (now >= cierre) {
-        await sb.rpc('procesar_cierre_pujas', { p_federacion_id: federacion.id });
-      }
+      await sb.rpc('procesar_cierre_pujas', { p_federacion_id: federacion.id });
     }
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([

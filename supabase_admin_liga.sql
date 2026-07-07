@@ -12,9 +12,10 @@ drop policy if exists "Autenticado gestiona divisiones" on divisiones;
 create policy "Ver divisiones"
   on divisiones for select using (true);
 
-create policy "Autenticado gestiona divisiones"
+create policy "Admin federacion gestiona divisiones"
   on divisiones for all
-  using (true) with check (true);
+  using   (exists (select 1 from federaciones where admin_user_id = auth.uid()))
+  with check (exists (select 1 from federaciones where admin_user_id = auth.uid()));
 
 grant select, insert, update, delete on divisiones to authenticated;
 grant usage, select on sequence divisiones_id_seq  to authenticated;

@@ -541,9 +541,11 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       alert('Tu plantilla ya tiene 14 jugadores. No puedes realizar más pujas.');
       setModalPuja(null); return;
     }
-    // Verificar que el jugador sigue libre (no fichado desde que se abrió el mercado)
+    // Verificar que el jugador sigue libre en esta federación
+    const fedPartIds = (participantes || []).map(p => p.id);
     const { data: yaFichado } = await sb.from('plantillas')
-      .select('id').eq('jugador_id', modalPuja.id).limit(1);
+      .select('id').eq('jugador_id', modalPuja.id)
+      .in('participante_id', fedPartIds).limit(1);
     if (yaFichado?.length > 0) {
       alert('Este jugador ya ha sido fichado por otro equipo.');
       setModalPuja(null); cargar(); return;
@@ -1011,7 +1013,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 }
 
 // ── CALENDARIO FANTASY ─────────────────────────────────────────
-function CalendarioFantasy({ participantes }) {
+function CalendarioFantasy({ participantes, federacion }) {
   const [clas, setClas]         = useState([]);
   const [vista, setVista]       = useState('jornada');
   const [jornada, setJornada]   = useState(1);
@@ -1040,7 +1042,7 @@ function CalendarioFantasy({ participantes }) {
     if (detalle[key]) return;
     const [{ data: alis }, { data: pts }] = await Promise.all([
       sb.from('alineaciones').select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', jornada),
-      sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada),
+      sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion?.id),
     ]);
     const ptsMap = Object.fromEntries((pts || []).map(r => [r.jugador_id, Number(r.pts)]));
     setDetalle(d => ({ ...d, [key]: { alis: alis || [], ptsMap } }));
@@ -1208,7 +1210,8 @@ function AdminPtsJugadores({ participantes, federacion }) {
 
   useEffect(() => {
     if (!sb || jugadores.length === 0) return;
-    sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada)
+    sb.from('puntos_jugador').select('jugador_id, pts')
+      .eq('jornada', jornada).eq('federacion_id', federacion?.id)
       .then(({ data }) => {
         const m = {};
         (data || []).forEach(r => { m[r.jugador_id] = String(r.pts); });
@@ -1223,9 +1226,9 @@ function AdminPtsJugadores({ participantes, federacion }) {
     // 1. Guardar pts por jugador
     const rows = Object.entries(ptsJug)
       .filter(([, v]) => v !== '' && v !== undefined)
-      .map(([jid, v]) => ({ jugador_id: jid, jornada, pts: Number(v) || 0 }));
+      .map(([jid, v]) => ({ jugador_id: jid, jornada, federacion_id: federacion?.id, pts: Number(v) || 0 }));
     if (rows.length > 0) {
-      const { error } = await sb.from('puntos_jugador').upsert(rows, { onConflict: 'jugador_id,jornada' });
+      const { error } = await sb.from('puntos_jugador').upsert(rows, { onConflict: 'jugador_id,jornada,federacion_id' });
       if (error) { alert('Error: ' + error.message); setGuardando(false); return; }
     }
 
@@ -2419,58 +2422,29 @@ function AdminPujas({ participantes, federacion }) {
 
   const resolver = async (jugadorId, ganador) => {
     setResolviendo(jugadorId);
-    // 1. Presupuesto
-    const { data: pd } = await sb.from('participantes')
-      .select('presupuesto').eq('id', ganador.participante_id).single();
-    if ((pd?.presupuesto || 0) < ganador.cantidad) {
-      alert(`${ganador.equipo} no tiene presupuesto suficiente (${fmt(pd?.presupuesto||0)}).`);
-      setResolviendo(null); return;
-    }
-    // 2. Límite 15
-    const { data: plant } = await sb.from('plantillas')
-      .select('id').eq('participante_id', ganador.participante_id);
-    if ((plant?.length || 0) >= 14) {
-      alert(`${ganador.equipo} ya tiene 14 jugadores.`);
-      setResolviendo(null); return;
-    }
-    // 3. División (porteros)
-    const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
-    if (jug?.posicion === 'POR') {
-      const miDiv = participantes.find(p => p.id === ganador.participante_id)?.division_id;
-      const { data: existentes } = await sb.from('plantillas')
-        .select('participante_id, jugadores(posicion, equipo)')
-        .eq('jugador_id', jugadorId);
-      const conflicto = (existentes||[]).some(e => {
-        if (e.jugadores?.posicion !== 'POR' || e.jugadores?.equipo !== jug.equipo) return false;
-        return participantes.find(p => p.id === e.participante_id)?.division_id === miDiv;
-      });
-      if (conflicto) {
-        alert('Esta portería ya está en otro equipo de la misma división.');
-        setResolviendo(null); return;
-      }
-    }
-    // 4. Fichar
-    const { error } = await sb.from('plantillas').insert({
-      participante_id: ganador.participante_id,
-      jugador_id:      jugadorId,
-      precio_compra:   ganador.cantidad,
+
+    const { error } = await sb.rpc('resolver_puja', {
+      p_jugador_id:    jugadorId,
+      p_puja_id:       ganador.id,
+      p_federacion_id: federacion?.id,
     });
-    if (error) { alert('Error al fichar: ' + error.message); setResolviendo(null); return; }
-    // 5. Descontar presupuesto
-    await sb.from('participantes')
-      .update({ presupuesto: pd.presupuesto - ganador.cantidad })
-      .eq('id', ganador.participante_id);
-    // 6. Marcar todas las pujas de este jugador como resueltas
-    const { error: errRes } = await sb.from('pujas').update({ resuelta: true, ganadora: false }).eq('jugador_id', jugadorId);
-    if (errRes) { alert('Error al marcar pujas: ' + errRes.message); setResolviendo(null); return; }
-    const { error: errGan } = await sb.from('pujas').update({ ganadora: true }).eq('id', ganador.id);
-    if (errGan) { alert('Error al marcar ganadora: ' + errGan.message); setResolviendo(null); return; }
-    // 7. Tablón
-    const jugTablon = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
-    const nomJug = jugTablon?.posicion === 'POR' ? `Portería ${jugTablon?.equipo}` : jugTablon?.nombre;
+
+    if (error) {
+      const msgs = {
+        puja_ya_resuelta:        'Esta puja ya fue adjudicada por otro administrador.',
+        presupuesto_insuficiente: `${ganador.equipo} no tiene presupuesto suficiente.`,
+        plantilla_completa:      `${ganador.equipo} ya tiene 14 jugadores.`,
+        porteria_ocupada:        'Esta portería ya está en otro equipo de la misma división.',
+        no_autorizado:           'No tienes permisos para resolver pujas en esta federación.',
+      };
+      alert(msgs[error.message] || 'Error al resolver la puja: ' + error.message);
+      setResolviendo(null);
+      return;
+    }
+
+    const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
+    const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
     publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
-    // Marcar como resuelto en estado local: desaparece inmediatamente del listado
-    // independientemente de si cargar() trae datos desactualizados del servidor
     setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();
@@ -3333,10 +3307,11 @@ function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccion
   const cargarPos = async () => {
     if (!sb || misParticipantes.length === 0) { setCargando(false); return; }
     const fedIds = [...new Set(misParticipantes.map(p => p.federacion_id).filter(Boolean))];
-    const [{ data: allParts }, { data: clas }] = await Promise.all([
-      sb.from('participantes').select('id, federacion_id').in('federacion_id', fedIds),
-      sb.from('clasificacion').select('participante_id, puntos_jornada'),
-    ]);
+    const { data: allParts } = await sb.from('participantes').select('id, federacion_id').in('federacion_id', fedIds);
+    const allPartIds = (allParts || []).map(p => p.id);
+    const { data: clas } = allPartIds.length > 0
+      ? await sb.from('clasificacion').select('participante_id, puntos_jornada').in('participante_id', allPartIds)
+      : { data: [] };
     const pts = {};
     for (const r of (clas || [])) pts[r.participante_id] = (pts[r.participante_id] || 0) + (r.puntos_jornada || 0);
     const posMap = {};
@@ -3654,7 +3629,7 @@ function App() {
                    onParticipantesChange={recargarParticipantes} />
         )}
         {vista === 'Calendario' && (
-          <CalendarioFantasy participantes={participantes} />
+          <CalendarioFantasy participantes={participantes} federacion={federacion} />
         )}
         {vista === 'Tablón' && (
           <Tablon federacionId={federacion?.id} />

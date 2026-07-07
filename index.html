@@ -449,15 +449,15 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([
-      sb.from('jugadores').select('*').eq('activo', true),
+      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true),
       partIds.length
-        ? sb.from('plantillas').select('participante_id, jugador_id, jugadores(id, nombre, posicion, equipo)').in('participante_id', partIds)
+        ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
       partIds.length
         ? sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false).in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
       partIds.length
-        ? sb.from('fichajes_pendientes').select('id, participante_id, jugador_id, precio_compra, jugadores(id, nombre, posicion, equipo)').in('participante_id', partIds)
+        ? sb.from('fichajes_pendientes').select('id, participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
     ]);
     setJugadores(jugs || []);
@@ -477,15 +477,22 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   useEffect(() => { cargar(); }, []);
   useEffect(() => { setSubtabMercado('jugadores'); }, [participanteId]);
 
+  // Lookup O(1) por jugador_id — evita joins embebidas en plantillas/pendientes
+  const jugadoresMap = useMemo(() => {
+    const m = new Map();
+    for (const j of (jugadores || [])) m.set(j.id, j);
+    return m;
+  }, [jugadores]);
+
   // IDs de jugadores no-POR en alguna plantilla o fichaje pendiente
   const noPorterosOcupados = useMemo(() => {
     const s = new Set();
     for (const p of todasPlantillas)
-      if (p.jugadores?.posicion !== 'POR') s.add(p.jugador_id);
+      if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR') s.add(p.jugador_id);
     for (const p of todasPendientes)
-      if (p.jugadores?.posicion !== 'POR') s.add(p.jugador_id);
+      if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR') s.add(p.jugador_id);
     return s;
-  }, [todasPlantillas, todasPendientes]);
+  }, [todasPlantillas, todasPendientes, jugadoresMap]);
 
   // IDs de jugadores que ya tiene MI equipo (plantilla activa + pendientes ganados)
   const misJugadoresIds = useMemo(() => {
@@ -504,12 +511,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     const miDiv = participantes.find(p => p.id === participanteId)?.division_id;
     const s = new Set();
     for (const p of [...todasPlantillas, ...todasPendientes]) {
-      if (p.jugadores?.posicion !== 'POR') continue;
+      const jug = jugadoresMap.get(p.jugador_id);
+      if (jug?.posicion !== 'POR') continue;
       const fantasia = participantes.find(x => x.id === p.participante_id);
-      if (fantasia?.division_id === miDiv) s.add(p.jugadores.equipo);
+      if (fantasia?.division_id === miDiv) s.add(jug.equipo);
     }
     return s;
-  }, [todasPlantillas, todasPendientes, participanteId, participantes]);
+  }, [todasPlantillas, todasPendientes, participanteId, participantes, jugadoresMap]);
 
   const equiposLista = useMemo(() => {
     if (!jugadores) return [];
@@ -806,12 +814,10 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   // Jugadores del equipo actual (con nombre para el selector de baja)
   const miPlantilla = todasPlantillas
     .filter(p => p.participante_id === participanteId)
-    .map(p => ({
-      jugador_id: p.jugador_id,
-      nombre:     p.jugadores?.nombre  || '',
-      posicion:   p.jugadores?.posicion || '',
-      equipo:     p.jugadores?.equipo   || '',
-    }));
+    .map(p => {
+      const jug = jugadoresMap.get(p.jugador_id);
+      return { jugador_id: p.jugador_id, nombre: jug?.nombre || '', posicion: jug?.posicion || '', equipo: jug?.equipo || '' };
+    });
 
   const activarFichaje = async (fichajeId, liberarJugadorId) => {
     const { error } = await sb.rpc('activar_fichaje_pendiente', {
@@ -829,7 +835,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       return;
     }
     const fp    = todasPendientes.find(p => p.id === fichajeId);
-    const jug   = fp?.jugadores;
+    const jug   = jugadoresMap.get(fp?.jugador_id);
     const miEq  = participantes.find(p => p.id === participanteId);
     const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
     if (liberarJugadorId) {
@@ -880,7 +886,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
               : `Tienes ${14 - miPlantilla.length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
           </p>
           {misFichajes.map(f => {
-            const jug = f.jugadores;
+            const jug = jugadoresMap.get(f.jugador_id);
             const plazasLibres = 14 - miPlantilla.length;
             const sel = liberarSel[f.id] || '';
             return (
@@ -3802,11 +3808,12 @@ function App() {
                      isAdmin={isAdmin}
                      miParticipanteId={session?.participante_id} />
         )}
-        {vista === 'Mercado' && (
+        {/* Mercado se mantiene montado para no relanzar queries al volver */}
+        <div style={{display: vista === 'Mercado' ? '' : 'none'}}>
           <Mercado participanteId={participanteId} participantes={participantes}
                    isAdmin={isAdmin} onFichaje={() => {}} federacion={federacion}
                    miParticipanteId={session?.participante_id} />
-        )}
+        </div>
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}
                       jornadaActual={federacion?.jornada_actual || 1}

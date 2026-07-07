@@ -448,7 +448,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   // Countdown hacia el próximo cierre
   useEffect(() => {
-    if (!federacion?.hora_cierre_pujas) { setCountdown(''); return; }
+    if (!federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) { setCountdown(''); return; }
     const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
     const getNext = () => {
       const now  = new Date();
@@ -471,7 +471,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   // Disparar cargar() cuando llegue el cierre
   useEffect(() => {
-    if (!federacion?.hora_cierre_pujas) return;
+    if (!federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
     const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
     const now  = new Date();
     const next = new Date();
@@ -484,8 +484,8 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   const cargar = async () => {
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
-    // Procesar cierre automático si hay hora configurada y ha pasado
-    if (federacion?.hora_cierre_pujas) {
+    // Procesar cierre automático si el mercado está activo y la hora ha pasado
+    if (federacion?.hora_cierre_pujas && federacion?.ventas_habilitadas) {
       const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
       const now = new Date(), cierre = new Date();
       cierre.setHours(h, m, 0, 0);
@@ -2895,10 +2895,11 @@ function AdminCierres({ federacion }) {
 
 // ── ADMIN — MERCADO (ventas + sorteo) ─────────────────────────
 function AdminMercado({ federacion, onFederacionUpdate }) {
-  const [ventas,   setVentas]   = useState(!!federacion?.ventas_habilitadas);
-  const [sorteo,   setSorteo]   = useState(!!federacion?.sorteo_habilitado);
-  const [ptsMod,   setPtsMod]   = useState(!!federacion?.puntos_mod_habilitado);
-  const [msg, setMsg]           = useState('');
+  const [ventas,     setVentas]     = useState(!!federacion?.ventas_habilitadas);
+  const [sorteo,     setSorteo]     = useState(!!federacion?.sorteo_habilitado);
+  const [ptsMod,     setPtsMod]     = useState(!!federacion?.puntos_mod_habilitado);
+  const [horaCierre, setHoraCierre] = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
+  const [msg, setMsg]               = useState('');
 
   const cambiar = async (campo, valor, setEstado) => {
     if (!sb || !federacion) return;
@@ -2907,6 +2908,17 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
     if (error) { alert('Error al guardar: ' + error.message); return; }
     setEstado(valor);
     onFederacionUpdate({ ...federacion, [campo]: valor });
+    setMsg('Guardado');
+    setTimeout(() => setMsg(''), 2500);
+  };
+
+  const guardarHora = async () => {
+    if (!sb || !federacion) return;
+    const val = horaCierre || null;
+    const { error } = await sb.from('federaciones')
+      .update({ hora_cierre_pujas: val }).eq('id', federacion.id);
+    if (error) { alert('Error al guardar: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, hora_cierre_pujas: val });
     setMsg('Guardado');
     setTimeout(() => setMsg(''), 2500);
   };
@@ -2954,6 +2966,23 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
         activo={ptsMod}
         onChange={v => cambiar('puntos_mod_habilitado', v, setPtsMod)}
       />
+      <div style={{display:'flex', alignItems:'center', gap:'1rem',
+                   padding:'1rem 0', flexWrap:'wrap'}}>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700, marginBottom:'.2rem'}}>Hora de cierre automático de pujas</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>
+            Cada día a esta hora se resuelven automáticamente todas las pujas: el equipo que más
+            dinero haya pujado se lleva al jugador. Solo activo cuando el mercado está habilitado.
+            Deja en blanco para desactivar.
+          </div>
+        </div>
+        <div style={{display:'flex', gap:'.5rem', alignItems:'center', flexShrink:0}}>
+          <input type="time" value={horaCierre} onChange={e => setHoraCierre(e.target.value)}
+                 style={{padding:'.45rem .7rem', borderRadius:8,
+                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+          <button className="btn-ok" onClick={guardarHora}>Guardar</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2963,7 +2992,6 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [nombre, setNombre]       = useState(federacion?.nombre || '');
   const [presup, setPresup]       = useState(String(federacion?.presupuesto_inicial ?? 100000000));
   const [jornada, setJornada]     = useState(String(federacion?.jornada_actual ?? 1));
-  const [horaCierre, setHoraCierre] = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
   const [msg, setMsg]             = useState('');
   const [copiado, setCopiado]     = useState(false);
   const [nuevoEq, setNuevoEq]     = useState({ nombre:'', estadio:'', entrenador:'' });
@@ -3017,7 +3045,6 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         nombre:              nombre.trim() || federacion.nombre,
         presupuesto_inicial: parseFloat(presup) || federacion.presupuesto_inicial,
         jornada_actual:      parseInt(jornada)  || federacion.jornada_actual,
-        hora_cierre_pujas:   horaCierre || null,
       })
       .eq('id', federacion.id)
       .select().single();
@@ -3075,17 +3102,6 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
           <input type="number" min="1" max="38" value={jornada} onChange={e => setJornada(e.target.value)}
                  style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
                          border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
-        </div>
-        <div style={{minWidth:110}}>
-          <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
-            Cierre diario de pujas
-          </label>
-          <input type="time" value={horaCierre} onChange={e => setHoraCierre(e.target.value)}
-                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
-                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
-          <div style={{fontSize:'.74rem', color:'var(--texto2)', marginTop:'.25rem'}}>
-            Hora (vacío = sin cierre automático)
-          </div>
         </div>
         <button className="btn-ok" onClick={guardar}>Guardar</button>
         {msg && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msg}</span>}

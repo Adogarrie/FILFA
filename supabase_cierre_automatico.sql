@@ -61,12 +61,14 @@ declare
   v_pendiente boolean;
   v_firmados  int := 0;
 begin
-  -- ── Obtener hora de cierre ─────────────────────────────────────
+  -- ── Obtener hora de cierre (requiere mercado activo) ──────────
   select hora_cierre_pujas into v_hora
-    from federaciones where id = p_federacion_id;
+    from federaciones
+   where id = p_federacion_id
+     and ventas_habilitadas = true;
 
   if v_hora is null then
-    return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'sin_hora');
+    return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'sin_hora_o_mercado_cerrado');
   end if;
 
   -- ── Determinar fecha/hora del último cierre ────────────────────

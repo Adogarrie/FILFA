@@ -543,12 +543,14 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     }
     // Verificar que el jugador sigue libre en esta federación
     const fedPartIds = (participantes || []).map(p => p.id);
-    const { data: yaFichado } = await sb.from('plantillas')
-      .select('id').eq('jugador_id', modalPuja.id)
-      .in('participante_id', fedPartIds).limit(1);
-    if (yaFichado?.length > 0) {
-      alert('Este jugador ya ha sido fichado por otro equipo.');
-      setModalPuja(null); cargar(); return;
+    if (fedPartIds.length > 0) {
+      const { data: yaFichado, error: errFich } = await sb.from('plantillas')
+        .select('id').eq('jugador_id', modalPuja.id)
+        .in('participante_id', fedPartIds).limit(1);
+      if (!errFich && yaFichado?.length > 0) {
+        alert('Este jugador ya ha sido fichado por otro equipo.');
+        setModalPuja(null); cargar(); return;
+      }
     }
     const cantidad = parseFloat(String(cantidadPuja).replace(',', '.'));
     const minimo   = modalPuja.valor_mercado || 0;
@@ -560,11 +562,12 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     if (cantidad > (partData?.presupuesto || 0)) {
       alert(`Presupuesto insuficiente. Disponible: ${fmt(partData?.presupuesto || 0)}`); return;
     }
-    await sb.from('pujas').upsert(
+    const { error: errPuja } = await sb.from('pujas').upsert(
       { participante_id: participanteId, jugador_id: modalPuja.id,
         cantidad, resuelta: false, ganadora: null },
       { onConflict: 'participante_id,jugador_id' }
     );
+    if (errPuja) { alert('Error al registrar la puja: ' + errPuja.message); return; }
     setModalPuja(null); setCantidadPuja(''); cargar();
   };
 

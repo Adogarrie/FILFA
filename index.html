@@ -469,25 +469,32 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     return () => clearInterval(iv);
   }, [federacion?.hora_cierre_pujas]);
 
-  // Disparar cargar() cuando llegue el cierre
+  // Procesar cierre pendiente + armar timer para el próximo
   useEffect(() => {
-    if (!federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
+    if (!sb || !federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
+
+    const fedId = federacion.id;
+
+    const ejecutarCierre = () =>
+      sb.rpc('procesar_cierre_pujas', { p_federacion_id: fedId })
+        .then(({ data }) => { cargar(); }); // refrescar siempre tras el cierre
+
+    // Inmediato: si la hora ya pasó hoy (o ayer) y no se procesó, lo resuelve ahora
+    ejecutarCierre();
+
+    // Timer para el próximo cierre exacto
     const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
     const now  = new Date();
     const next = new Date();
     next.setHours(h, m, 0, 0);
     if (next <= now) next.setDate(next.getDate() + 1);
-    const ms = next - now + 3000; // +3s de margen
-    const t  = setTimeout(() => cargar(), ms);
+    const t = setTimeout(ejecutarCierre, next - now + 3000);
     return () => clearTimeout(t);
-  }, [federacion?.hora_cierre_pujas]);
+  }, [federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
 
   const cargar = async () => {
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
-    // Procesar cierre automático — el SQL decide si hay algo pendiente (idempotente)
-    if (federacion?.hora_cierre_pujas && federacion?.ventas_habilitadas) {
-      await sb.rpc('procesar_cierre_pujas', { p_federacion_id: federacion.id });
-    }
+
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([
       sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true),

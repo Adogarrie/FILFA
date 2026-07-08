@@ -4070,7 +4070,7 @@ function App() {
 
         <div className="nav-user">
           <span>{isAdmin ? '⚙ Admin' : isModerador ? '⚙ Mod' : session.email}</span>
-          {(misParticipantes.length > 1 || adminFeds.length > 0) && (
+          {(misParticipantes.length > 0 || adminFeds.length > 0) && (
             <button className="btn-logout"
                     onClick={() => { setFederacion(null); setSession(s => ({...s, participante_id: null})); }}
                     title="Cambiar de federación">

@@ -171,7 +171,7 @@ const SUPABASE_URL = 'https://gqdbrzwetwcjrkiygaua.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdxZGJyendldHdjanJraXlnYXVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjAzNzgsImV4cCI6MjA5MTM5NjM3OH0.LhmBH8yrxYh_Bfh74YoK5IvazaeYTRrSw8xXVx7upHs';
 // ──────────────────────────────────────────────────────────────
 
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -504,27 +504,34 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
 
-  // Procesar cierre pendiente + armar timer para el próximo
+  // Ref siempre apunta a la cargar más reciente (evita stale closures en el intervalo)
+  const cargarRef = useRef(null);
+
+  // Sondeo periódico de cierre — cada 60 s el RPC comprueba si la hora llegó.
+  // La función SQL es idempotente (log_cierres_pujas), así que llamarla 1440 veces
+  // al día es seguro: 1439 retornan "ya_procesado" o "sin_cierre_pendiente" de inmediato.
   useEffect(() => {
     if (!sb || !federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
 
     const fedId = federacion.id;
 
-    const ejecutarCierre = () =>
+    const poll = () => {
       sb.rpc('procesar_cierre_pujas', { p_federacion_id: fedId })
-        .then(({ data }) => { cargar(); }); // refrescar siempre tras el cierre
+        .then(({ data, error }) => {
+          if (error) {
+            console.error('[FILFA cierre] Error RPC:', error.message, error);
+            return;
+          }
+          console.log('[FILFA cierre] RPC resultado:', data);
+          if (data?.firmados > 0) {
+            cargarRef.current?.(); // refresca el mercado con la cargar más actual
+          }
+        });
+    };
 
-    // Inmediato: si la hora ya pasó hoy (o ayer) y no se procesó, lo resuelve ahora
-    ejecutarCierre();
-
-    // Timer para el próximo cierre exacto
-    const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
-    const now  = new Date();
-    const next = new Date();
-    next.setHours(h, m, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    const t = setTimeout(ejecutarCierre, next - now + 3000);
-    return () => clearTimeout(t);
+    poll(); // comprobación inmediata al montar o cuando cambia hora/mercado
+    const iv = setInterval(poll, 60_000); // sondeo cada minuto
+    return () => clearInterval(iv);
   }, [federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
 
   const cargar = async () => {
@@ -556,6 +563,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     setMisPujas(mp);
     setConteosPujas(cp);
   };
+  cargarRef.current = cargar; // siempre actualizado al último render
 
   useEffect(() => { cargar(); }, []);
   useEffect(() => { setSubtabMercado('jugadores'); }, [participanteId]);

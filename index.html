@@ -173,6 +173,28 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const { useState, useEffect, useMemo } = React;
 
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="card" style={{color:'#dc3545', padding:'1.5rem'}}>
+          <strong>Error inesperado:</strong> {this.state.error.message}
+          <br />
+          <button style={{marginTop:'.75rem', padding:'.35rem .8rem', borderRadius:7,
+                          border:'1.5px solid #dc3545', background:'#fff', color:'#dc3545',
+                          cursor:'pointer', fontWeight:600}}
+                  onClick={() => this.setState({error:null})}>
+            Reintentar
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const esDemo = SUPABASE_URL.includes('TU_');
 let sb = null;
 if (!esDemo) {
@@ -2657,7 +2679,7 @@ function AdminFichajesPendientes({ participantes, federacion }) {
     setPlantillasMap(pm);
   };
 
-  useEffect(cargar, []);
+  useEffect(() => { cargar(); }, []);
 
   const activar = async (pend) => {
     const plantilla = plantillasMap[pend.participante_id] || [];
@@ -4097,11 +4119,13 @@ function App() {
           <Tablon federacionId={federacion?.id} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (
-          <AdminPanel participantes={participantes}
-                      federacion={federacion}
-                      onFederacionUpdate={setFederacion}
-                      onParticipantesChange={recargarParticipantes}
-                      isModerador={isModerador} />
+          <ErrorBoundary>
+            <AdminPanel participantes={participantes}
+                        federacion={federacion}
+                        onFederacionUpdate={setFederacion}
+                        onParticipantesChange={recargarParticipantes}
+                        isModerador={isModerador} />
+          </ErrorBoundary>
         )}
       </main>
     </>

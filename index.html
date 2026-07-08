@@ -425,6 +425,43 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   );
 }
 
+// ── COUNTDOWN cierre de pujas (componente aislado) ─────────────
+// Vive fuera de Mercado para que su setInterval no cause re-renders
+// en el componente padre y no interfiera con los <select> del mercado.
+function CountdownCierre({ horaCierre, habilitado }) {
+  const [txt, setTxt] = useState('');
+  useEffect(() => {
+    if (!horaCierre || !habilitado) { setTxt(''); return; }
+    const [h, m] = horaCierre.split(':').map(Number);
+    const next = () => {
+      const n = new Date(), d = new Date();
+      d.setHours(h, m, 0, 0);
+      if (d <= n) d.setDate(d.getDate() + 1);
+      return d;
+    };
+    const tick = () => {
+      const diff = next() - new Date();
+      const hh = Math.floor(diff / 3600000);
+      const mm = Math.floor((diff % 3600000) / 60000);
+      const ss = Math.floor((diff % 60000) / 1000);
+      setTxt(`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`);
+    };
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [horaCierre, habilitado]);
+  if (!txt) return null;
+  return (
+    <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
+      Próximo cierre{' '}
+      <span style={{fontVariantNumeric:'tabular-nums', fontWeight:700,
+                    color: txt.startsWith('00:') ? '#dc3545' : 'var(--texto)'}}>
+        {txt}
+      </span>
+    </div>
+  );
+}
+
 // ── MERCADO ────────────────────────────────────────────────────
 function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion, miParticipanteId }) {
   const [jugadores, setJugadores]           = useState(null);
@@ -444,30 +481,6 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   const [todasPendientes, setTodasPendientes] = useState([]);
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
-  const [countdown, setCountdown]           = useState('');
-
-  // Countdown hacia el próximo cierre
-  useEffect(() => {
-    if (!federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) { setCountdown(''); return; }
-    const [h, m] = federacion.hora_cierre_pujas.split(':').map(Number);
-    const getNext = () => {
-      const now  = new Date();
-      const next = new Date();
-      next.setHours(h, m, 0, 0);
-      if (next <= now) next.setDate(next.getDate() + 1);
-      return next;
-    };
-    const tick = () => {
-      const diff = getNext() - new Date();
-      const hh   = Math.floor(diff / 3600000);
-      const mm   = Math.floor((diff % 3600000) / 60000);
-      const ss   = Math.floor((diff % 60000) / 1000);
-      setCountdown(`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`);
-    };
-    tick();
-    const iv = setInterval(tick, 1000);
-    return () => clearInterval(iv);
-  }, [federacion?.hora_cierre_pujas]);
 
   // Procesar cierre pendiente + armar timer para el próximo
   useEffect(() => {
@@ -998,15 +1011,10 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem', marginBottom:'1rem'}}>
           <div>
             <h2 style={{margin:0}}>Mercado de jugadores</h2>
-            {countdown && (
-              <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
-                Próximo cierre{' '}
-                <span style={{fontVariantNumeric:'tabular-nums', fontWeight:700,
-                              color: countdown.startsWith('00:') ? '#dc3545' : 'var(--texto)'}}>
-                  {countdown}
-                </span>
-              </div>
-            )}
+            <CountdownCierre
+              horaCierre={federacion?.hora_cierre_pujas}
+              habilitado={!!federacion?.ventas_habilitadas}
+            />
           </div>
           {sorteoHabilitado && participanteId && federacion?.ventas_habilitadas && (
             <button className="btn-fichar" disabled={huecosRestantes <= 0}

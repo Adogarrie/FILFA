@@ -2628,6 +2628,172 @@ function AdminPresupuestos({ participantes }) {
   );
 }
 
+// ── ADMIN — FICHAJES PENDIENTES ────────────────────────────────
+function AdminFichajesPendientes({ participantes, federacion }) {
+  const [pendientes, setPendientes]   = useState(null);
+  const [plantillasMap, setPlantillasMap] = useState({}); // participante_id → [{jugador_id, nombre, posicion, equipo}]
+  const [liberarSel, setLiberarSel]   = useState({});     // pendiente_id → jugador_id a liberar
+  const [procesando, setProcesando]   = useState(null);
+
+  const cargar = async () => {
+    if (!sb) return;
+    const partIds = participantes.map(p => p.id);
+    if (!partIds.length) { setPendientes([]); return; }
+    const [{ data: pends }, { data: plants }] = await Promise.all([
+      sb.from('fichajes_pendientes')
+        .select('id, participante_id, jugador_id, precio_compra, participantes(nombre), jugadores(nombre, equipo, posicion)')
+        .in('participante_id', partIds)
+        .order('id', { ascending: true }),
+      sb.from('plantillas')
+        .select('participante_id, jugador_id, jugadores(nombre, equipo, posicion)')
+        .in('participante_id', partIds),
+    ]);
+    const pm = {};
+    for (const p of (plants || [])) {
+      if (!pm[p.participante_id]) pm[p.participante_id] = [];
+      pm[p.participante_id].push({ jugador_id: p.jugador_id, nombre: p.jugadores?.nombre || '', posicion: p.jugadores?.posicion || '', equipo: p.jugadores?.equipo || '' });
+    }
+    setPendientes(pends || []);
+    setPlantillasMap(pm);
+  };
+
+  useEffect(cargar, []);
+
+  const activar = async (pend) => {
+    const plantilla = plantillasMap[pend.participante_id] || [];
+    const liberar   = plantilla.length >= 14 ? (liberarSel[pend.id] || '') : null;
+    if (plantilla.length >= 14 && !liberar) {
+      alert('El equipo tiene la plantilla llena (14). Selecciona qué jugador liberar primero.');
+      return;
+    }
+    setProcesando(pend.id);
+    const { error } = await sb.rpc('activar_fichaje_pendiente', {
+      p_pendiente_id:       pend.id,
+      p_liberar_jugador_id: liberar || null,
+      p_federacion_id:      federacion?.id,
+    });
+    setProcesando(null);
+    if (error) {
+      const msgs = {
+        plantilla_llena_indica_baja:      'El equipo está lleno. Selecciona quién sale.',
+        jugador_a_liberar_no_encontrado:  'El jugador a liberar no está en la plantilla.',
+        fichaje_no_encontrado:            'Este fichaje pendiente ya no existe.',
+        no_autorizado:                    'No tienes permiso para realizar esta acción.',
+      };
+      alert(msgs[error.message] || 'Error: ' + error.message);
+      return;
+    }
+    const jug = pend.jugadores;
+    const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    publicar(federacion?.id, 'fichaje', `${pend.participantes?.nombre} incorpora a ${nom} a su plantilla`);
+    cargar();
+  };
+
+  const anular = async (pend) => {
+    const jug = pend.jugadores;
+    const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    if (!confirm(`¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe devolverán ${fmt(pend.precio_compra)} al presupuesto del equipo.`)) return;
+    setProcesando(pend.id);
+    const { error } = await sb.rpc('anular_fichaje_pendiente', {
+      p_pendiente_id:  pend.id,
+      p_federacion_id: federacion?.id,
+    });
+    setProcesando(null);
+    if (error) { alert('Error: ' + error.message); return; }
+    cargar();
+  };
+
+  if (pendientes === null) return <Spinner />;
+
+  return (
+    <div className="card">
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center',
+                   marginBottom:'1rem', flexWrap:'wrap', gap:'.5rem'}}>
+        <h2 style={{margin:0}}>Fichajes pendientes de plaza ({pendientes.length})</h2>
+        <button onClick={cargar}
+                style={{padding:'.3rem .8rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                        background:'var(--fondo)', cursor:'pointer', fontSize:'.85rem'}}>
+          Actualizar
+        </button>
+      </div>
+
+      {pendientes.length === 0 ? (
+        <div className="empty">No hay fichajes pendientes de plaza.</div>
+      ) : pendientes.map(pend => {
+        const jug      = pend.jugadores || {};
+        const nomJug   = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
+        const plantilla = plantillasMap[pend.participante_id] || [];
+        const llena     = plantilla.length >= 14;
+        const sel       = liberarSel[pend.id] || '';
+        const enProceso = procesando === pend.id;
+
+        return (
+          <div key={pend.id}
+               style={{display:'flex', flexWrap:'wrap', gap:'.75rem', alignItems:'flex-start',
+                       padding:'.9rem 0', borderBottom:'1px solid var(--borde)'}}>
+
+            {/* Equipo */}
+            <div style={{minWidth:130, flex:'0 0 auto'}}>
+              <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Equipo</div>
+              <div style={{fontWeight:700}}>{pend.participantes?.nombre || '—'}</div>
+            </div>
+
+            {/* Jugador */}
+            <div style={{flex:'1 1 160px'}}>
+              <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Jugador</div>
+              <div style={{fontWeight:600}}>{nomJug || '—'}</div>
+              <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>{jug.posicion} · {jug.equipo}</div>
+            </div>
+
+            {/* Precio */}
+            <div style={{minWidth:90, flex:'0 0 auto'}}>
+              <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Precio</div>
+              <div style={{fontWeight:600}}>{fmt(pend.precio_compra)}</div>
+            </div>
+
+            {/* Plantilla */}
+            <div style={{minWidth:80, flex:'0 0 auto'}}>
+              <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Plantilla</div>
+              <div style={{fontWeight:600, color: llena ? '#dc3545' : '#198754'}}>
+                {plantilla.length}/14 {llena ? '(llena)' : ''}
+              </div>
+            </div>
+
+            {/* Acciones */}
+            <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', alignItems:'center', flex:'1 1 220px'}}>
+              {llena && (
+                <select value={sel}
+                        onChange={e => setLiberarSel(s => ({...s, [pend.id]: e.target.value}))}
+                        style={{padding:'.3rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)',
+                                fontSize:'.82rem', maxWidth:200}}>
+                  <option value="">— Quién sale —</option>
+                  {plantilla.map(p => (
+                    <option key={p.jugador_id} value={p.jugador_id}>
+                      {p.posicion === 'POR' ? `POR ${p.equipo}` : p.nombre} ({p.posicion})
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button className="btn-fichar"
+                      disabled={enProceso || (llena && !sel)}
+                      onClick={() => activar(pend)}>
+                {enProceso ? '…' : 'Activar'}
+              </button>
+              <button disabled={enProceso}
+                      onClick={() => anular(pend)}
+                      style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid #dc3545',
+                              background:'var(--fondo)', color:'#dc3545', cursor:'pointer',
+                              fontSize:'.82rem', fontWeight:600}}>
+                Anular
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── ADMIN — PUJAS ──────────────────────────────────────────────
 function AdminPujas({ participantes, federacion }) {
   const [pujas, setPujas]           = useState(null);
@@ -3548,6 +3714,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['ptsjug',       'Pts Jugadores', false],
     ['presupuestos', 'Presupuestos',  false],
     ['pujas',        'Pujas',         false],
+    ['fichajespend', 'Fich. Pend.',   false],
     ['cierres',      'Cierres',       false],
     ['mercado',      'Mercado',       true],
   ];
@@ -3583,6 +3750,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} federacion={federacion} />}
       {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
       {subtab === 'pujas'         && <AdminPujas participantes={participantes} federacion={federacion} />}
+      {subtab === 'fichajespend'  && <AdminFichajesPendientes participantes={participantes} federacion={federacion} />}
       {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}
       {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
     </div>

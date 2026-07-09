@@ -204,8 +204,114 @@ if (!esDemo) {
 // ── UTILIDADES ─────────────────────────────────────────────────
 const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
 const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+
+// Mapa equipo (normalizado: minúsculas, sin acentos) → filename en Wikimedia Commons
+const ESCUDOS = {
+  // LaLiga
+  'barcelona':                    'FC_Barcelona_(crest).svg',
+  'fc barcelona':                 'FC_Barcelona_(crest).svg',
+  'real madrid':                  'Real_Madrid_CF.svg',
+  'real madrid cf':               'Real_Madrid_CF.svg',
+  'atletico de madrid':           'Atletico_de_Madrid_2017_logo.svg',
+  'atletico madrid':              'Atletico_de_Madrid_2017_logo.svg',
+  'atletico':                     'Atletico_de_Madrid_2017_logo.svg',
+  'club atletico de madrid':      'Atletico_de_Madrid_2017_logo.svg',
+  'athletic':                     'Athletic_Club_2023.svg',
+  'athletic club':                'Athletic_Club_2023.svg',
+  'athletic bilbao':              'Athletic_Club_2023.svg',
+  'villarreal':                   'Villarreal_CF_logo-en.svg',
+  'villarreal cf':                'Villarreal_CF_logo-en.svg',
+  'real sociedad':                'Real_Sociedad_logo.svg',
+  'betis':                        'Real_Betis_logo.svg',
+  'real betis':                   'Real_Betis_logo.svg',
+  'sevilla':                      'Sevilla_FC_logo.svg',
+  'sevilla fc':                   'Sevilla_FC_logo.svg',
+  'valencia':                     'Valencia_CF.svg',
+  'valencia cf':                  'Valencia_CF.svg',
+  'celta':                        'Celta_de_Vigo_logo.svg',
+  'celta de vigo':                'Celta_de_Vigo_logo.svg',
+  'celta vigo':                   'Celta_de_Vigo_logo.svg',
+  'osasuna':                      'CA_Osasuna.svg',
+  'ca osasuna':                   'CA_Osasuna.svg',
+  'getafe':                       'Getafe_CF.svg',
+  'getafe cf':                    'Getafe_CF.svg',
+  'rayo':                         'Rayo_Vallecano_de_Madrid.svg',
+  'rayo vallecano':               'Rayo_Vallecano_de_Madrid.svg',
+  'espanyol':                     'RCD_Espanyol_de_Barcelona_logo.svg',
+  'rcd espanyol':                 'RCD_Espanyol_de_Barcelona_logo.svg',
+  'alaves':                       'Deportivo_Alaves_logo.svg',
+  'deportivo alaves':             'Deportivo_Alaves_logo.svg',
+  'almeria':                      'UD_Almeria.svg',
+  'ud almeria':                   'UD_Almeria.svg',
+  'mallorca':                     'RCD_Mallorca.svg',
+  'rcd mallorca':                 'RCD_Mallorca.svg',
+  'girona':                       'Girona_FC_logo.svg',
+  'girona fc':                    'Girona_FC_logo.svg',
+  'las palmas':                   'UD_Las_Palmas_logo.svg',
+  'ud las palmas':                'UD_Las_Palmas_logo.svg',
+  'leganes':                      'CD_Leganes_logo.svg',
+  'cd leganes':                   'CD_Leganes_logo.svg',
+  // Segunda División y ascendidos
+  'malaga':                       'Malaga_CF.svg',
+  'malaga cf':                    'Malaga_CF.svg',
+  'valladolid':                   'Real_Valladolid_logo.svg',
+  'real valladolid':              'Real_Valladolid_logo.svg',
+  'sporting':                     'Real_Sporting_de_Gijon.svg',
+  'sporting gijon':               'Real_Sporting_de_Gijon.svg',
+  'real sporting de gijon':       'Real_Sporting_de_Gijon.svg',
+  'zaragoza':                     'Real_Zaragoza.svg',
+  'real zaragoza':                'Real_Zaragoza.svg',
+  'tenerife':                     'CD_Tenerife.svg',
+  'cd tenerife':                  'CD_Tenerife.svg',
+  'huesca':                       'SD_Huesca.svg',
+  'sd huesca':                    'SD_Huesca.svg',
+  'elche':                        'Elche_CF.svg',
+  'elche cf':                     'Elche_CF.svg',
+  'levante':                      'Levante_UD.svg',
+  'levante ud':                   'Levante_UD.svg',
+  'granada':                      'Granada_CF_logo.svg',
+  'granada cf':                   'Granada_CF_logo.svg',
+  'deportivo':                    'RC_Deportivo.svg',
+  'deportivo la coruna':          'RC_Deportivo.svg',
+  'rc deportivo':                 'RC_Deportivo.svg',
+  'eibar':                        'SD_Eibar.svg',
+  'sd eibar':                     'SD_Eibar.svg',
+  'cadiz':                        'Cadiz_CF.svg',
+  'cadiz cf':                     'Cadiz_CF.svg',
+  'oviedo':                       'Real_Oviedo.svg',
+  'real oviedo':                  'Real_Oviedo.svg',
+  'mirandes':                     'CD_Mirandes.svg',
+  'cartagena':                    'FC_Cartagena.svg',
+  'fc cartagena':                 'FC_Cartagena.svg',
+  'burgos':                       'Burgos_CF.svg',
+  'burgos cf':                    'Burgos_CF.svg',
+};
+
+function escudoUrl(equipo) {
+  if (!equipo) return null;
+  const norm = equipo.toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim();
+  const f = ESCUDOS[norm];
+  return f ? `https://commons.wikimedia.org/wiki/Special:FilePath/${f}` : null;
+}
+
+function Escudo({ equipo, size = 18 }) {
+  const url = escudoUrl(equipo);
+  if (!url) return null;
+  return (
+    <img src={url} alt="" width={size} height={size} loading="lazy"
+         style={{ objectFit:'contain', verticalAlign:'middle', flexShrink:0 }}
+         onError={e => { e.currentTarget.style.display = 'none'; }} />
+  );
+}
+
 const nombreJugador = (nombre, posicion, equipo) =>
-  posicion === 'POR' ? `Portería ${equipo}` : nombre;
+  posicion === 'POR'
+    ? <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+        <Escudo equipo={equipo} size={16}/>{'Portería ' + equipo}
+      </span>
+    : nombre;
 
 function Medalla({ pos }) {
   if (pos === 1) return <span className="medalla-1">🥇</span>;
@@ -369,7 +475,12 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                     <tr key={i}>
                       <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                      <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
+                      <td style={{color:'var(--texto2)'}}>
+                        {j.posicion === 'POR' ? null
+                          : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                              <Escudo equipo={j.equipo} size={16}/>{j.equipo}
+                            </span>}
+                      </td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
                       <td style={{textAlign:'right'}}
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
@@ -1092,10 +1203,19 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
               return (
                 <tr key={j.id}>
                   <td style={{fontWeight:600}}>
-                    {j.posicion === 'POR' ? j.equipo.toUpperCase() : j.nombre}
+                    {j.posicion === 'POR'
+                      ? <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                          <Escudo equipo={j.equipo} size={16}/>{j.equipo.toUpperCase()}
+                        </span>
+                      : j.nombre}
                   </td>
                   <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                  <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
+                  <td style={{color:'var(--texto2)'}}>
+                    {j.posicion === 'POR' ? null
+                      : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                          <Escudo equipo={j.equipo} size={16}/>{j.equipo}
+                        </span>}
+                  </td>
                   <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || 0)}</td>
                   <td style={{textAlign:'center', fontSize:'.85rem', color: nPujas > 0 ? '#d97706' : 'var(--texto2)'}}>
                     {nPujas > 0 ? `🔥 ${nPujas}` : '—'}
@@ -1802,7 +1922,12 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                     <tr key={i}>
                       <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                      <td style={{color:'var(--texto2)'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
+                      <td style={{color:'var(--texto2)'}}>
+                        {j.posicion === 'POR' ? null
+                          : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                              <Escudo equipo={j.equipo} size={16}/>{j.equipo}
+                            </span>}
+                      </td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
                       <td style={{textAlign:'right'}}
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
@@ -1844,7 +1969,12 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                         <tr key={i}>
                           <td style={{width:48}}><span className={`badge ${a.jugadores?.posicion}`}>{a.jugadores?.posicion}</span></td>
                           <td style={{fontWeight:600}}>{nombreJugador(a.jugadores?.nombre, a.jugadores?.posicion, a.jugadores?.equipo)}</td>
-                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.posicion === 'POR' ? '' : a.jugadores?.equipo}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
+                            {a.jugadores?.posicion === 'POR' ? null
+                              : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                                  <Escudo equipo={a.jugadores?.equipo} size={15}/>{a.jugadores?.equipo}
+                                </span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1863,7 +1993,12 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                         <tr key={i}>
                           <td style={{width:48}}><span className={`badge ${a.jugadores?.posicion}`}>{a.jugadores?.posicion}</span></td>
                           <td style={{fontWeight:600}}>{nombreJugador(a.jugadores?.nombre, a.jugadores?.posicion, a.jugadores?.equipo)}</td>
-                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{a.jugadores?.posicion === 'POR' ? '' : a.jugadores?.equipo}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
+                            {a.jugadores?.posicion === 'POR' ? null
+                              : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                                  <Escudo equipo={a.jugadores?.equipo} size={15}/>{a.jugadores?.equipo}
+                                </span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2308,6 +2443,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
   const [plantilla, setPlantilla] = useState(null);
   const [estado, setEstado]       = useState({});      // id → 'T'|'S'|'F'
   const [ordenSup, setOrdenSup]   = useState({});      // id → 1|2|3|4
+  const [jugadoresHistoricos, setJugadoresHistoricos] = useState([]); // en alineación histórica pero ya no en plantilla
   const [cargandoAli, setCargandoAli] = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
@@ -2364,6 +2500,23 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
           if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
         }
       }
+
+      // Jugadores que estaban en la alineación guardada pero ya no están en la plantilla actual
+      const idsActuales = new Set(plantilla.map(j => j.id));
+      const idsHist = [...new Set(fuente.filter(a => !idsActuales.has(a.jugador_id)).map(a => a.jugador_id))];
+      if (idsHist.length > 0) {
+        const { data: jugsHist } = await sb.from('jugadores').select('id, nombre, equipo, posicion').in('id', idsHist);
+        for (const a of fuente) {
+          if (idsHist.includes(a.jugador_id)) {
+            e[a.jugador_id] = a.es_titular ? 'T' : 'S';
+            if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
+          }
+        }
+        setJugadoresHistoricos(jugsHist || []);
+      } else {
+        setJugadoresHistoricos([]);
+      }
+
       setEstado(e);
       setOrdenSup(ord);
       setCargandoAli(false);
@@ -2378,7 +2531,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
   const nS = Object.values(estado).filter(v => v === 'S').length;
 
   const titPos = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
-  for (const j of (plantilla || [])) if (estado[j.id] === 'T') titPos[j.posicion]++;
+  for (const j of [...(plantilla || []), ...jugadoresHistoricos]) if (estado[j.id] === 'T') titPos[j.posicion]++;
   const formActual  = [titPos.DEF, titPos.MED, titPos.DEL];
   const formStr     = formActual.join('-');
   const formCompleta = nT === 11 && titPos.POR === 1;
@@ -2453,7 +2606,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
     { key: 'S', label: `Suplentes (${nS}/4)`,  color: '#fd7e14' },
     { key: 'F', label: 'Sin convocar',           color: 'var(--texto2)' },
   ];
-  const supsOrdenados = (plantilla || [])
+  const supsOrdenados = [...(plantilla || []), ...jugadoresHistoricos]
     .filter(j => estado[j.id] === 'S')
     .sort((a, b) => (ordenSup[a.id] ?? 99) - (ordenSup[b.id] ?? 99));
 
@@ -2502,9 +2655,13 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
             )}
 
             {secciones.map(({ key, label, color }) => {
+              const idsHist = new Set(jugadoresHistoricos.map(j => j.id));
               const jugs = key === 'S'
                 ? supsOrdenados
-                : plantilla.filter(j => estado[j.id] === key);
+                : key === 'F'
+                  ? plantilla.filter(j => estado[j.id] === key)
+                  : [...plantilla.filter(j => estado[j.id] === key),
+                     ...jugadoresHistoricos.filter(j => estado[j.id] === key)];
               if (!jugs.length) return null;
               return (
                 <div key={key} style={{marginBottom:'1rem'}}>
@@ -2514,48 +2671,61 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
                   </div>
                   <table style={{width:'100%'}}>
                     <tbody>
-                      {jugs.map(j => (
-                        <tr key={j.id}>
-                          {key === 'S' && (
-                            <td style={{width:28, textAlign:'center', fontWeight:700, fontSize:'.85rem', color}}>
-                              {ordenSup[j.id]}°
+                      {jugs.map(j => {
+                        const esHistorico = idsHist.has(j.id);
+                        return (
+                          <tr key={j.id} style={esHistorico ? {opacity:.6} : {}}>
+                            {key === 'S' && (
+                              <td style={{width:28, textAlign:'center', fontWeight:700, fontSize:'.85rem', color}}>
+                                {ordenSup[j.id]}°
+                              </td>
+                            )}
+                            <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                            <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
+                            <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
+                              {j.posicion === 'POR' ? null
+                                : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                                    <Escudo equipo={j.equipo} size={15}/>{j.equipo}
+                                  </span>}
                             </td>
-                          )}
-                          <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                          <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
-                          <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>{j.posicion === 'POR' ? '' : j.equipo}</td>
-                          {!bloqueado && (
-                            <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
-                              {key === 'S' && (
-                                <>
-                                  <button onClick={() => moverSuplente(j.id, -1)}
-                                          disabled={ordenSup[j.id] === 1}
-                                          style={{marginLeft:3, padding:'.2rem .45rem', fontSize:'.75rem',
-                                                  border:'1.5px solid var(--borde)', borderRadius:6,
-                                                  cursor: ordenSup[j.id] === 1 ? 'default' : 'pointer',
-                                                  background:'#fff', opacity: ordenSup[j.id] === 1 ? .35 : 1}}>▲</button>
-                                  <button onClick={() => moverSuplente(j.id, +1)}
-                                          disabled={ordenSup[j.id] === nS}
-                                          style={{marginLeft:2, padding:'.2rem .45rem', fontSize:'.75rem',
-                                                  border:'1.5px solid var(--borde)', borderRadius:6,
-                                                  cursor: ordenSup[j.id] === nS ? 'default' : 'pointer',
-                                                  background:'#fff', opacity: ordenSup[j.id] === nS ? .35 : 1}}>▼</button>
-                                </>
-                              )}
-                              {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
-                                <button key={op} onClick={() => setJugadorEstado(j.id, op)}
-                                        style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',
-                                                border:`1.5px solid ${estado[j.id]===op ? col : 'var(--borde)'}`,
-                                                borderRadius:6, cursor:'pointer',
-                                                background: estado[j.id]===op ? col : '#fff',
-                                                color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
-                                  {etiq}
-                                </button>
-                              ))}
-                            </td>
-                          )}
-                        </tr>
-                      ))}
+                            {esHistorico
+                              ? <td style={{textAlign:'right'}}>
+                                  <span style={{fontSize:'.72rem', color:'var(--texto2)', fontStyle:'italic'}}>vendido</span>
+                                </td>
+                              : !bloqueado && (
+                                <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                                  {key === 'S' && (
+                                    <>
+                                      <button onClick={() => moverSuplente(j.id, -1)}
+                                              disabled={ordenSup[j.id] === 1}
+                                              style={{marginLeft:3, padding:'.2rem .45rem', fontSize:'.75rem',
+                                                      border:'1.5px solid var(--borde)', borderRadius:6,
+                                                      cursor: ordenSup[j.id] === 1 ? 'default' : 'pointer',
+                                                      background:'#fff', opacity: ordenSup[j.id] === 1 ? .35 : 1}}>▲</button>
+                                      <button onClick={() => moverSuplente(j.id, +1)}
+                                              disabled={ordenSup[j.id] === nS}
+                                              style={{marginLeft:2, padding:'.2rem .45rem', fontSize:'.75rem',
+                                                      border:'1.5px solid var(--borde)', borderRadius:6,
+                                                      cursor: ordenSup[j.id] === nS ? 'default' : 'pointer',
+                                                      background:'#fff', opacity: ordenSup[j.id] === nS ? .35 : 1}}>▼</button>
+                                    </>
+                                  )}
+                                  {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
+                                    <button key={op} onClick={() => setJugadorEstado(j.id, op)}
+                                            style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',
+                                                    border:`1.5px solid ${estado[j.id]===op ? col : 'var(--borde)'}`,
+                                                    borderRadius:6, cursor:'pointer',
+                                                    background: estado[j.id]===op ? col : '#fff',
+                                                    color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
+                                      {etiq}
+                                    </button>
+                                  ))}
+                                </td>
+                              )
+                            }
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

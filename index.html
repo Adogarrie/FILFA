@@ -205,9 +205,9 @@ if (!esDemo) {
 const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
 const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
 
-// Mapa equipo (normalizado) → título del artículo en Wikipedia
-// Se usa la API REST de Wikipedia para obtener la imagen real del artículo.
+// Mapa equipo (normalizado) → título del artículo en Wikipedia en inglés
 const _WIKI_TITULOS = {
+  // LaLiga
   'barcelona':                'FC Barcelona',
   'fc barcelona':             'FC Barcelona',
   'real madrid':              'Real Madrid CF',
@@ -251,12 +251,14 @@ const _WIKI_TITULOS = {
   'ud las palmas':            'UD Las Palmas',
   'leganes':                  'CD Leganés',
   'cd leganes':               'CD Leganés',
+  // Segunda División y otros
   'malaga':                   'Málaga CF',
   'malaga cf':                'Málaga CF',
   'valladolid':               'Real Valladolid',
   'real valladolid':          'Real Valladolid',
   'sporting':                 'Sporting de Gijón',
   'sporting gijon':           'Sporting de Gijón',
+  'real sporting de gijon':   'Sporting de Gijón',
   'zaragoza':                 'Real Zaragoza',
   'real zaragoza':            'Real Zaragoza',
   'tenerife':                 'CD Tenerife',
@@ -265,12 +267,16 @@ const _WIKI_TITULOS = {
   'sd huesca':                'SD Huesca',
   'elche':                    'Elche CF',
   'elche cf':                 'Elche CF',
+  'elche fc':                 'Elche CF',
   'levante':                  'Levante UD',
   'levante ud':               'Levante UD',
   'granada':                  'Granada CF',
   'granada cf':               'Granada CF',
   'deportivo':                'RC Deportivo de La Coruña',
   'deportivo la coruna':      'RC Deportivo de La Coruña',
+  'deportivo de la coruna':   'RC Deportivo de La Coruña',
+  'rc deportivo':             'RC Deportivo de La Coruña',
+  'rc deportivo de la coruna':'RC Deportivo de La Coruña',
   'eibar':                    'SD Eibar',
   'sd eibar':                 'SD Eibar',
   'cadiz':                    'Cádiz CF',
@@ -282,9 +288,22 @@ const _WIKI_TITULOS = {
   'fc cartagena':             'FC Cartagena',
   'burgos':                   'Burgos CF',
   'burgos cf':                'Burgos CF',
+  'racing':                   'Racing de Santander',
+  'racing de santander':      'Racing de Santander',
+  'racing santander':         'Racing de Santander',
+  'racing club de santander': 'Racing de Santander',
+  'real racing club':         'Racing de Santander',
+  'ponferradina':             'SD Ponferradina',
+  'sd ponferradina':          'SD Ponferradina',
+  'andorra':                  'FC Andorra',
+  'fc andorra':               'FC Andorra',
+  'castellon':                'CD Castellón',
+  'cd castellon':             'CD Castellón',
+  'alcorcon':                 'AD Alcorcón',
+  'ad alcorcon':              'AD Alcorcón',
 };
 
-// Caché en memoria: título Wikipedia → URL de imagen (null = sin imagen)
+// Caché en memoria: título → URL de imagen (null = no encontrada)
 const _escudoCache = {};
 
 function _wikiTitulo(equipo) {
@@ -302,10 +321,15 @@ function Escudo({ equipo, size = 18 }) {
   useEffect(() => {
     if (!titulo) return;
     if (titulo in _escudoCache) { setSrc(_escudoCache[titulo]); return; }
-    fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titulo)}`)
+    // MediaWiki API: genera PNG desde SVG, funciona con crests en formato vectorial
+    const apiUrl = 'https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*'
+      + `&titles=${encodeURIComponent(titulo)}&prop=pageimages&pithumbsize=120&pilicense=any`;
+    fetch(apiUrl)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        const url = d?.originalimage?.source || d?.thumbnail?.source || null;
+        const pages = d?.query?.pages || {};
+        const page = Object.values(pages)[0];
+        const url = page?.thumbnail?.source || null;
         _escudoCache[titulo] = url;
         setSrc(url);
       })

@@ -4115,7 +4115,7 @@ function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccion
 // ── APP PRINCIPAL ──────────────────────────────────────────────
 
 function App() {
-  const [vista, setVista]                   = useState('Mi Plantilla');
+  const [vista, setVista]                   = useState('Tablón');
   const [participantes, setParticipantes]   = useState([]);
   const [participanteId, setParticipanteId] = useState('');
   const [federacion, setFederacion]         = useState(null);
@@ -4138,7 +4138,7 @@ function App() {
     setFederacion(fed || null);
     setSession({ email: u?.email || '', participante_id: part?.id || null, es_moderador: esMod });
     setVerOnboarding(false);
-    setVista('Mi Plantilla');
+    setVista('Tablón');
     if (part?.id) localStorage.setItem('filfa_part_id', part.id);
   };
 
@@ -4254,7 +4254,7 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Mi Plantilla', 'Mercado', 'Alineación', 'Equipos', 'Calendario', 'Tablón',
+  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Alineación', 'Equipos', 'Calendario',
                        ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 

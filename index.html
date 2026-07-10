@@ -1639,6 +1639,7 @@ function AdminPtsJugadores({ participantes, federacion }) {
   const [ptsJug, setPtsJug]   = useState({});
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]         = useState('');
+  const [equipoSel, setEquipoSel] = useState('');
 
   useEffect(() => {
     if (!sb) return;
@@ -1701,6 +1702,8 @@ function AdminPtsJugadores({ participantes, federacion }) {
   };
 
   const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
+  const equipoActual  = (equipoSel && equiposReales.includes(equipoSel)) ? equipoSel : (equiposReales[0] || '');
+  const jugsEq        = jugadores.filter(j => j.equipo === equipoActual);
   const iS = { width:72, textAlign:'right', padding:'.25rem .4rem',
                border:'1.5px solid var(--borde)', borderRadius:7, fontSize:'.88rem', fontWeight:600 };
 
@@ -1723,30 +1726,37 @@ function AdminPtsJugadores({ participantes, federacion }) {
 
       {jugadores.length === 0
         ? <div className="card"><div className="empty">No hay jugadores en la base de datos.</div></div>
-        : equiposReales.map(equipo => {
-            const jugsEq = jugadores.filter(j => j.equipo === equipo);
-            return (
-              <div key={equipo} className="card" style={{paddingBottom:'.75rem'}}>
-                <h2 style={{fontSize:'.92rem', marginBottom:'.5rem'}}>{equipo}</h2>
-                <table>
-                  <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
-                  <tbody>
-                    {jugsEq.map(j => (
-                      <tr key={j.id}>
-                        <td style={{fontWeight:600}}>{j.nombre}</td>
-                        <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
-                        <td style={{textAlign:'right'}}>
-                          <input type="number" min="0" value={ptsJug[j.id] ?? ''}
-                                 onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
-                                 placeholder="0" style={iS} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })
+        : <>
+            <div className="tabs" style={{flexWrap:'wrap', marginBottom:'.5rem'}}>
+              {equiposReales.map(eq => (
+                <button key={eq} className={`tab ${equipoActual===eq?'active':''}`}
+                        onClick={() => setEquipoSel(eq)}>
+                  <Escudo equipo={eq} size={14} />{' '}{eq}
+                </button>
+              ))}
+            </div>
+            <div className="card" style={{paddingBottom:'.75rem'}}>
+              <h2 style={{fontSize:'.95rem', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
+                <Escudo equipo={equipoActual} size={18} />{equipoActual}
+              </h2>
+              <table>
+                <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
+                <tbody>
+                  {jugsEq.map(j => (
+                    <tr key={j.id}>
+                      <td style={{fontWeight:600}}>{j.nombre}</td>
+                      <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
+                      <td style={{textAlign:'right'}}>
+                        <input type="number" min="0" value={ptsJug[j.id] ?? ''}
+                               onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
+                               placeholder="0" style={iS} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
       }
 
       <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>

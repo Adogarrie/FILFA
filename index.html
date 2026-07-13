@@ -206,139 +206,123 @@ const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
 const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
 
 // Mapa equipo (normalizado) → título del artículo en Wikipedia en inglés
-const _WIKI_TITULOS = {
-  // LaLiga
-  'barcelona':                'FC Barcelona',
-  'fc barcelona':             'FC Barcelona',
-  'real madrid':              'Real Madrid CF',
-  'real madrid cf':           'Real Madrid CF',
-  'atletico de madrid':       'Atlético de Madrid',
-  'atletico madrid':          'Atlético de Madrid',
-  'atletico':                 'Atlético de Madrid',
-  'club atletico de madrid':  'Atlético de Madrid',
-  'athletic':                 'Athletic Club',
-  'athletic club':            'Athletic Club',
-  'athletic bilbao':          'Athletic Club',
-  'villarreal':               'Villarreal CF',
-  'villarreal cf':            'Villarreal CF',
-  'real sociedad':            'Real Sociedad',
-  'betis':                    'Real Betis',
-  'real betis':               'Real Betis',
-  'sevilla':                  'Sevilla FC',
-  'sevilla fc':               'Sevilla FC',
-  'valencia':                 'Valencia CF',
-  'valencia cf':              'Valencia CF',
-  'celta':                    'RC Celta de Vigo',
-  'celta de vigo':            'RC Celta de Vigo',
-  'celta vigo':               'RC Celta de Vigo',
-  'osasuna':                  'CA Osasuna',
-  'ca osasuna':               'CA Osasuna',
-  'getafe':                   'Getafe CF',
-  'getafe cf':                'Getafe CF',
-  'rayo':                     'Rayo Vallecano',
-  'rayo vallecano':           'Rayo Vallecano',
-  'espanyol':                 'RCD Espanyol',
-  'rcd espanyol':             'RCD Espanyol',
-  'alaves':                   'Deportivo Alavés',
-  'deportivo alaves':         'Deportivo Alavés',
-  'almeria':                  'UD Almería',
-  'ud almeria':               'UD Almería',
-  'mallorca':                 'RCD Mallorca',
-  'rcd mallorca':             'RCD Mallorca',
-  'girona':                   'Girona FC',
-  'girona fc':                'Girona FC',
-  'las palmas':               'UD Las Palmas',
-  'ud las palmas':            'UD Las Palmas',
-  'leganes':                  'CD Leganés',
-  'cd leganes':               'CD Leganés',
-  // Segunda División y otros
-  'malaga':                   'Málaga CF',
-  'malaga cf':                'Málaga CF',
-  'valladolid':               'Real Valladolid',
-  'real valladolid':          'Real Valladolid',
-  'sporting':                 'Sporting de Gijón',
-  'sporting gijon':           'Sporting de Gijón',
-  'real sporting de gijon':   'Sporting de Gijón',
-  'zaragoza':                 'Real Zaragoza',
-  'real zaragoza':            'Real Zaragoza',
-  'tenerife':                 'CD Tenerife',
-  'cd tenerife':              'CD Tenerife',
-  'huesca':                   'SD Huesca',
-  'sd huesca':                'SD Huesca',
-  'elche':                    'Elche CF',
-  'elche cf':                 'Elche CF',
-  'elche fc':                 'Elche CF',
-  'levante':                  'Levante UD',
-  'levante ud':               'Levante UD',
-  'granada':                  'Granada CF',
-  'granada cf':               'Granada CF',
-  'deportivo':                'RC Deportivo de La Coruña',
-  'deportivo la coruna':      'RC Deportivo de La Coruña',
-  'deportivo de la coruna':   'RC Deportivo de La Coruña',
-  'rc deportivo':             'RC Deportivo de La Coruña',
-  'rc deportivo de la coruna':'RC Deportivo de La Coruña',
-  'eibar':                    'SD Eibar',
-  'sd eibar':                 'SD Eibar',
-  'cadiz':                    'Cádiz CF',
-  'cadiz cf':                 'Cádiz CF',
-  'oviedo':                   'Real Oviedo',
-  'real oviedo':              'Real Oviedo',
-  'mirandes':                 'CD Mirandés',
-  'cartagena':                'FC Cartagena',
-  'fc cartagena':             'FC Cartagena',
-  'burgos':                   'Burgos CF',
-  'burgos cf':                'Burgos CF',
-  'racing':                   'Racing de Santander',
-  'racing de santander':      'Racing de Santander',
-  'racing santander':         'Racing de Santander',
-  'racing club de santander': 'Racing de Santander',
-  'real racing club':         'Racing de Santander',
-  'ponferradina':             'SD Ponferradina',
-  'sd ponferradina':          'SD Ponferradina',
-  'andorra':                  'FC Andorra',
-  'fc andorra':               'FC Andorra',
-  'castellon':                'CD Castellón',
-  'cd castellon':             'CD Castellón',
-  'alcorcon':                 'AD Alcorcón',
-  'ad alcorcon':              'AD Alcorcón',
+// Mapa equipo (cualquier casing) → nombre de archivo PNG en carpeta escudos/
+// Los archivos deben estar en FILFA/escudos/{filename}.png
+const _ESCUDOS = {
+  'barcelona':                'barcelona',
+  'fc barcelona':             'barcelona',
+  'real madrid':              'real_madrid',
+  'real madrid cf':           'real_madrid',
+  'atletico de madrid':       'atletico_madrid',
+  'atletico madrid':          'atletico_madrid',
+  'atletico':                 'atletico_madrid',
+  'club atletico de madrid':  'atletico_madrid',
+  'athletic':                 'athletic_club',
+  'athletic club':            'athletic_club',
+  'athletic bilbao':          'athletic_club',
+  'villarreal':               'villarreal',
+  'villarreal cf':            'villarreal',
+  'real sociedad':            'real_sociedad',
+  'betis':                    'betis',
+  'real betis':               'betis',
+  'sevilla':                  'sevilla',
+  'sevilla fc':               'sevilla',
+  'valencia':                 'valencia',
+  'valencia cf':              'valencia',
+  'celta':                    'celta',
+  'celta de vigo':            'celta',
+  'celta vigo':               'celta',
+  'osasuna':                  'osasuna',
+  'ca osasuna':               'osasuna',
+  'getafe':                   'getafe',
+  'getafe cf':                'getafe',
+  'rayo':                     'rayo_vallecano',
+  'rayo vallecano':           'rayo_vallecano',
+  'espanyol':                 'espanyol',
+  'rcd espanyol':             'espanyol',
+  'alaves':                   'alaves',
+  'deportivo alaves':         'alaves',
+  'almeria':                  'almeria',
+  'ud almeria':               'almeria',
+  'mallorca':                 'mallorca',
+  'rcd mallorca':             'mallorca',
+  'girona':                   'girona',
+  'girona fc':                'girona',
+  'las palmas':               'las_palmas',
+  'ud las palmas':            'las_palmas',
+  'leganes':                  'leganes',
+  'cd leganes':               'leganes',
+  'malaga':                   'malaga',
+  'malaga cf':                'malaga',
+  'valladolid':               'valladolid',
+  'real valladolid':          'valladolid',
+  'sporting':                 'sporting_gijon',
+  'sporting gijon':           'sporting_gijon',
+  'real sporting de gijon':   'sporting_gijon',
+  'zaragoza':                 'zaragoza',
+  'real zaragoza':            'zaragoza',
+  'tenerife':                 'tenerife',
+  'cd tenerife':              'tenerife',
+  'huesca':                   'huesca',
+  'sd huesca':                'huesca',
+  'elche':                    'elche',
+  'elche cf':                 'elche',
+  'elche fc':                 'elche',
+  'levante':                  'levante',
+  'levante ud':               'levante',
+  'granada':                  'granada',
+  'granada cf':               'granada',
+  'deportivo':                'deportivo',
+  'deportivo la coruna':      'deportivo',
+  'deportivo de la coruna':   'deportivo',
+  'rc deportivo':             'deportivo',
+  'rc deportivo de la coruna':'deportivo',
+  'eibar':                    'eibar',
+  'sd eibar':                 'eibar',
+  'cadiz':                    'cadiz',
+  'cadiz cf':                 'cadiz',
+  'oviedo':                   'oviedo',
+  'real oviedo':              'oviedo',
+  'mirandes':                 'mirandes',
+  'cartagena':                'cartagena',
+  'fc cartagena':             'cartagena',
+  'burgos':                   'burgos',
+  'burgos cf':                'burgos',
+  'racing':                   'racing_santander',
+  'racing de santander':      'racing_santander',
+  'racing santander':         'racing_santander',
+  'racing club de santander': 'racing_santander',
+  'real racing club':         'racing_santander',
+  'ponferradina':             'ponferradina',
+  'sd ponferradina':          'ponferradina',
+  'andorra':                  'andorra',
+  'fc andorra':               'andorra',
+  'castellon':                'castellon',
+  'cd castellon':             'castellon',
+  'alcorcon':                 'alcorcon',
+  'ad alcorcon':              'alcorcon',
 };
 
-// Caché en memoria: título → URL de imagen (null = no encontrada)
-const _escudoCache = {};
+// Normaliza cualquier string: minúsculas, sin acentos, espacios simples
+const _norm = s => s.toLowerCase()
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/\s+/g, ' ').trim();
 
-function _wikiTitulo(equipo) {
+// Lookup con claves normalizadas (independiente del casing de entrada)
+const _ESCUDO_MAP = Object.fromEntries(
+  Object.entries(_ESCUDOS).map(([k, v]) => [_norm(k), v])
+);
+
+function _escudoFile(equipo) {
   if (!equipo) return null;
-  const norm = equipo.toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/\s+/g, ' ').trim();
-  return _WIKI_TITULOS[norm] || null;
+  return _ESCUDO_MAP[_norm(equipo)] || null;
 }
 
 function Escudo({ equipo, size = 18 }) {
-  const titulo = _wikiTitulo(equipo);
-  const [src, setSrc] = useState(titulo ? (_escudoCache[titulo] ?? null) : null);
-
-  useEffect(() => {
-    if (!titulo) return;
-    if (titulo in _escudoCache) { setSrc(_escudoCache[titulo]); return; }
-    // MediaWiki API: genera PNG desde SVG, funciona con crests en formato vectorial
-    const apiUrl = 'https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*'
-      + `&titles=${encodeURIComponent(titulo)}&prop=pageimages&pithumbsize=120&pilicense=any`;
-    fetch(apiUrl)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        const pages = d?.query?.pages || {};
-        const page = Object.values(pages)[0];
-        const url = page?.thumbnail?.source || null;
-        _escudoCache[titulo] = url;
-        setSrc(url);
-      })
-      .catch(() => { _escudoCache[titulo] = null; });
-  }, [titulo]);
-
-  if (!src) return null;
+  const file = _escudoFile(equipo);
+  if (!file) return null;
   return (
-    <img src={src} alt="" width={size} height={size} loading="lazy"
+    <img src={`escudos/${file}.png`} alt="" width={size} height={size}
          style={{ objectFit:'contain', verticalAlign:'middle', flexShrink:0 }}
          onError={e => { e.currentTarget.style.display = 'none'; }} />
   );

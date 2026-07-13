@@ -2511,19 +2511,32 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
         }
       }
 
-      // Jugadores que estaban en la alineación guardada pero ya no están en la plantilla actual
+      // Jugadores vendidos: en alineación guardada pero ya no en plantilla
       const idsActuales = new Set(plantilla.map(j => j.id));
-      const idsHist = [...new Set(fuente.filter(a => !idsActuales.has(a.jugador_id)).map(a => a.jugador_id))];
-      if (idsHist.length > 0) {
-        const { data: jugsHist } = await sb.from('jugadores').select('id, nombre, equipo, posicion').in('id', idsHist);
+      const idsVendidos = [...new Set(fuente.filter(a => !idsActuales.has(a.jugador_id)).map(a => a.jugador_id))];
+
+      const esJornadaPasada = jornada < jornadaActual;
+
+      if (esJornadaPasada && idsVendidos.length > 0) {
+        // Jornada pasada → mostrar vendidos como histórico (solo lectura, sin botones)
+        const { data: jugsHist } = await sb.from('jugadores').select('id, nombre, equipo, posicion').in('id', idsVendidos);
         for (const a of fuente) {
-          if (idsHist.includes(a.jugador_id)) {
+          if (idsVendidos.includes(a.jugador_id)) {
             e[a.jugador_id] = a.es_titular ? 'T' : 'S';
             if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
           }
         }
         setJugadoresHistoricos(jugsHist || []);
       } else {
+        // Jornada actual/futura → ignorar vendidos por completo
+        // Si estaban guardados en DB para esta jornada, limpiarlos silenciosamente
+        if (!esJornadaPasada && idsVendidos.length > 0) {
+          await sb.from('alineaciones')
+            .delete()
+            .eq('participante_id', participanteId)
+            .eq('jornada', jornada)
+            .in('jugador_id', idsVendidos);
+        }
         setJugadoresHistoricos([]);
       }
 

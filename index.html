@@ -318,7 +318,7 @@ function _escudoFile(equipo) {
   return _ESCUDO_MAP[_norm(equipo)] || null;
 }
 
-function Escudo({ equipo, size = 72 }) {
+function Escudo({ equipo, size = 48 }) {
   const file = _escudoFile(equipo);
   if (!file) return null;
   return (
@@ -331,7 +331,7 @@ function Escudo({ equipo, size = 72 }) {
 const nombreJugador = (nombre, posicion, equipo) =>
   posicion === 'POR'
     ? <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
-        <Escudo equipo={equipo} size={72}/>{'Portería ' + equipo}
+        <Escudo equipo={equipo} size={48}/>{'Portería ' + equipo}
       </span>
     : nombre;
 
@@ -500,7 +500,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
                           : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                              <Escudo equipo={j.equipo} size={72}/>{j.equipo}
+                              <Escudo equipo={j.equipo} size={48}/>{j.equipo}
                             </span>}
                       </td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
@@ -1715,13 +1715,13 @@ function AdminPtsJugadores({ participantes, federacion }) {
               {equiposReales.map(eq => (
                 <button key={eq} className={`tab ${equipoActual===eq?'active':''}`}
                         onClick={() => setEquipoSel(eq)}>
-                  <Escudo equipo={eq} size={72} />{' '}{eq}
+                  <Escudo equipo={eq} size={48} />{' '}{eq}
                 </button>
               ))}
             </div>
             <div className="card" style={{paddingBottom:'.75rem'}}>
               <h2 style={{fontSize:'.95rem', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
-                <Escudo equipo={equipoActual} size={72} />{equipoActual}
+                <Escudo equipo={equipoActual} size={48} />{equipoActual}
               </h2>
               <table>
                 <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>

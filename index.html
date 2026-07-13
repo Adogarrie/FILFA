@@ -3422,6 +3422,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [nuevoEq, setNuevoEq]     = useState({ nombre:'', estadio:'', entrenador:'' });
   const [msgEq, setMsgEq]         = useState('');
   const [eliminando, setEliminando] = useState(null);
+  const [subiendo, setSubiendo]   = useState(false);
 
   const [mods, setMods]       = useState([]);   // [{id, participante_id}]
   const [selMod, setSelMod]   = useState('');
@@ -3479,10 +3480,81 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     setTimeout(() => setMsg(''), 3000);
   };
 
+  const subirLogo = async (file) => {
+    if (!file || !sb || !federacion) return;
+    setSubiendo(true);
+    const ext  = file.name.split('.').pop().toLowerCase();
+    const path = `${federacion.id}/logo.${ext}`;
+    const { error: upErr } = await sb.storage
+      .from('logos-federacion')
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (upErr) { alert('Error al subir imagen: ' + upErr.message); setSubiendo(false); return; }
+    const { data: { publicUrl } } = sb.storage.from('logos-federacion').getPublicUrl(path);
+    // Añadir timestamp para forzar refresco de caché del navegador
+    const urlFinal = publicUrl + '?t=' + Date.now();
+    const { error, data } = await sb.from('federaciones')
+      .update({ logo_url: urlFinal })
+      .eq('id', federacion.id).select().single();
+    if (error) { alert('Error: ' + error.message); setSubiendo(false); return; }
+    onFederacionUpdate(data);
+    setSubiendo(false);
+    setMsg('Logo actualizado');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  const quitarLogo = async () => {
+    if (!sb || !federacion) return;
+    const { error, data } = await sb.from('federaciones')
+      .update({ logo_url: null })
+      .eq('id', federacion.id).select().single();
+    if (error) { alert('Error: ' + error.message); return; }
+    onFederacionUpdate(data);
+    setMsg('Logo eliminado');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
   return (
     <>
     <div className="card">
       <h2>Mi Federación</h2>
+
+      {/* ── Logo de la federación ── */}
+      <div style={{marginBottom:'1.25rem'}}>
+        <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.5rem', fontWeight:600}}>
+          Logo de la liga
+        </div>
+        <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+          {federacion?.logo_url
+            ? <img src={federacion.logo_url} alt="Logo"
+                   style={{height:56, maxWidth:120, objectFit:'contain',
+                           border:'1.5px solid var(--borde)', borderRadius:8, padding:4, background:'#fff'}} />
+            : <div style={{height:56, width:56, borderRadius:8, border:'1.5px dashed var(--borde)',
+                           display:'flex', alignItems:'center', justifyContent:'center',
+                           fontSize:'.75rem', color:'var(--texto2)'}}>Sin logo</div>
+          }
+          <div style={{display:'flex', flexDirection:'column', gap:'.4rem'}}>
+            <label style={{display:'inline-block', padding:'.35rem .9rem', borderRadius:8,
+                           border:'1.5px solid var(--verde)', background:'#fff', color:'var(--verde)',
+                           cursor: subiendo ? 'wait' : 'pointer', fontWeight:600, fontSize:'.85rem',
+                           opacity: subiendo ? .6 : 1}}>
+              {subiendo ? 'Subiendo…' : 'Subir imagen'}
+              <input type="file" accept="image/*" style={{display:'none'}} disabled={subiendo}
+                     onChange={e => { if (e.target.files[0]) subirLogo(e.target.files[0]); e.target.value = ''; }} />
+            </label>
+            {federacion?.logo_url && (
+              <button onClick={quitarLogo}
+                      style={{padding:'.3rem .75rem', borderRadius:8, border:'1.5px solid #d93025',
+                              background:'#fff', color:'#d93025', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+                Quitar logo
+              </button>
+            )}
+          </div>
+          <div style={{fontSize:'.78rem', color:'var(--texto2)'}}>
+            Se mostrará en la esquina superior izquierda.<br/>
+            Formatos: PNG, JPG, SVG. Recomendado: fondo transparente.
+          </div>
+        </div>
+      </div>
 
       <div style={{background:'var(--gris)', borderRadius:10, padding:'1rem 1.25rem', marginBottom:'1.25rem'}}>
         <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.35rem', fontWeight:600}}>
@@ -4264,14 +4336,20 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Alineación', 'Equipos', 'Calendario',
+  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Alineación', 'Mercado', 'Equipos', 'Calendario',
                        ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
   return (
     <>
       <nav>
-        <h1>{federacion?.nombre || 'Fantasy LaLiga'}</h1>
+        <h1>
+          {federacion?.logo_url
+            ? <img src={federacion.logo_url} alt={federacion.nombre || ''}
+                   style={{height:38, maxWidth:120, objectFit:'contain', display:'block'}} />
+            : (federacion?.nombre || 'Fantasy LaLiga')
+          }
+        </h1>
         {VISTAS.map(v => (
           <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}>
             {v}

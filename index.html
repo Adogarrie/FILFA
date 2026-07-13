@@ -318,7 +318,7 @@ function _escudoFile(equipo) {
   return _ESCUDO_MAP[_norm(equipo)] || null;
 }
 
-function Escudo({ equipo, size = 24 }) {
+function Escudo({ equipo, size = 36 }) {
   const file = _escudoFile(equipo);
   if (!file) return null;
   return (
@@ -331,7 +331,7 @@ function Escudo({ equipo, size = 24 }) {
 const nombreJugador = (nombre, posicion, equipo) =>
   posicion === 'POR'
     ? <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
-        <Escudo equipo={equipo} size={22}/>{'Portería ' + equipo}
+        <Escudo equipo={equipo} size={36}/>{'Portería ' + equipo}
       </span>
     : nombre;
 
@@ -1715,13 +1715,13 @@ function AdminPtsJugadores({ participantes, federacion }) {
               {equiposReales.map(eq => (
                 <button key={eq} className={`tab ${equipoActual===eq?'active':''}`}
                         onClick={() => setEquipoSel(eq)}>
-                  <Escudo equipo={eq} size={18} />{' '}{eq}
+                  <Escudo equipo={eq} size={36} />{' '}{eq}
                 </button>
               ))}
             </div>
             <div className="card" style={{paddingBottom:'.75rem'}}>
               <h2 style={{fontSize:'.95rem', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
-                <Escudo equipo={equipoActual} size={24} />{equipoActual}
+                <Escudo equipo={equipoActual} size={48} />{equipoActual}
               </h2>
               <table>
                 <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>

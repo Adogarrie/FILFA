@@ -4001,6 +4001,197 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
   );
 }
 
+// ── ADMIN JUGADORES — añadir / borrar jugadores ────────────────
+function AdminJugadores({ participantes, federacion }) {
+  const POSICIONES = ['POR', 'DEF', 'MED', 'DEL'];
+
+  // ── Equipos reales conocidos (del mapa de escudos + los de la BD)
+  const EQUIPOS_CONOCIDOS = [
+    'FC Barcelona','Real Madrid CF','Atlético de Madrid','Athletic Club',
+    'Villarreal CF','Real Sociedad','Real Betis','Sevilla FC','Valencia CF',
+    'RC Celta de Vigo','CA Osasuna','Getafe CF','Rayo Vallecano','RCD Espanyol',
+    'Deportivo Alavés','Málaga CF','Real Zaragoza','CD Tenerife','SD Huesca',
+    'Elche CF','Levante UD','Granada CF','RC Deportivo de La Coruña',
+    'Burgos CF','Racing de Santander','SD Ponferradina','FC Andorra',
+    'CD Castellón','AD Alcorcón',
+  ].sort();
+
+  const vacioForm = { nombre: '', equipo: '', posicion: 'DEF', valor: '', destino: 'mercado', participante_id: '' };
+  const [form, setForm]         = useState(vacioForm);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg]           = useState('');
+
+  // Lista de jugadores para borrar
+  const [jugadores, setJugadores]   = useState(null);
+  const [filtroNom, setFiltroNom]   = useState('');
+  const [filtroEq, setFiltroEq]     = useState('');
+  const [borrando, setBorrando]     = useState(null);
+
+  const cargarJugadores = async () => {
+    const { data } = await sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').order('equipo').order('nombre');
+    setJugadores(data || []);
+  };
+
+  useEffect(() => { if (sb) cargarJugadores(); }, []);
+
+  const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const añadir = async () => {
+    if (!form.nombre.trim()) { setMsg('Introduce el nombre del jugador.'); return; }
+    if (!form.equipo.trim()) { setMsg('Introduce el equipo real.'); return; }
+    if (!form.valor || isNaN(Number(form.valor)) || Number(form.valor) < 0) { setMsg('Valor de mercado no válido.'); return; }
+    if (form.destino === 'equipo' && !form.participante_id) { setMsg('Selecciona el equipo de la federación.'); return; }
+    setGuardando(true); setMsg('');
+
+    // 1. Insertar en jugadores
+    const { data: jug, error: errJug } = await sb.from('jugadores').insert({
+      nombre:        form.nombre.trim(),
+      equipo:        form.equipo.trim(),
+      posicion:      form.posicion,
+      valor_mercado: Number(form.valor),
+    }).select().single();
+    if (errJug) { setMsg('Error: ' + errJug.message); setGuardando(false); return; }
+
+    // 2. Si destino es un equipo, añadir a plantillas
+    if (form.destino === 'equipo') {
+      const { error: errPl } = await sb.from('plantillas').insert({
+        participante_id: form.participante_id,
+        jugador_id:      jug.id,
+        precio_compra:   Number(form.valor),
+      });
+      if (errPl) { setMsg('Jugador creado pero error al asignar equipo: ' + errPl.message); setGuardando(false); return; }
+
+      // Descontar presupuesto
+      const part = participantes.find(p => p.id === form.participante_id);
+      if (part) {
+        await sb.from('participantes').update({ presupuesto: part.presupuesto - Number(form.valor) }).eq('id', form.participante_id);
+      }
+    }
+
+    setMsg(`✓ ${form.posicion === 'POR' ? 'Portería de ' + form.equipo.trim() : form.nombre.trim()} añadido${form.destino === 'equipo' ? ' a la plantilla' : ' al mercado'}.`);
+    setForm(vacioForm);
+    setGuardando(false);
+    cargarJugadores();
+  };
+
+  const borrar = async (j) => {
+    if (!confirm(`¿Eliminar a "${j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.`)) return;
+    setBorrando(j.id);
+    const { error } = await sb.from('jugadores').delete().eq('id', j.id);
+    setBorrando(null);
+    if (error) { alert('Error: ' + error.message); return; }
+    cargarJugadores();
+  };
+
+  const listaFiltrada = (jugadores || []).filter(j => {
+    const nom = (j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre).toLowerCase();
+    return nom.includes(filtroNom.toLowerCase()) && j.equipo.toLowerCase().includes(filtroEq.toLowerCase());
+  });
+
+  const iS = { width: '100%', padding: '.45rem .7rem', borderRadius: 8,
+               border: '1.5px solid var(--borde)', fontSize: '.92rem' };
+
+  return (
+    <div>
+      {/* ── Formulario alta ── */}
+      <div className="card">
+        <h2>Añadir jugador</h2>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:'1rem', marginBottom:'1rem' }}>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Nombre</label>
+            <input value={form.nombre} onChange={e => f('nombre', e.target.value)} placeholder="Nombre del jugador" style={iS} />
+          </div>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Equipo real</label>
+            <input list="equipos-lista" value={form.equipo} onChange={e => f('equipo', e.target.value)} placeholder="Ej: Málaga CF" style={iS} />
+            <datalist id="equipos-lista">
+              {EQUIPOS_CONOCIDOS.map(eq => <option key={eq} value={eq} />)}
+            </datalist>
+          </div>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Posición</label>
+            <select value={form.posicion} onChange={e => f('posicion', e.target.value)} style={iS}>
+              {POSICIONES.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Valor de mercado (€)</label>
+            <input type="number" min="0" value={form.valor} onChange={e => f('valor', e.target.value)} placeholder="Ej: 5000000" style={iS} />
+          </div>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Destino</label>
+            <select value={form.destino} onChange={e => f('destino', e.target.value)} style={iS}>
+              <option value="mercado">Mercado libre</option>
+              <option value="equipo">Equipo de la federación</option>
+            </select>
+          </div>
+          {form.destino === 'equipo' && (
+            <div>
+              <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Equipo de la federación</label>
+              <select value={form.participante_id} onChange={e => f('participante_id', e.target.value)} style={iS}>
+                <option value="">— Selecciona —</option>
+                {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap' }}>
+          <button onClick={añadir} disabled={guardando} className="btn-ok"
+                  style={{ opacity: guardando ? .6 : 1, cursor: guardando ? 'wait' : 'pointer' }}>
+            {guardando ? 'Añadiendo…' : 'Añadir jugador'}
+          </button>
+          {msg && <span style={{ color: msg.startsWith('✓') ? 'var(--verde)' : '#dc3545', fontWeight: 600, fontSize: '.9rem' }}>{msg}</span>}
+        </div>
+      </div>
+
+      {/* ── Lista para borrar ── */}
+      <div className="card">
+        <h2>Eliminar jugador</h2>
+        <div style={{ display:'flex', gap:'.75rem', flexWrap:'wrap', marginBottom:'1rem' }}>
+          <input value={filtroNom} onChange={e => setFiltroNom(e.target.value)}
+                 placeholder="Buscar por nombre…"
+                 style={{ flex:2, minWidth:160, padding:'.4rem .7rem', borderRadius:8, border:'1.5px solid var(--borde)', fontSize:'.88rem' }} />
+          <input value={filtroEq} onChange={e => setFiltroEq(e.target.value)}
+                 placeholder="Filtrar por equipo real…"
+                 style={{ flex:1, minWidth:140, padding:'.4rem .7rem', borderRadius:8, border:'1.5px solid var(--borde)', fontSize:'.88rem' }} />
+        </div>
+        {jugadores === null
+          ? <Spinner />
+          : listaFiltrada.length === 0
+            ? <div className="empty">No hay jugadores que coincidan.</div>
+            : <table>
+                <thead>
+                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th style={{ textAlign:'right' }}>Valor</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {listaFiltrada.map(j => (
+                    <tr key={j.id}>
+                      <td style={{ fontWeight:600 }}>
+                        {j.posicion === 'POR' ? <em style={{ color:'var(--texto2)' }}>Portería</em> : j.nombre}
+                      </td>
+                      <td style={{ display:'flex', alignItems:'center', gap:6 }}>
+                        <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
+                      </td>
+                      <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td style={{ textAlign:'right', fontVariantNumeric:'tabular-nums' }}>{fmt(j.valor_mercado ?? 0)}</td>
+                      <td style={{ textAlign:'right' }}>
+                        <button onClick={() => borrar(j)} disabled={borrando === j.id}
+                                style={{ background:'#dc3545', color:'#fff', border:'none',
+                                         padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                         fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
+                          {borrando === j.id ? '…' : 'Eliminar'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+        }
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador }) {
   // [key, label, soloAdmin]
   const TABS_DEF = [
@@ -4012,6 +4203,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['fichajespend', 'Fich. Pend.',   false],
     ['cierres',      'Cierres',       false],
     ['mercado',      'Mercado',       true],
+    ['jugadores',    'Jugadores',     true],
   ];
   // Moderadores solo ven tabs con soloAdmin=false, SALVO que la federacion tenga puntos_mod_habilitado
   const ptsMod = federacion?.puntos_mod_habilitado;
@@ -4048,6 +4240,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'fichajespend'  && <AdminFichajesPendientes participantes={participantes} federacion={federacion} />}
       {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}
       {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
+      {subtab === 'jugadores'    && <AdminJugadores participantes={participantes} federacion={federacion} />}
     </div>
   );
 }

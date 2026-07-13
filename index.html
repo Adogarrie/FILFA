@@ -205,7 +205,9 @@ if (!esDemo) {
 const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
 const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
 
-// Mapa equipo (normalizado) → título del artículo en Wikipedia en inglés
+// ── Tamaño global de escudos (px) — editar aquí para cambiar todos a la vez
+const ESCUDO_SIZE = 36;
+
 // Mapa equipo (cualquier casing) → nombre de archivo PNG en carpeta escudos/
 // Los archivos deben estar en FILFA/escudos/{filename}.png
 const _ESCUDOS = {
@@ -318,7 +320,7 @@ function _escudoFile(equipo) {
   return _ESCUDO_MAP[_norm(equipo)] || null;
 }
 
-function Escudo({ equipo, size = 48 }) {
+function Escudo({ equipo, size = ESCUDO_SIZE }) {
   const file = _escudoFile(equipo);
   if (!file) return null;
   return (
@@ -331,7 +333,7 @@ function Escudo({ equipo, size = 48 }) {
 const nombreJugador = (nombre, posicion, equipo) =>
   posicion === 'POR'
     ? <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
-        <Escudo equipo={equipo} size={48}/>{'Portería ' + equipo}
+        <Escudo equipo={equipo} size={ESCUDO_SIZE}/>{'Portería ' + equipo}
       </span>
     : nombre;
 
@@ -500,7 +502,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
                           : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                              <Escudo equipo={j.equipo} size={48}/>{j.equipo}
+                              <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                             </span>}
                       </td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
@@ -1227,7 +1229,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                   <td style={{fontWeight:600}}>
                     {j.posicion === 'POR'
                       ? <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                          <Escudo equipo={j.equipo} size={16}/>{j.equipo.toUpperCase()}
+                          <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo.toUpperCase()}
                         </span>
                       : j.nombre}
                   </td>
@@ -1235,7 +1237,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                   <td style={{color:'var(--texto2)'}}>
                     {j.posicion === 'POR' ? null
                       : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                          <Escudo equipo={j.equipo} size={16}/>{j.equipo}
+                          <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                         </span>}
                   </td>
                   <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || 0)}</td>
@@ -1715,13 +1717,13 @@ function AdminPtsJugadores({ participantes, federacion }) {
               {equiposReales.map(eq => (
                 <button key={eq} className={`tab ${equipoActual===eq?'active':''}`}
                         onClick={() => setEquipoSel(eq)}>
-                  <Escudo equipo={eq} size={48} />{' '}{eq}
+                  <Escudo equipo={eq} size={ESCUDO_SIZE} />{' '}{eq}
                 </button>
               ))}
             </div>
             <div className="card" style={{paddingBottom:'.75rem'}}>
               <h2 style={{fontSize:'.95rem', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
-                <Escudo equipo={equipoActual} size={48} />{equipoActual}
+                <Escudo equipo={equipoActual} size={ESCUDO_SIZE} />{equipoActual}
               </h2>
               <table>
                 <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
@@ -1957,7 +1959,7 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
                           : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                              <Escudo equipo={j.equipo} size={16}/>{j.equipo}
+                              <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                             </span>}
                       </td>
                       <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
@@ -2004,7 +2006,7 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                           <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
                             {a.jugadores?.posicion === 'POR' ? null
                               : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                                  <Escudo equipo={a.jugadores?.equipo} size={15}/>{a.jugadores?.equipo}
+                                  <Escudo equipo={a.jugadores?.equipo} size={ESCUDO_SIZE}/>{a.jugadores?.equipo}
                                 </span>}
                           </td>
                         </tr>
@@ -2028,7 +2030,7 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                           <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
                             {a.jugadores?.posicion === 'POR' ? null
                               : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                                  <Escudo equipo={a.jugadores?.equipo} size={15}/>{a.jugadores?.equipo}
+                                  <Escudo equipo={a.jugadores?.equipo} size={ESCUDO_SIZE}/>{a.jugadores?.equipo}
                                 </span>}
                           </td>
                         </tr>
@@ -2717,7 +2719,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
                             <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
                               {j.posicion === 'POR' ? null
                                 : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                                    <Escudo equipo={j.equipo} size={20}/>{j.equipo}
+                                    <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                                   </span>}
                             </td>
                             {esHistorico

@@ -1735,7 +1735,7 @@ function AdminPtsJugadores({ participantes, federacion }) {
 }
 
 // ── EQUIPOS ────────────────────────────────────────────────────
-function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onParticipantesChange }) {
+function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornadaActual, isAdmin, federacion, onParticipantesChange, onOfertaEnviada }) {
   const [equipoId, setEquipoId]       = useState('');
   const [jugadores, setJugadores]     = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
@@ -1744,6 +1744,10 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
   const [editModal, setEditModal]     = useState(false);
   const [editForm, setEditForm]       = useState({});
   const [editMsg, setEditMsg]         = useState('');
+  const [modalOferta, setModalOferta] = useState(null); // { jugador_id, nombre, posicion, equipo, valor }
+  const [cantOferta, setCantOferta]   = useState('');
+  const [enviandoOf, setEnviandoOf]   = useState(false);
+  const [msgOferta, setMsgOferta]     = useState('');
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -1754,7 +1758,7 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
     setJugadores(null);
     setPresupuesto(null);
     sb.from('plantillas')
-      .select('id, precio_compra, jugadores(nombre, equipo, posicion, valor_mercado)')
+      .select('id, jugador_id, precio_compra, jugadores(nombre, equipo, posicion, valor_mercado)')
       .eq('participante_id', equipoId)
       .then(({ data, error }) => setJugadores(error ? [] : (data || [])));
     sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
@@ -1818,12 +1822,36 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
   };
 
   const lista = (jugadores || []).map(p => ({
-    nombre:   p.jugadores?.nombre || '',
-    equipo:   p.jugadores?.equipo || '',
-    posicion: p.jugadores?.posicion || '',
-    valor:    p.jugadores?.valor_mercado || 0,
-    compra:   p.precio_compra || 0,
+    jugador_id: p.jugador_id,
+    nombre:     p.jugadores?.nombre || '',
+    equipo:     p.jugadores?.equipo || '',
+    posicion:   p.jugadores?.posicion || '',
+    valor:      p.jugadores?.valor_mercado || 0,
+    compra:     p.precio_compra || 0,
   }));
+
+  const puedeOfrecer = !!(sesionParticipanteId && equipoId !== sesionParticipanteId && federacion?.ventas_habilitadas);
+
+  const enviarOferta = async () => {
+    const cant = Number(cantOferta);
+    if (!cant || cant <= 0) { setMsgOferta('Introduce una cantidad válida.'); return; }
+    setEnviandoOf(true); setMsgOferta('');
+    const { error } = await sb.from('ofertas_jugadores').insert({
+      federacion_id:  federacion.id,
+      jugador_id:     modalOferta.jugador_id,
+      ofertante_id:   sesionParticipanteId,
+      propietario_id: equipoId,
+      cantidad:       cant,
+    });
+    setEnviandoOf(false);
+    if (error) { setMsgOferta('Error: ' + error.message); return; }
+    const nomJug = modalOferta.posicion === 'POR' ? 'Portería ' + modalOferta.equipo : modalOferta.nombre;
+    const miNom  = participantes.find(p => p.id === sesionParticipanteId)?.nombre || '';
+    const suNom  = participantes.find(p => p.id === equipoId)?.nombre || '';
+    publicar(federacion.id, 'oferta', `${miNom} hace una oferta a ${suNom} por ${nomJug}: ${fmt(cant)}`);
+    setModalOferta(null); setCantOferta(''); setMsgOferta('');
+    onOfertaEnviada && onOfertaEnviada();
+  };
 
   const titulares  = (alineacion || []).filter(a => a.es_titular)
     .sort((a,b) => POS_ORDEN[a.jugadores?.posicion] - POS_ORDEN[b.jugadores?.posicion]);
@@ -1911,6 +1939,34 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
         </div>
       )}
 
+      {/* ── Modal oferta ── */}
+      {modalOferta && (
+        <div className="overlay" onClick={() => setModalOferta(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Hacer oferta</h3>
+            <p style={{fontSize:'.9rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+              {modalOferta.posicion === 'POR' ? `Portería ${modalOferta.equipo}` : modalOferta.nombre}
+              {' — '}<strong>{equipo?.nombre}</strong>
+            </p>
+            <div className="campo">
+              <label>Tu oferta (€)</label>
+              <input type="number" min="1" value={cantOferta}
+                     onChange={e => { setCantOferta(e.target.value); setMsgOferta(''); }}
+                     placeholder={`Valor: ${fmt(modalOferta.valor || 0)}`}
+                     style={{width:'100%'}} />
+            </div>
+            {msgOferta && <div style={{color:'#dc3545', fontSize:'.85rem', marginBottom:'.5rem'}}>{msgOferta}</div>}
+            <div style={{display:'flex', gap:'.75rem', marginTop:'.75rem'}}>
+              <button className="btn-cancel" onClick={() => setModalOferta(null)}>Cancelar</button>
+              <button className="btn-ok" onClick={enviarOferta} disabled={enviandoOf}
+                      style={{opacity: enviandoOf?.6:1}}>
+                {enviandoOf ? 'Enviando…' : 'Enviar oferta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <h2>Plantilla de {equipo?.nombre || '—'}</h2>
         {jugadores === null
@@ -1923,6 +1979,7 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
+                  {puedeOfrecer && <th></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1943,6 +2000,16 @@ function Equipos({ participantes, miParticipanteId, jornadaActual, isAdmin, onPa
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
+                      {puedeOfrecer && (
+                        <td style={{textAlign:'right'}}>
+                          <button onClick={() => { setModalOferta(j); setCantOferta(String(j.valor || '')); setMsgOferta(''); }}
+                                  style={{background:'#0d6efd', color:'#fff', border:'none',
+                                          padding:'.25rem .65rem', borderRadius:7,
+                                          cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                            Ofrecer
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -4070,6 +4137,243 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
   );
 }
 
+// ── OFERTAS ENTRE EQUIPOS ──────────────────────────────────────
+function Ofertas({ miParticipanteId, participantes, federacion, onBadgeChange }) {
+  const [subtab, setSubtab]         = useState('recibidas');
+  const [recibidas, setRecibidas]   = useState(null);
+  const [enviadas, setEnviadas]     = useState(null);
+  const [rechazModal, setRechazModal] = useState(null);
+  const [msgRechazo, setMsgRechazo] = useState('');
+  const [procesando, setProcesando] = useState(null);
+  const [msg, setMsg]               = useState('');
+
+  const cargar = async () => {
+    if (!sb || !miParticipanteId) return;
+    const [{ data: rec }, { data: env }] = await Promise.all([
+      sb.from('ofertas_jugadores')
+        .select('id, cantidad, estado, mensaje, leida, created_at, jugadores(id,nombre,equipo,posicion,valor_mercado), ofertante:ofertante_id(id,nombre,presupuesto)')
+        .eq('propietario_id', miParticipanteId)
+        .order('created_at', { ascending: false }),
+      sb.from('ofertas_jugadores')
+        .select('id, cantidad, estado, mensaje, leida, created_at, jugadores(id,nombre,equipo,posicion,valor_mercado), propietario:propietario_id(id,nombre)')
+        .eq('ofertante_id', miParticipanteId)
+        .order('created_at', { ascending: false }),
+    ]);
+    setRecibidas(rec || []);
+    setEnviadas(env || []);
+    // Marcar recibidas pendientes como leídas
+    const sinLeer = (rec || []).filter(o => !o.leida && o.estado === 'pendiente').map(o => o.id);
+    if (sinLeer.length > 0) {
+      await sb.from('ofertas_jugadores').update({ leida: true }).in('id', sinLeer);
+      onBadgeChange && onBadgeChange();
+    }
+  };
+
+  useEffect(() => { cargar(); }, [miParticipanteId]);
+
+  const aceptar = async (oferta) => {
+    const cant = Number(oferta.cantidad);
+    const ofertante = oferta.ofertante;
+    if (!ofertante) return;
+    if ((ofertante.presupuesto || 0) < cant) {
+      setMsg('El equipo ofertante no tiene presupuesto suficiente.'); return;
+    }
+    setProcesando(oferta.id); setMsg('');
+    const jug = oferta.jugadores;
+
+    // 1. Quitar de mi plantilla
+    const { error: e1 } = await sb.from('plantillas').delete()
+      .eq('participante_id', miParticipanteId).eq('jugador_id', jug.id);
+    if (e1) { setMsg('Error: ' + e1.message); setProcesando(null); return; }
+
+    // 2. Añadir al ofertante (plantilla o pendientes)
+    const { count: cnt } = await sb.from('plantillas')
+      .select('id', { count: 'exact', head: true })
+      .eq('participante_id', ofertante.id);
+    const tabla = (cnt || 0) >= 14 ? 'fichajes_pendientes' : 'plantillas';
+    const { error: e2 } = await sb.from(tabla).insert(
+      { participante_id: ofertante.id, jugador_id: jug.id, precio_compra: cant }
+    );
+    if (e2) { setMsg('Error al asignar jugador: ' + e2.message); setProcesando(null); return; }
+
+    // 3. Transferencia de dinero
+    const miPart = participantes.find(p => p.id === miParticipanteId);
+    await Promise.all([
+      sb.from('participantes').update({ presupuesto: (ofertante.presupuesto || 0) - cant }).eq('id', ofertante.id),
+      sb.from('participantes').update({ presupuesto: (miPart?.presupuesto || 0) + cant }).eq('id', miParticipanteId),
+    ]);
+
+    // 4. Cerrar oferta y cancelar el resto para este jugador
+    await sb.from('ofertas_jugadores').update({ estado: 'aceptada' }).eq('id', oferta.id);
+    await sb.from('ofertas_jugadores').update({ estado: 'rechazada' })
+      .eq('jugador_id', jug.id).eq('federacion_id', federacion.id)
+      .eq('estado', 'pendiente').neq('id', oferta.id);
+
+    const nomJug = jug.posicion === 'POR' ? 'Portería ' + jug.equipo : jug.nombre;
+    const miNom  = participantes.find(p => p.id === miParticipanteId)?.nombre || '';
+    publicar(federacion.id, 'fichaje',
+      `${ofertante.nombre} ficha a ${nomJug} de ${miNom} por ${fmt(cant)}${tabla === 'fichajes_pendientes' ? ' — pendiente de plaza' : ''}`);
+
+    setProcesando(null);
+    cargar();
+    onBadgeChange && onBadgeChange();
+  };
+
+  const rechazar = async () => {
+    if (!rechazModal) return;
+    setProcesando(rechazModal.id);
+    await sb.from('ofertas_jugadores')
+      .update({ estado: 'rechazada', mensaje: msgRechazo.trim() || null })
+      .eq('id', rechazModal.id);
+    setProcesando(null);
+    setRechazModal(null); setMsgRechazo('');
+    cargar();
+    onBadgeChange && onBadgeChange();
+  };
+
+  const fmtFecha = ts => new Date(ts).toLocaleDateString('es-ES', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+
+  const ESTADO_BADGE = {
+    pendiente:  { label: 'Pendiente', color: '#fd7e14' },
+    aceptada:   { label: 'Aceptada',  color: '#198754' },
+    rechazada:  { label: 'Rechazada', color: '#dc3545' },
+  };
+
+  const renderOferta = (o, esRecibida) => {
+    const jug      = o.jugadores || {};
+    const nomJug   = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
+    const contraparte = esRecibida ? o.ofertante : o.propietario;
+    const est      = ESTADO_BADGE[o.estado] || {};
+    return (
+      <div key={o.id} style={{padding:'.8rem 1rem', borderRadius:10, background:'var(--gris)',
+                               border: o.estado==='pendiente'&&esRecibida ? '1.5px solid #fd7e14':'none',
+                               display:'flex', flexDirection:'column', gap:'.5rem'}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:'.5rem'}}>
+          <div>
+            <div style={{fontWeight:700, fontSize:'.95rem', display:'flex', alignItems:'center', gap:6}}>
+              <Escudo equipo={jug.equipo} size={ESCUDO_SIZE}/>
+              {nomJug}
+              <span className={`badge ${jug.posicion}`} style={{marginLeft:4}}>{jug.posicion}</span>
+            </div>
+            <div style={{fontSize:'.82rem', color:'var(--texto2)', marginTop:'.2rem'}}>
+              {esRecibida ? 'Oferta de' : 'Oferta a'}: <strong>{contraparte?.nombre || '—'}</strong>
+              {' · '}{fmtFecha(o.created_at)}
+            </div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontWeight:800, fontSize:'1.1rem'}}>{fmt(o.cantidad)}</div>
+            <span style={{fontSize:'.75rem', fontWeight:700, color: est.color}}>{est.label}</span>
+          </div>
+        </div>
+
+        {o.mensaje && (
+          <div style={{background:'#fff3cd', border:'1px solid #ffc107', borderRadius:7,
+                       padding:'.45rem .75rem', fontSize:'.85rem', color:'#664d03'}}>
+            <strong>Mensaje:</strong> {o.mensaje}
+          </div>
+        )}
+
+        {esRecibida && o.estado === 'pendiente' && (
+          <div style={{display:'flex', gap:'.6rem', flexWrap:'wrap'}}>
+            <button onClick={() => aceptar(o)} disabled={procesando === o.id}
+                    style={{background:'#198754', color:'#fff', border:'none', padding:'.35rem .9rem',
+                            borderRadius:7, cursor:'pointer', fontWeight:600, fontSize:'.85rem',
+                            opacity: procesando===o.id?.5:1}}>
+              {procesando === o.id ? '…' : 'Aceptar'}
+            </button>
+            <button onClick={() => { setRechazModal(o); setMsgRechazo(''); }}
+                    style={{background:'#dc3545', color:'#fff', border:'none', padding:'.35rem .9rem',
+                            borderRadius:7, cursor:'pointer', fontWeight:600, fontSize:'.85rem'}}>
+              Rechazar
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const pendientes = (recibidas || []).filter(o => o.estado === 'pendiente');
+  const resueltas  = (recibidas || []).filter(o => o.estado !== 'pendiente');
+
+  return (
+    <div>
+      <div className="tabs">
+        <button className={`tab ${subtab==='recibidas'?'active':''}`} onClick={() => setSubtab('recibidas')}>
+          Recibidas {pendientes.length > 0 && <span style={{background:'#dc3545',color:'#fff',borderRadius:'50%',padding:'0 5px',fontSize:'.75rem',marginLeft:4}}>{pendientes.length}</span>}
+        </button>
+        <button className={`tab ${subtab==='enviadas'?'active':''}`} onClick={() => setSubtab('enviadas')}>Enviadas</button>
+      </div>
+
+      {msg && <div style={{background:'#f8d7da', color:'#58151c', padding:'.6rem 1rem', borderRadius:8, marginBottom:'.75rem', fontSize:'.88rem'}}>{msg}</div>}
+
+      {subtab === 'recibidas' && (
+        <>
+          {recibidas === null ? <Spinner /> : recibidas.length === 0
+            ? <div className="card"><div className="empty">No has recibido ofertas.</div></div>
+            : <>
+                {pendientes.length > 0 && (
+                  <div className="card">
+                    <h2 style={{marginBottom:'.75rem'}}>Pendientes de respuesta</h2>
+                    <div style={{display:'flex', flexDirection:'column', gap:'.6rem'}}>
+                      {pendientes.map(o => renderOferta(o, true))}
+                    </div>
+                  </div>
+                )}
+                {resueltas.length > 0 && (
+                  <div className="card">
+                    <h2 style={{marginBottom:'.75rem'}}>Historial</h2>
+                    <div style={{display:'flex', flexDirection:'column', gap:'.6rem'}}>
+                      {resueltas.map(o => renderOferta(o, true))}
+                    </div>
+                  </div>
+                )}
+              </>
+          }
+        </>
+      )}
+
+      {subtab === 'enviadas' && (
+        <div className="card">
+          {enviadas === null ? <Spinner /> : enviadas.length === 0
+            ? <div className="empty">No has enviado ofertas.</div>
+            : <div style={{display:'flex', flexDirection:'column', gap:'.6rem'}}>
+                {enviadas.map(o => renderOferta(o, false))}
+              </div>
+          }
+        </div>
+      )}
+
+      {/* ── Modal rechazo ── */}
+      {rechazModal && (
+        <div className="overlay" onClick={() => setRechazModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Rechazar oferta</h3>
+            <p style={{fontSize:'.88rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+              Puedes enviar un mensaje al equipo ofertante explicando el motivo o indicando el precio que pides.
+            </p>
+            <div className="campo">
+              <label>Mensaje (opcional)</label>
+              <textarea value={msgRechazo} onChange={e => setMsgRechazo(e.target.value)}
+                        rows={3} placeholder="Ej: El jugador no está a la venta / Pido mínimo 8.000.000 €"
+                        style={{width:'100%', padding:'.5rem .7rem', borderRadius:8,
+                                border:'1.5px solid var(--borde)', fontSize:'.9rem',
+                                resize:'vertical', fontFamily:'inherit', boxSizing:'border-box'}} />
+            </div>
+            <div style={{display:'flex', gap:'.75rem', marginTop:'.75rem'}}>
+              <button className="btn-cancel" onClick={() => setRechazModal(null)}>Cancelar</button>
+              <button onClick={rechazar} disabled={procesando === rechazModal?.id}
+                      style={{background:'#dc3545', color:'#fff', border:'none', padding:'.45rem 1.1rem',
+                              borderRadius:8, cursor:'pointer', fontWeight:700, fontSize:'.9rem'}}>
+                {procesando === rechazModal?.id ? 'Enviando…' : 'Rechazar oferta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ADMIN JUGADORES — añadir / borrar jugadores ────────────────
 function AdminJugadores({ participantes, federacion }) {
   const POSICIONES = ['POR', 'DEF', 'MED', 'DEL'];
@@ -4445,6 +4749,7 @@ function App() {
   const [authUser, setAuthUser]       = useState(null);
   const [session, setSession]         = useState(null);
   const [sesionLista, setSesionLista] = useState(false);
+  const [ofertasBadge, setOfertasBadge] = useState(0);
 
   const seleccionarFederacion = async (part, fed, userOverride) => {
     const u = userOverride || authUser;
@@ -4535,6 +4840,16 @@ function App() {
 
   useEffect(() => { recargarParticipantes(); }, [federacion, session]);
 
+  const refrescarBadge = async () => {
+    const pid = session?.participante_id;
+    if (!sb || !pid) { setOfertasBadge(0); return; }
+    const { count } = await sb.from('ofertas_jugadores')
+      .select('id', { count: 'exact', head: true })
+      .eq('propietario_id', pid).eq('estado', 'pendiente');
+    setOfertasBadge(count || 0);
+  };
+  useEffect(() => { refrescarBadge(); }, [session?.participante_id, federacion?.id]);
+
   const handleLogin  = (user) => cargarPerfil(user);
   const handleLogout = async () => {
     await sb.auth.signOut();
@@ -4573,7 +4888,7 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Alineación', 'Mercado', 'Equipos', 'Calendario',
+  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Ofertas', 'Alineación', 'Mercado', 'Equipos', 'Calendario',
                        ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -4588,8 +4903,19 @@ function App() {
           }
         </h1>
         {VISTAS.map(v => (
-          <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}>
+          <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}
+                  style={{position:'relative'}}>
             {v}
+            {v === 'Ofertas' && ofertasBadge > 0 && (
+              <span style={{
+                position:'absolute', top:2, right:2,
+                background:'#e53e3e', color:'#fff',
+                borderRadius:'50%', width:16, height:16,
+                fontSize:10, fontWeight:700,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                lineHeight:1, pointerEvents:'none'
+              }}>{ofertasBadge > 9 ? '9+' : ofertasBadge}</span>
+            )}
           </button>
         ))}
 
@@ -4647,11 +4973,20 @@ function App() {
                       jornadaActual={federacion?.jornada_actual || 1}
                       federacionId={federacion?.id} />
         )}
+        {vista === 'Ofertas' && (
+          <Ofertas miParticipanteId={session?.participante_id}
+                   participantes={participantes}
+                   federacion={federacion}
+                   onBadgeChange={refrescarBadge} />
+        )}
         {vista === 'Equipos' && (
           <Equipos participantes={participantes} miParticipanteId={participanteId}
+                   sesionParticipanteId={session?.participante_id}
                    jornadaActual={federacion?.jornada_actual || 1}
                    isAdmin={isAdmin}
-                   onParticipantesChange={recargarParticipantes} />
+                   federacion={federacion}
+                   onParticipantesChange={recargarParticipantes}
+                   onOfertaEnviada={refrescarBadge} />
         )}
         {vista === 'Calendario' && (
           <CalendarioFantasy participantes={participantes} federacion={federacion} />

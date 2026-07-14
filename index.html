@@ -326,26 +326,88 @@ function Spinner() {
 
 // ── PLANTILLA ──────────────────────────────────────────────────
 function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId }) {
-  const [jugadores, setJugadores] = useState(null);
-  const [presupuesto, setPresupuesto] = useState(null);
-  const [modalVenta, setModalVenta] = useState(null);
+  const [jugadores, setJugadores]           = useState(null);
+  const [presupuesto, setPresupuesto]       = useState(null);
+  const [modalVenta, setModalVenta]         = useState(null);
   const [modalVentaTodo, setModalVentaTodo] = useState(false);
-  const [vendiendoTodo, setVendiendoTodo] = useState(false);
+  const [vendiendoTodo, setVendiendoTodo]   = useState(false);
+  const [fichajesPend, setFichajesPend]     = useState([]);
+  const [liberarSel, setLiberarSel]         = useState({});   // pendiente_id → jugador_id
+  const [procesandoPend, setProcesandoPend] = useState(null);
 
-  const cargar = () => {
+  const cargar = async () => {
     if (!participanteId || !sb) { setJugadores([]); return; }
-    sb.from('plantillas')
-      .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado)')
-      .eq('participante_id', participanteId)
-      .then(({ data, error }) => {
-        if (error) { console.error(error); setJugadores([]); }
-        else setJugadores(data || []);
-      });
-    sb.from('participantes').select('presupuesto').eq('id', participanteId).single()
-      .then(({ data }) => { if (data) setPresupuesto(data.presupuesto); });
+    const [{ data: pl, error }, { data: pres }] = await Promise.all([
+      sb.from('plantillas')
+        .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado)')
+        .eq('participante_id', participanteId),
+      sb.from('participantes').select('presupuesto').eq('id', participanteId).single(),
+    ]);
+    if (error) { console.error(error); setJugadores([]); }
+    else setJugadores(pl || []);
+    if (pres) setPresupuesto(pres.presupuesto);
+
+    // Fichajes pendientes — intenta con traspaso_de_id, fallback si columna no existe aún
+    let { data: fp, error: fpErr } = await sb.from('fichajes_pendientes')
+      .select('id, jugador_id, precio_compra, traspaso_de_id, jugadores(nombre,equipo,posicion,valor_mercado), origen:traspaso_de_id(nombre)')
+      .eq('participante_id', participanteId);
+    if (fpErr) {
+      ({ data: fp } = await sb.from('fichajes_pendientes')
+        .select('id, jugador_id, precio_compra, jugadores(nombre,equipo,posicion,valor_mercado)')
+        .eq('participante_id', participanteId));
+    }
+    setFichajesPend(fp || []);
   };
 
   useEffect(() => { cargar(); }, [participanteId]);
+
+  const activarPendiente = async (fp) => {
+    const plantillaActual = (jugadores || []);
+    const llena  = plantillaActual.length >= 14;
+    const liberar = llena ? (liberarSel[fp.id] || '') : null;
+    if (llena && !liberar) { alert('La plantilla está llena (14). Selecciona qué jugador liberar primero.'); return; }
+    setProcesandoPend(fp.id);
+    const { error } = await sb.rpc('activar_fichaje_pendiente', {
+      p_pendiente_id:       fp.id,
+      p_liberar_jugador_id: liberar || null,
+      p_federacion_id:      federacion?.id,
+    });
+    setProcesandoPend(null);
+    if (error) {
+      const msgs = {
+        plantilla_llena_indica_baja:     'La plantilla está llena. Selecciona quién sale.',
+        jugador_a_liberar_no_encontrado: 'El jugador a liberar no está en la plantilla.',
+        fichaje_no_encontrado:           'Este fichaje pendiente ya no existe.',
+        no_autorizado:                   'No tienes permiso.',
+      };
+      alert(msgs[error.message] || 'Error: ' + error.message); return;
+    }
+    const jug = fp.jugadores;
+    const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nom} a su plantilla`);
+    setLiberarSel(s => { const n = {...s}; delete n[fp.id]; return n; });
+    cargar();
+  };
+
+  const descartarPendiente = async (fp) => {
+    const jug = fp.jugadores;
+    const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
+    if (fp.traspaso_de_id) {
+      const refund = fmt(fp.precio_compra * 0.8);
+      if (!confirm(`¿Descartar el traspaso de ${nom}?\nSe reembolsará el 80% (${refund}).\nEl jugador volverá a ${fp.origen?.nombre || 'su equipo de origen'} si tiene plaza libre, o quedará libre.`)) return;
+      setProcesandoPend(fp.id);
+      const { data, error } = await sb.rpc('anular_traspaso_pendiente', { p_pendiente_id: fp.id, p_federacion_id: federacion?.id });
+      setProcesandoPend(null);
+      if (error || !data?.ok) { alert('Error: ' + (error?.message || data?.error || 'desconocido')); return; }
+    } else {
+      if (!confirm(`¿Anular el fichaje pendiente de ${nom}?\nSe devolverán ${fmt(fp.precio_compra)} al presupuesto.`)) return;
+      setProcesandoPend(fp.id);
+      const { error } = await sb.rpc('anular_fichaje_pendiente', { p_pendiente_id: fp.id, p_federacion_id: federacion?.id });
+      setProcesandoPend(null);
+      if (error) { alert('Error: ' + error.message); return; }
+    }
+    cargar();
+  };
 
   const confirmarVenta = async () => {
     if (!modalVenta) return;
@@ -554,6 +616,75 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
           </div>
         )}
       </div>
+
+      {/* ── Fichajes / traspasos pendientes de plaza ── */}
+      {fichajesPend.length > 0 && (
+        <div className="card">
+          <h2 style={{marginBottom:'1rem'}}>Pendientes de plaza ({fichajesPend.length})</h2>
+          {fichajesPend.map(fp => {
+            const jug     = fp.jugadores || {};
+            const nom     = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
+            const esTrasp = !!fp.traspaso_de_id;
+            const llena   = lista.length >= 14;
+            const sel     = liberarSel[fp.id] || '';
+            const enProc  = procesandoPend === fp.id;
+            return (
+              <div key={fp.id} style={{display:'flex', flexWrap:'wrap', gap:'.75rem',
+                                       alignItems:'flex-start', padding:'.9rem 0',
+                                       borderBottom:'1px solid var(--borde)'}}>
+                <div style={{flex:'1 1 200px'}}>
+                  <div style={{display:'flex', alignItems:'center', gap:6, fontWeight:700}}>
+                    <Escudo equipo={jug.equipo} />
+                    {nom}
+                    <span className={`badge ${jug.posicion}`}>{jug.posicion}</span>
+                  </div>
+                  <div style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:'.25rem'}}>
+                    {esTrasp
+                      ? <>Traspaso de <strong>{fp.origen?.nombre || '—'}</strong> · {fmt(fp.precio_compra)}</>
+                      : <>Del mercado · {fmt(fp.precio_compra)}</>
+                    }
+                  </div>
+                  {llena && (
+                    <div style={{fontSize:'.78rem', color:'#dc3545', marginTop:'.2rem', fontWeight:600}}>
+                      Plantilla llena — selecciona quién sale para activar
+                    </div>
+                  )}
+                </div>
+                <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', alignItems:'center'}}>
+                  {llena && (
+                    <select value={sel}
+                            onChange={e => setLiberarSel(s => ({...s, [fp.id]: e.target.value}))}
+                            style={{padding:'.3rem .6rem', borderRadius:7,
+                                    border:'1.5px solid var(--borde)', fontSize:'.82rem', maxWidth:190}}>
+                      <option value="">— ¿Quién sale? —</option>
+                      {lista.map(j => (
+                        <option key={j.jugador_id} value={j.jugador_id}>
+                          {j.posicion === 'POR' ? `POR ${j.equipo}` : j.nombre} ({j.posicion}) · {fmt(j.valor)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button disabled={enProc || (llena && !sel)}
+                          onClick={() => activarPendiente(fp)}
+                          style={{padding:'.35rem .85rem', borderRadius:7, border:'none',
+                                  background: (llena && !sel) ? '#6c757d' : '#198754',
+                                  color:'#fff', cursor: (llena && !sel) ? 'not-allowed' : 'pointer',
+                                  fontWeight:600, fontSize:'.82rem'}}>
+                    {enProc ? '…' : 'Activar'}
+                  </button>
+                  <button disabled={enProc}
+                          onClick={() => descartarPendiente(fp)}
+                          style={{padding:'.35rem .85rem', borderRadius:7,
+                                  border:'1.5px solid #dc3545', background:'var(--fondo)',
+                                  color:'#dc3545', cursor:'pointer', fontWeight:600, fontSize:'.82rem'}}>
+                    {esTrasp ? 'Descartar (80%)' : 'Anular'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -334,6 +334,8 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [fichajesPend, setFichajesPend]     = useState([]);
   const [liberarSel, setLiberarSel]         = useState({});   // pendiente_id → jugador_id
   const [procesandoPend, setProcesandoPend] = useState(null);
+  const [escudoUrl, setEscudoUrl]           = useState(null);
+  const [subiendoEscudo, setSubiendoEscudo] = useState(false);
 
   const cargar = async () => {
     if (!participanteId || !sb) { setJugadores([]); return; }
@@ -341,11 +343,11 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       sb.from('plantillas')
         .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado)')
         .eq('participante_id', participanteId),
-      sb.from('participantes').select('presupuesto').eq('id', participanteId).single(),
+      sb.from('participantes').select('presupuesto, escudo_url').eq('id', participanteId).single(),
     ]);
     if (error) { console.error(error); setJugadores([]); }
     else setJugadores(pl || []);
-    if (pres) setPresupuesto(pres.presupuesto);
+    if (pres) { setPresupuesto(pres.presupuesto); setEscudoUrl(pres.escudo_url || null); }
 
     // Fichajes pendientes — intenta con traspaso_de_id, fallback si columna no existe aún
     let { data: fp, error: fpErr } = await sb.from('fichajes_pendientes')
@@ -360,6 +362,27 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   };
 
   useEffect(() => { cargar(); }, [participanteId]);
+
+  const subirEscudo = async (file) => {
+    setSubiendoEscudo(true);
+    const ext  = file.name.split('.').pop();
+    const path = `${participanteId}/${Date.now()}.${ext}`;
+    const { error: upErr } = await sb.storage
+      .from('escudos-participantes')
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (upErr) { alert('Error subiendo escudo: ' + upErr.message); setSubiendoEscudo(false); return; }
+    const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
+    const { error: updErr } = await sb.from('participantes')
+      .update({ escudo_url: publicUrl }).eq('id', participanteId);
+    if (updErr) { alert('Error guardando escudo: ' + updErr.message); setSubiendoEscudo(false); return; }
+    setEscudoUrl(publicUrl);
+    setSubiendoEscudo(false);
+  };
+
+  const quitarEscudo = async () => {
+    await sb.from('participantes').update({ escudo_url: null }).eq('id', participanteId);
+    setEscudoUrl(null);
+  };
 
   const activarPendiente = async (fp) => {
     const plantillaActual = (jugadores || []);
@@ -484,9 +507,45 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
 
   const presupuestoDisplay = presupuesto ?? null;
 
+  const puedeEditarEscudo = isAdmin || participanteId === miParticipanteId;
+
   return (
     <div>
-      <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap'}}>
+      <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'center'}}>
+        {/* Escudo del equipo */}
+        <div style={{display:'flex', flexDirection:'column', alignItems:'center', gap:'.4rem', flexShrink:0}}>
+          {escudoUrl
+            ? <img src={escudoUrl} alt="Escudo"
+                   style={{width:64, height:64, objectFit:'contain', borderRadius:8,
+                           border:'1.5px solid var(--borde)'}} />
+            : <div style={{width:64, height:64, borderRadius:8, border:'2px dashed var(--borde)',
+                           display:'flex', alignItems:'center', justifyContent:'center',
+                           color:'var(--texto2)', fontSize:'.65rem', textAlign:'center',
+                           lineHeight:1.2}}>
+                Sin<br/>escudo
+              </div>
+          }
+          {puedeEditarEscudo && (
+            <div style={{display:'flex', gap:'.3rem', flexWrap:'wrap', justifyContent:'center'}}>
+              <label style={{cursor: subiendoEscudo ? 'wait' : 'pointer',
+                             fontSize:'.72rem', color:'var(--verde)', fontWeight:600,
+                             textDecoration:'underline'}}>
+                {subiendoEscudo ? 'Subiendo…' : escudoUrl ? 'Cambiar' : 'Subir escudo'}
+                <input type="file" accept="image/*" style={{display:'none'}}
+                       disabled={subiendoEscudo}
+                       onChange={e => { if (e.target.files[0]) subirEscudo(e.target.files[0]); e.target.value=''; }} />
+              </label>
+              {escudoUrl && (
+                <button onClick={quitarEscudo}
+                        style={{fontSize:'.72rem', color:'#dc3545', background:'none',
+                                border:'none', cursor:'pointer', textDecoration:'underline',
+                                padding:0, fontWeight:600}}>
+                  Quitar
+                </button>
+              )}
+            </div>
+          )}
+        </div>
         <div>
           <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
           <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>

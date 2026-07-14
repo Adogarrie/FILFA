@@ -400,7 +400,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       setProcesandoPend(null);
       if (error || !data?.ok) { alert('Error: ' + (error?.message || data?.error || 'desconocido')); return; }
     } else {
-      if (!confirm(`¿Anular el fichaje pendiente de ${nom}?\nSe devolverán ${fmt(fp.precio_compra)} al presupuesto.`)) return;
+      if (!confirm(`¿Anular el fichaje pendiente de ${nom}?\nSe reembolsará el 80% del precio pagado (${fmt(fp.precio_compra * 0.8)}).`)) return;
       setProcesandoPend(fp.id);
       const { error } = await sb.rpc('anular_fichaje_pendiente', { p_pendiente_id: fp.id, p_federacion_id: federacion?.id });
       setProcesandoPend(null);
@@ -3188,7 +3188,7 @@ function AdminFichajesPendientes({ participantes, federacion }) {
       ? `¿Descartar el traspaso de ${nom} para ${pend.participantes?.nombre}?\n` +
         `Se reembolsará el 80% del traspaso (${refund80}).\n` +
         `El jugador volverá a ${pend.origen?.nombre || 'su equipo de origen'} si tiene plaza libre, o quedará libre.`
-      : `¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe devolverán ${fmt(pend.precio_compra)} al presupuesto del equipo.`;
+      : `¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe reembolsará el 80% del precio pagado (${fmt(pend.precio_compra * 0.8)}).`;
     if (!confirm(msg)) return;
     setProcesando(pend.id);
     if (esTraspaso) {

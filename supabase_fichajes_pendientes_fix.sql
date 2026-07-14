@@ -91,7 +91,7 @@ grant execute on function activar_fichaje_pendiente(int, uuid, uuid) to authenti
 
 -- ─── 3. anular_fichaje_pendiente ──────────────────────────────────
 -- El propio equipo O el admin pueden anular un fichaje pendiente de mercado.
--- Devuelve el 100% del precio pagado al presupuesto.
+-- Devuelve solo el 80% del precio pagado (penalización por descarte).
 drop function if exists anular_fichaje_pendiente(int, uuid);
 
 create function anular_fichaje_pendiente(
@@ -104,7 +104,8 @@ security definer
 set search_path = public
 as $$
 declare
-  v_pend record;
+  v_pend   record;
+  v_refund numeric;
 begin
   -- 1. Cargar fichaje pendiente
   select * into v_pend from fichajes_pendientes where id = p_pendiente_id;
@@ -116,9 +117,10 @@ begin
     or exists (select 1 from federaciones where id = p_federacion_id and admin_user_id = auth.uid())
   ) then raise exception 'no_autorizado'; end if;
 
-  -- 3. Devolver el precio completo al equipo
+  -- 3. Devolver el 80% del precio pagado
+  v_refund := round(v_pend.precio_compra * 0.8, 2);
   update participantes
-     set presupuesto = presupuesto + v_pend.precio_compra
+     set presupuesto = presupuesto + v_refund
    where id = v_pend.participante_id;
 
   -- 4. Eliminar el fichaje pendiente

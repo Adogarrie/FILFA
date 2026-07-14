@@ -3000,7 +3000,7 @@ function AdminFichajesPendientes({ participantes, federacion }) {
     if (!partIds.length) { setPendientes([]); return; }
     const [{ data: pends }, { data: plants }] = await Promise.all([
       sb.from('fichajes_pendientes')
-        .select('id, participante_id, jugador_id, precio_compra, participantes(nombre), jugadores(nombre, equipo, posicion)')
+        .select('id, participante_id, jugador_id, precio_compra, traspaso_de_id, participantes(nombre), jugadores(nombre, equipo, posicion), origen:traspaso_de_id(nombre)')
         .in('participante_id', partIds)
         .order('id', { ascending: true }),
       sb.from('plantillas')
@@ -3051,14 +3051,30 @@ function AdminFichajesPendientes({ participantes, federacion }) {
   const anular = async (pend) => {
     const jug = pend.jugadores;
     const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
-    if (!confirm(`¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe devolverán ${fmt(pend.precio_compra)} al presupuesto del equipo.`)) return;
+    const esTraspaso = !!pend.traspaso_de_id;
+    const refund80   = fmt(pend.precio_compra * 0.8);
+    const msg = esTraspaso
+      ? `¿Descartar el traspaso de ${nom} para ${pend.participantes?.nombre}?\n` +
+        `Se reembolsará el 80% del traspaso (${refund80}).\n` +
+        `El jugador volverá a ${pend.origen?.nombre || 'su equipo de origen'} si tiene plaza libre, o quedará libre.`
+      : `¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe devolverán ${fmt(pend.precio_compra)} al presupuesto del equipo.`;
+    if (!confirm(msg)) return;
     setProcesando(pend.id);
-    const { error } = await sb.rpc('anular_fichaje_pendiente', {
-      p_pendiente_id:  pend.id,
-      p_federacion_id: federacion?.id,
-    });
-    setProcesando(null);
-    if (error) { alert('Error: ' + error.message); return; }
+    if (esTraspaso) {
+      const { data, error } = await sb.rpc('anular_traspaso_pendiente', {
+        p_pendiente_id:  pend.id,
+        p_federacion_id: federacion?.id,
+      });
+      setProcesando(null);
+      if (error || !data?.ok) { alert('Error: ' + (error?.message || data?.error || 'desconocido')); return; }
+    } else {
+      const { error } = await sb.rpc('anular_fichaje_pendiente', {
+        p_pendiente_id:  pend.id,
+        p_federacion_id: federacion?.id,
+      });
+      setProcesando(null);
+      if (error) { alert('Error: ' + error.message); return; }
+    }
     cargar();
   };
 
@@ -3104,10 +3120,16 @@ function AdminFichajesPendientes({ participantes, federacion }) {
               <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>{jug.posicion} · {jug.equipo}</div>
             </div>
 
-            {/* Precio */}
-            <div style={{minWidth:90, flex:'0 0 auto'}}>
-              <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Precio</div>
-              <div style={{fontWeight:600}}>{fmt(pend.precio_compra)}</div>
+            {/* Precio / origen */}
+            <div style={{minWidth:110, flex:'0 0 auto'}}>
+              <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>
+                {pend.traspaso_de_id ? 'Traspaso de' : 'Precio'}
+              </div>
+              {pend.traspaso_de_id
+                ? <><div style={{fontWeight:600, fontSize:'.85rem'}}>{pend.origen?.nombre || '—'}</div>
+                    <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>{fmt(pend.precio_compra)}</div></>
+                : <div style={{fontWeight:600}}>{fmt(pend.precio_compra)}</div>
+              }
             </div>
 
             {/* Plantilla */}
@@ -3143,7 +3165,7 @@ function AdminFichajesPendientes({ participantes, federacion }) {
                       style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid #dc3545',
                               background:'var(--fondo)', color:'#dc3545', cursor:'pointer',
                               fontSize:'.82rem', fontWeight:600}}>
-                Anular
+                {pend.traspaso_de_id ? 'Descartar (80%)' : 'Anular'}
               </button>
             </div>
           </div>
@@ -4173,49 +4195,21 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
 
   useEffect(() => { cargar(); }, [miParticipanteId]);
 
+  const ERR_MSGS = {
+    presupuesto_insuficiente: 'El equipo ofertante no tiene presupuesto suficiente.',
+    sin_permiso:              'No tienes permiso para aceptar esta oferta.',
+    oferta_no_pendiente:      'Esta oferta ya no está pendiente.',
+    oferta_no_encontrada:     'Oferta no encontrada.',
+  };
+
   const aceptar = async (oferta) => {
-    const cant = Number(oferta.cantidad);
-    const ofertante = oferta.ofertante;
-    if (!ofertante) return;
-    if ((ofertante.presupuesto || 0) < cant) {
-      setMsg('El equipo ofertante no tiene presupuesto suficiente.'); return;
-    }
     setProcesando(oferta.id); setMsg('');
-    const jug = oferta.jugadores;
-
-    // 1. Quitar de mi plantilla
-    const { error: e1 } = await sb.from('plantillas').delete()
-      .eq('participante_id', miParticipanteId).eq('jugador_id', jug.id);
-    if (e1) { setMsg('Error: ' + e1.message); setProcesando(null); return; }
-
-    // 2. Añadir al ofertante (plantilla o pendientes)
-    const { count: cnt } = await sb.from('plantillas')
-      .select('id', { count: 'exact', head: true })
-      .eq('participante_id', ofertante.id);
-    const tabla = (cnt || 0) >= 14 ? 'fichajes_pendientes' : 'plantillas';
-    const { error: e2 } = await sb.from(tabla).insert(
-      { participante_id: ofertante.id, jugador_id: jug.id, precio_compra: cant }
-    );
-    if (e2) { setMsg('Error al asignar jugador: ' + e2.message); setProcesando(null); return; }
-
-    // 3. Transferencia de dinero
-    const miPart = participantes.find(p => p.id === miParticipanteId);
-    await Promise.all([
-      sb.from('participantes').update({ presupuesto: (ofertante.presupuesto || 0) - cant }).eq('id', ofertante.id),
-      sb.from('participantes').update({ presupuesto: (miPart?.presupuesto || 0) + cant }).eq('id', miParticipanteId),
-    ]);
-
-    // 4. Cerrar oferta y cancelar el resto para este jugador
-    await sb.from('ofertas_jugadores').update({ estado: 'aceptada' }).eq('id', oferta.id);
-    await sb.from('ofertas_jugadores').update({ estado: 'rechazada' })
-      .eq('jugador_id', jug.id).eq('federacion_id', federacion.id)
-      .eq('estado', 'pendiente').neq('id', oferta.id);
-
-    const nomJug = jug.posicion === 'POR' ? 'Portería ' + jug.equipo : jug.nombre;
-    const miNom  = participantes.find(p => p.id === miParticipanteId)?.nombre || '';
-    publicar(federacion.id, 'fichaje',
-      `${ofertante.nombre} ficha a ${nomJug} de ${miNom} por ${fmt(cant)}${tabla === 'fichajes_pendientes' ? ' — pendiente de plaza' : ''}`);
-
+    const { data, error } = await sb.rpc('aceptar_oferta', { p_oferta_id: oferta.id });
+    if (error || !data?.ok) {
+      setMsg(ERR_MSGS[data?.error] || error?.message || 'Error al aceptar la oferta.');
+      setProcesando(null);
+      return;
+    }
     setProcesando(null);
     cargar();
     onBadgeChange && onBadgeChange();

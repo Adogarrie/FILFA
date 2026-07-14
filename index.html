@@ -335,7 +335,6 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [liberarSel, setLiberarSel]         = useState({});   // pendiente_id → jugador_id
   const [procesandoPend, setProcesandoPend] = useState(null);
   const [escudoUrl, setEscudoUrl]           = useState(null);
-  const [subiendoEscudo, setSubiendoEscudo] = useState(false);
 
   const cargar = async () => {
     if (!participanteId || !sb) { setJugadores([]); return; }
@@ -362,27 +361,6 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   };
 
   useEffect(() => { cargar(); }, [participanteId]);
-
-  const subirEscudo = async (file) => {
-    setSubiendoEscudo(true);
-    const ext  = file.name.split('.').pop();
-    const path = `${participanteId}/${Date.now()}.${ext}`;
-    const { error: upErr } = await sb.storage
-      .from('escudos-participantes')
-      .upload(path, file, { upsert: true, contentType: file.type });
-    if (upErr) { alert('Error subiendo escudo: ' + upErr.message); setSubiendoEscudo(false); return; }
-    const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
-    const { error: updErr } = await sb.from('participantes')
-      .update({ escudo_url: publicUrl }).eq('id', participanteId);
-    if (updErr) { alert('Error guardando escudo: ' + updErr.message); setSubiendoEscudo(false); return; }
-    setEscudoUrl(publicUrl);
-    setSubiendoEscudo(false);
-  };
-
-  const quitarEscudo = async () => {
-    await sb.from('participantes').update({ escudo_url: null }).eq('id', participanteId);
-    setEscudoUrl(null);
-  };
 
   const activarPendiente = async (fp) => {
     const plantillaActual = (jugadores || []);
@@ -507,45 +485,14 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
 
   const presupuestoDisplay = presupuesto ?? null;
 
-  const puedeEditarEscudo = isAdmin || participanteId === miParticipanteId;
-
   return (
     <div>
       <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'center'}}>
-        {/* Escudo del equipo */}
-        <div style={{display:'flex', flexDirection:'column', alignItems:'center', gap:'.4rem', flexShrink:0}}>
-          {escudoUrl
-            ? <img src={escudoUrl} alt="Escudo"
-                   style={{width:64, height:64, objectFit:'contain', borderRadius:8,
-                           border:'1.5px solid var(--borde)'}} />
-            : <div style={{width:64, height:64, borderRadius:8, border:'2px dashed var(--borde)',
-                           display:'flex', alignItems:'center', justifyContent:'center',
-                           color:'var(--texto2)', fontSize:'.65rem', textAlign:'center',
-                           lineHeight:1.2}}>
-                Sin<br/>escudo
-              </div>
-          }
-          {puedeEditarEscudo && (
-            <div style={{display:'flex', gap:'.3rem', flexWrap:'wrap', justifyContent:'center'}}>
-              <label style={{cursor: subiendoEscudo ? 'wait' : 'pointer',
-                             fontSize:'.72rem', color:'var(--verde)', fontWeight:600,
-                             textDecoration:'underline'}}>
-                {subiendoEscudo ? 'Subiendo…' : escudoUrl ? 'Cambiar' : 'Subir escudo'}
-                <input type="file" accept="image/*" style={{display:'none'}}
-                       disabled={subiendoEscudo}
-                       onChange={e => { if (e.target.files[0]) subirEscudo(e.target.files[0]); e.target.value=''; }} />
-              </label>
-              {escudoUrl && (
-                <button onClick={quitarEscudo}
-                        style={{fontSize:'.72rem', color:'#dc3545', background:'none',
-                                border:'none', cursor:'pointer', textDecoration:'underline',
-                                padding:0, fontWeight:600}}>
-                  Quitar
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        {escudoUrl && (
+          <img src={escudoUrl} alt="Escudo"
+               style={{width:64, height:64, objectFit:'contain', borderRadius:8,
+                       border:'1.5px solid var(--borde)', flexShrink:0}} />
+        )}
         <div>
           <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
           <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
@@ -1642,13 +1589,13 @@ function CalendarioFantasy({ participantes, federacion }) {
   useEffect(() => { setAbierto(null); }, [jornada]);
 
   const filasJornada = [...participantes].map(p => ({
-    id: p.id, nombre: p.nombre,
+    id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
     pts: clas.find(r => r.participante_id === p.id && r.jornada === jornada)?.puntos_jornada ?? null,
   })).sort((a, b) => (b.pts ?? -1) - (a.pts ?? -1));
 
   const filasAcum = [...participantes].map(p => {
     const regs = clas.filter(r => r.participante_id === p.id);
-    return { id: p.id, nombre: p.nombre, total: regs.reduce((s, r) => s + r.puntos_jornada, 0), jornadas: regs.length };
+    return { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null, total: regs.reduce((s, r) => s + r.puntos_jornada, 0), jornadas: regs.length };
   }).sort((a, b) => b.total - a.total);
 
   const jornadasConDatos = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
@@ -1732,7 +1679,10 @@ function CalendarioFantasy({ participantes, federacion }) {
                                 borderBottom: abierto===e.id ? 'none' : undefined}}>
                       <td><Medalla pos={i + 1} /></td>
                       <td style={{fontWeight:600}}>
-                        {abierto===e.id ? '▾ ' : '▸ '}{e.nombre}
+                        <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                          {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:20, height:20, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                          {abierto===e.id ? '▾ ' : '▸ '}{e.nombre}
+                        </span>
                       </td>
                       <td style={{textAlign:'right', fontWeight: e.pts!==null?800:400, fontSize: e.pts!==null?'1.08rem':'1rem',
                                   color: e.pts!==null?'var(--texto)':'var(--texto2)'}}>
@@ -1766,7 +1716,12 @@ function CalendarioFantasy({ participantes, federacion }) {
                   {filasAcum.map((e, i) => (
                     <tr key={e.id} style={{background: i===0?'rgba(26,127,55,.06)':undefined}}>
                       <td><Medalla pos={i + 1} /></td>
-                      <td style={{fontWeight:600}}>{e.nombre}</td>
+                      <td style={{fontWeight:600}}>
+                        <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                          {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:20, height:20, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                          {e.nombre}
+                        </span>
+                      </td>
                       <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.total}</td>
                       <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.jornadas}</td>
                       <td style={{textAlign:'right', color:'var(--texto2)'}}>
@@ -2072,7 +2027,10 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
             <button key={p.id}
               className={`tab ${equipoId === p.id ? 'active' : ''}`}
               onClick={() => setEquipoId(p.id)}>
-              {p.nombre}{p.id === miParticipanteId ? ' (tú)' : ''}
+              <span style={{display:'inline-flex', alignItems:'center', gap:'.3rem'}}>
+                {p.escudo_url && <img src={p.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                {p.nombre}{p.id === miParticipanteId ? ' (tú)' : ''}
+              </span>
             </button>
           ))}
         </div>

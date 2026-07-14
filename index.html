@@ -3378,13 +3378,19 @@ function AdminPujas({ participantes, federacion }) {
       return;
     }
 
-    const jug = porJugador.find(g => g.jugador?.id === jugadorId)?.jugador;
+    const grupo  = porJugador.find(g => g.jugador?.id === jugadorId);
+    const jug    = grupo?.jugador;
     const nomJug = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
-    if (rpcData?.pendiente) {
-      publicar(federacion?.id, 'fichaje', `${ganador.equipo} gana la puja de ${nomJug} por ${fmt(ganador.cantidad)} (pendiente de plaza)`);
-    } else {
-      publicar(federacion?.id, 'fichaje', `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}`);
-    }
+    const resto  = (grupo?.bids || [])
+      .filter(b => b.id !== ganador.id)
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .map(b => `- ${b.equipo} pujó ${fmt(b.cantidad)}`)
+      .join('\n');
+    const lineaPrincipal = rpcData?.pendiente
+      ? `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)} (pendiente de plaza).`
+      : `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}.`;
+    const texto = resto ? `${lineaPrincipal}\nResto de pujas:\n${resto}` : lineaPrincipal;
+    publicar(federacion?.id, 'fichaje', texto);
     setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();

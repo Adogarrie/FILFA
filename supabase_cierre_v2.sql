@@ -49,14 +49,15 @@ security definer
 set search_path = public
 as $$
 declare
-  v_hora      time;
-  v_fecha     date;
-  v_ts        timestamptz;
-  v_firmados  int := 0;
-  v_jug_id    uuid;
-  v_ganadora  record;
-  v_cnt_plant int;
-  v_pendiente boolean;
+  v_hora        time;
+  v_fecha       date;
+  v_ts          timestamptz;
+  v_firmados    int := 0;
+  v_jug_id      uuid;
+  v_ganadora    record;
+  v_cnt_plant   int;
+  v_pendiente   boolean;
+  v_resto_pujas text;
 begin
 
   -- ── 1. Verificar mercado activo y hora configurada ────────────
@@ -235,7 +236,20 @@ begin
 
     update pujas set ganadora = true where id = v_ganadora.puja_id;
 
-    -- ── 5h. Anuncio individual ────────────────────────────────
+    -- ── 5h. Construir lista de pujas perdedoras ──────────────────
+    select string_agg(
+             '- ' || pa.nombre || ' pujó ' || to_char(p.cantidad, 'FM999G999G999') || ' €',
+             chr(10) order by p.cantidad desc
+           )
+      into v_resto_pujas
+      from pujas p
+      join participantes pa on pa.id = p.participante_id
+     where p.jugador_id     = v_jug_id
+       and pa.federacion_id = p_federacion_id
+       and p.created_at    <= v_ts
+       and p.id             <> v_ganadora.puja_id;
+
+    -- ── 5i. Anuncio individual ────────────────────────────────────
     insert into anuncios (federacion_id, tipo, texto)
     values (
       p_federacion_id, 'fichaje',
@@ -246,7 +260,12 @@ begin
                   || ' (' || v_ganadora.jugador_equipo || ')'
            end
         || ' por ' || to_char(v_ganadora.cantidad, 'FM999G999G999') || ' €'
-        || case when v_pendiente then ' — pendiente de plaza' else '' end
+        || case when v_pendiente then ' (pendiente de plaza)' else '' end
+        || '.'
+        || case when v_resto_pujas is not null
+             then chr(10) || 'Resto de pujas:' || chr(10) || v_resto_pujas
+             else ''
+           end
     );
 
     v_firmados := v_firmados + 1;

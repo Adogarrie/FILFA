@@ -1934,6 +1934,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [editModal, setEditModal]     = useState(false);
   const [editForm, setEditForm]       = useState({});
   const [editMsg, setEditMsg]         = useState('');
+  const [subiendoEscudo, setSubiendoEscudo] = useState(false);
   const [modalOferta, setModalOferta] = useState(null); // { jugador_id, nombre, posicion, equipo, valor }
   const [cantOferta, setCantOferta]   = useState('');
   const [enviandoOf, setEnviandoOf]   = useState(false);
@@ -1990,6 +1991,21 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     setEditForm({ nombre: equipo?.nombre || '', estadio: equipo?.estadio || '', entrenador: equipo?.entrenador || '', escudo_url: equipo?.escudo_url || '' });
     setEditMsg('');
     setEditModal(true);
+  };
+
+  const subirEscudoEquipo = async (file) => {
+    setSubiendoEscudo(true);
+    const ext  = file.name.split('.').pop();
+    const path = `${equipoId}/${Date.now()}.${ext}`;
+    const { error: upErr } = await sb.storage
+      .from('escudos-participantes')
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (upErr) { alert('Error subiendo escudo: ' + upErr.message); setSubiendoEscudo(false); return; }
+    const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
+    await sb.from('participantes').update({ escudo_url: publicUrl }).eq('id', equipoId);
+    setEditForm(f => ({ ...f, escudo_url: publicUrl }));
+    setSubiendoEscudo(false);
+    onParticipantesChange && onParticipantesChange();
   };
 
   const guardarPerfil = async () => {
@@ -2116,9 +2132,39 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
               </div>
             ))}
             <div className="campo">
-              <label>URL del escudo</label>
-              <input placeholder="https://..." value={editForm.escudo_url || ''}
-                     onChange={e => setEditForm(f => ({...f, escudo_url: e.target.value}))} />
+              <label>Escudo del equipo</label>
+              <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginTop:'.25rem'}}>
+                {editForm.escudo_url
+                  ? <img src={editForm.escudo_url} alt="Escudo"
+                         style={{width:52, height:52, objectFit:'contain', borderRadius:7,
+                                 border:'1.5px solid var(--borde)', flexShrink:0}} />
+                  : <div style={{width:52, height:52, borderRadius:7, border:'2px dashed var(--borde)',
+                                 display:'flex', alignItems:'center', justifyContent:'center',
+                                 color:'var(--texto2)', fontSize:'.6rem', textAlign:'center',
+                                 lineHeight:1.2, flexShrink:0}}>
+                      Sin<br/>escudo
+                    </div>
+                }
+                <div style={{display:'flex', flexDirection:'column', gap:'.3rem'}}>
+                  <label style={{cursor: subiendoEscudo ? 'wait' : 'pointer',
+                                 padding:'.3rem .75rem', borderRadius:7,
+                                 border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                 fontSize:'.8rem', fontWeight:600, textAlign:'center'}}>
+                    {subiendoEscudo ? 'Subiendo…' : editForm.escudo_url ? 'Cambiar imagen' : 'Subir imagen'}
+                    <input type="file" accept="image/*" style={{display:'none'}}
+                           disabled={subiendoEscudo}
+                           onChange={e => { if (e.target.files[0]) subirEscudoEquipo(e.target.files[0]); e.target.value=''; }} />
+                  </label>
+                  {editForm.escudo_url && (
+                    <button onClick={() => setEditForm(f => ({...f, escudo_url: ''}))}
+                            style={{padding:'.3rem .75rem', borderRadius:7,
+                                    border:'1.5px solid #dc3545', background:'var(--fondo)',
+                                    color:'#dc3545', cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                      Quitar
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
             {editMsg && <div style={{color: editMsg.startsWith('Error') ? '#dc3545' : '#198754', fontSize:'.85rem', marginBottom:'.5rem'}}>{editMsg}</div>}
             <div style={{display:'flex', gap:'.75rem', marginTop:'.5rem'}}>

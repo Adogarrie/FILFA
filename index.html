@@ -328,6 +328,7 @@ function Spinner() {
 function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId }) {
   const [jugadores, setJugadores]           = useState(null);
   const [presupuesto, setPresupuesto]       = useState(null);
+  const [sustLesion, setSustLesion]         = useState(0);
   const [modalVenta, setModalVenta]         = useState(null);
   const [modalVentaTodo, setModalVentaTodo] = useState(false);
   const [vendiendoTodo, setVendiendoTodo]   = useState(false);
@@ -342,11 +343,11 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       sb.from('plantillas')
         .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado, lesionado)')
         .eq('participante_id', participanteId),
-      sb.from('participantes').select('presupuesto, escudo_url').eq('id', participanteId).single(),
+      sb.from('participantes').select('presupuesto, escudo_url, sustituciones_lesion').eq('id', participanteId).single(),
     ]);
     if (error) { console.error(error); setJugadores([]); }
     else setJugadores(pl || []);
-    if (pres) { setPresupuesto(pres.presupuesto); setEscudoUrl(pres.escudo_url || null); }
+    if (pres) { setPresupuesto(pres.presupuesto); setEscudoUrl(pres.escudo_url || null); setSustLesion(pres.sustituciones_lesion || 0); }
 
     // Fichajes pendientes — intenta con traspaso_de_id, fallback si columna no existe aún
     let { data: fp, error: fpErr } = await sb.from('fichajes_pendientes')
@@ -425,11 +426,15 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       const pct = modalVenta.lesionado ? 1 : (federacion?.pct_venta_mercado ?? 100) / 100;
       const valorVenta = Math.round((modalVenta.valor || 0) * pct);
       const nuevo = (presupuesto || 0) + valorVenta;
+      const mercadoCerrado = !federacion?.ventas_habilitadas;
+      const nuevaSust = (modalVenta.lesionado && mercadoCerrado) ? (sustLesion + 1) : sustLesion;
+      const updatePart = { presupuesto: nuevo };
+      if (modalVenta.lesionado && mercadoCerrado) updatePart.sustituciones_lesion = nuevaSust;
       const { error: errPres } = await sb.from('participantes')
-        .update({ presupuesto: nuevo })
+        .update(updatePart)
         .eq('id', participanteId);
       if (errPres) console.error('Error actualizando presupuesto:', errPres);
-      else setPresupuesto(nuevo);
+      else { setPresupuesto(nuevo); if (modalVenta.lesionado && mercadoCerrado) setSustLesion(nuevaSust); }
       // Tablón
       const nombreJug = modalVenta.posicion === 'POR'
         ? `Portería ${modalVenta.equipo}`
@@ -791,6 +796,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
   const [todasPendientes, setTodasPendientes] = useState([]);
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
+  const [sustLesion, setSustLesion]         = useState(0);
 
   // Ref siempre apunta a la cargar más reciente (evita stale closures en el intervalo)
   const cargarRef = useRef(null);
@@ -855,6 +861,11 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   useEffect(() => { cargar(); }, []);
   useEffect(() => { setSubtabMercado('jugadores'); }, [participanteId]);
+  useEffect(() => {
+    if (!participanteId || !sb || (isAdmin && participanteId !== miParticipanteId)) { setSustLesion(0); return; }
+    sb.from('participantes').select('sustituciones_lesion').eq('id', participanteId).single()
+      .then(({ data }) => setSustLesion(data?.sustituciones_lesion || 0));
+  }, [participanteId]);
 
   // Lookup O(1) por jugador_id — evita joins embebidas en plantillas/pendientes
   const jugadoresMap = useMemo(() => {
@@ -1038,10 +1049,15 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     if (error) {
       alert('Error al fichar: ' + error.message);
     } else {
+      const esSustituto = !federacion?.ventas_habilitadas && sustLesion > 0;
+      const nuevaSust = esSustituto ? Math.max(0, sustLesion - 1) : sustLesion;
+      const updatePart = { presupuesto: presupuestoActual - coste };
+      if (esSustituto) updatePart.sustituciones_lesion = nuevaSust;
       const { error: errPres } = await sb.from('participantes')
-        .update({ presupuesto: presupuestoActual - coste })
+        .update(updatePart)
         .eq('id', participanteId);
       if (errPres) console.error('Error actualizando presupuesto:', errPres);
+      else if (esSustituto) setSustLesion(nuevaSust);
       onFichaje && onFichaje();
       cargar();
     }
@@ -1351,7 +1367,15 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
             </button>
           )}
         </div>
-        {!isActingAsAdmin && !federacion?.ventas_habilitadas && (
+        {!isActingAsAdmin && !federacion?.ventas_habilitadas && sustLesion > 0 && (
+          <div style={{background:'#d1f0e0', color:'#155724', padding:'.5rem .85rem',
+                       borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
+                       border:'1px solid #a3d9b5'}}>
+            Tienes <strong>{sustLesion}</strong> ficha{sustLesion !== 1 ? 's' : ''} de sustitución por lesión disponible{sustLesion !== 1 ? 's' : ''}.
+            Puedes fichar un sustituto directamente aunque el mercado esté cerrado.
+          </div>
+        )}
+        {!isActingAsAdmin && !federacion?.ventas_habilitadas && sustLesion === 0 && (
           <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
                        borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
                        border:'1px solid #ffc107'}}>
@@ -1455,6 +1479,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                             ✕
                           </button>
                         </span>
+                      ) : sustLesion > 0 ? (
+                        <button onClick={() => setModal(j)}
+                                style={{padding:'.3rem .6rem', fontSize:'.78rem', borderRadius:7,
+                                        border:'1.5px solid #198754', background:'#d1f0e0',
+                                        color:'#155724', cursor:'pointer', fontWeight:600}}>
+                          Fichar (sust.)
+                        </button>
                       ) : (
                         <span style={{fontSize:'.8rem', color:'var(--texto2)'}}>🔒</span>
                       )
@@ -1531,17 +1562,22 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
         </div>
       )}
 
-      {/* Modal fichar directo (admin) */}
+      {/* Modal fichar directo (admin o sustitución por lesión) */}
       {modal && (
         <div className="overlay" onClick={() => setModal(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3>Fichar directamente</h3>
+            <h3>{!federacion?.ventas_habilitadas && sustLesion > 0 ? 'Fichar sustituto' : 'Fichar directamente'}</h3>
             <p>
               {modal.posicion === 'POR'
                 ? <>Portería de <strong>{modal.equipo}</strong></>
                 : <>Fichar a <strong>{modal.nombre}</strong> ({modal.equipo})</>
               }<br/>
               Coste: <strong>{fmt(modal.valor_mercado || 0)}</strong>
+              {!federacion?.ventas_habilitadas && sustLesion > 0 && (
+                <><br/><span style={{fontSize:'.85rem', color:'#155724'}}>
+                  Usará 1 de tus {sustLesion} ficha{sustLesion !== 1 ? 's' : ''} de sustitución disponible{sustLesion !== 1 ? 's' : ''}.
+                </span></>
+              )}
             </p>
             <div className="modal-btns">
               <button className="btn-cancel" onClick={() => setModal(null)}>Cancelar</button>

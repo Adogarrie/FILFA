@@ -3,9 +3,14 @@
 -- Ejecutar en: Supabase Dashboard → SQL Editor
 -- ═══════════════════════════════════════════════════════════════
 
--- ─── 1. Columna en jugadores ─────────────────────────────────────
+-- ─── 1. Columnas ─────────────────────────────────────────────────
 alter table jugadores
   add column if not exists lesionado boolean not null default false;
+
+-- Contador de sustituciones por lesión disponibles (se incrementa al vender un
+-- jugador lesionado con mercado cerrado; se decrementa al fichar el sustituto).
+alter table participantes
+  add column if not exists sustituciones_lesion int not null default 0;
 
 -- ─── 2. activar_fichaje_pendiente (excluye lesionados del límite) ─
 -- Sustituye la versión anterior: el límite de 14 solo cuenta jugadores no lesionados.

@@ -534,6 +534,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                        borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
                        border:'1px solid #ffc107'}}>
             La venta de jugadores está deshabilitada. El administrador debe activarla en Admin → Mercado.
+            {lista.some(j => j.lesionado) && <> Los jugadores lesionados pueden venderse igualmente.</>}
           </div>
         )}
         {!participanteId
@@ -546,7 +547,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
-                  {(isActingAsAdmin || federacion?.ventas_habilitadas) && <th></th>}
+                  {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j => j.lesionado)) && <th></th>}
                 </tr>
               </thead>
               <tbody>
@@ -572,14 +573,16 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
-                      {(isActingAsAdmin || federacion?.ventas_habilitadas) && (
+                      {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j2 => j2.lesionado)) && (
                         <td>
-                          <button onClick={() => setModalVenta(j)}
-                            style={{background:'#d93025', color:'#fff', border:'none',
-                                    padding:'.3rem .7rem', borderRadius:'8px',
-                                    cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
-                            Vender
-                          </button>
+                          {(isActingAsAdmin || federacion?.ventas_habilitadas || j.lesionado) && (
+                            <button onClick={() => setModalVenta(j)}
+                              style={{background:'#d93025', color:'#fff', border:'none',
+                                      padding:'.3rem .7rem', borderRadius:'8px',
+                                      cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                              Vender
+                            </button>
+                          )}
                         </td>
                       )}
                     </tr>

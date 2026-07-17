@@ -5681,6 +5681,7 @@ function AdminNoJugo({ federacion, participantes }) {
   const [cargando, setCargando]       = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
+  const [listado, setListado]         = useState('');
 
   useEffect(() => { if (federacionId && participantes?.length) cargar(); }, [federacionId, jornada, participantes]);
 
@@ -5796,6 +5797,38 @@ function AdminNoJugo({ federacion, participantes }) {
 
   const hayDatos = titulares.length > 0;
 
+  const generarListado = () => {
+    const labPos = { POR: 'PO', DEF: 'DF', MED: 'MC', DEL: 'DEL' };
+    const porEquipo = {};
+    for (const a of alisData) {
+      const jug = jugMap[a.jugador_id];
+      if (!jug) continue;
+      if (!porEquipo[a.participante_id]) porEquipo[a.participante_id] = { POR: [], DEF: [], MED: [], DEL: [], suplentes: [] };
+      if (a.es_titular) {
+        if (porEquipo[a.participante_id][jug.posicion] !== undefined) {
+          porEquipo[a.participante_id][jug.posicion].push(jug.nombre);
+        }
+      } else if (a.orden_suplente != null) {
+        porEquipo[a.participante_id].suplentes.push({ nombre: jug.nombre, orden: a.orden_suplente });
+      }
+    }
+    const bloques = (participantes || [])
+      .filter(p => porEquipo[p.id])
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+      .map(p => {
+        const pos = porEquipo[p.id];
+        const sups = pos.suplentes.sort((a, b) => a.orden - b.orden).map(s => s.nombre);
+        return [
+          `_${p.nombre}_`,
+          ...['POR','DEF','MED','DEL'].map(k => `${labPos[k]}: ${(pos[k] || []).join(', ')}`),
+          `Suplentes: ${sups.join(', ')}`,
+        ].join('\n');
+      });
+    const texto = bloques.join('\n\n');
+    setListado(texto);
+    return texto;
+  };
+
   return (
     <div>
       {/* Selector de jornada */}
@@ -5803,7 +5836,7 @@ function AdminNoJugo({ federacion, participantes }) {
         <span style={{fontWeight:600}}>Jornada:</span>
         <div style={{display:'flex', gap:'.28rem', flexWrap:'wrap'}}>
           {Array.from({length:38}, (_, i) => i+1).map(j => (
-            <button key={j} onClick={() => { setJornada(j); setMsg(''); }}
+            <button key={j} onClick={() => { setJornada(j); setMsg(''); setListado(''); }}
                     style={{padding:'.22rem .48rem', borderRadius:6, fontSize:'.75rem',
                             border:'1.5px solid var(--borde)', cursor:'pointer',
                             background: jornada===j?'var(--verde)':'#fff',
@@ -5933,6 +5966,29 @@ function AdminNoJugo({ federacion, participantes }) {
             {msg && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msg}</span>}
           </div>
         </>
+      )}
+
+      {/* Listado de alineaciones */}
+      {hayDatos && (
+        <div className="card" style={{marginTop:'1rem'}}>
+          <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap', marginBottom: listado ? '.75rem' : 0}}>
+            <button onClick={() => {
+                      const texto = generarListado();
+                      navigator.clipboard.writeText(texto).catch(() => {});
+                    }}
+                    style={{padding:'.4rem .9rem', borderRadius:7, border:'1.5px solid var(--borde)',
+                            background:'var(--fondo)', cursor:'pointer', fontWeight:600, fontSize:'.87rem'}}>
+              Copiar listado J{jornada}
+            </button>
+            {listado && <span style={{fontSize:'.82rem', color:'var(--verde)', fontWeight:600}}>¡Copiado!</span>}
+          </div>
+          {listado && (
+            <pre style={{margin:0, fontFamily:'monospace', fontSize:'.85rem', whiteSpace:'pre-wrap',
+                         wordBreak:'break-word', color:'var(--texto)', lineHeight:1.6}}>
+              {listado}
+            </pre>
+          )}
+        </div>
       )}
     </div>
   );

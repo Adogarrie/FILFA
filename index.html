@@ -5572,7 +5572,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
       rondas1.push(ronda);
       rot.unshift(rot.pop());
     }
-    const rondas2 = [...rondas1].reverse()
+    const rondas2 = rondas1
       .map(ronda => ronda.map(p => ({ local: p.visitante, visitante: p.local })));
     return [...rondas1, ...rondas2];
   };

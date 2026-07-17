@@ -5892,6 +5892,7 @@ function LigaH2H({ federacion, participantes }) {
       <div className="tabs">
         <button className={`tab ${tab==='calendario'?'active':''}`}    onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='clasificacion'?'active':''}`} onClick={() => setTab('clasificacion')}>Clasificación H2H</button>
+        <button className={`tab ${tab==='estadisticas'?'active':''}`}  onClick={() => setTab('estadisticas')}>Estadísticas</button>
       </div>
 
       {tab === 'calendario' && (
@@ -5919,12 +5920,45 @@ function LigaH2H({ federacion, participantes }) {
             </>
       )}
 
+      {tab === 'estadisticas' && (
+        partidos.length === 0
+          ? <div className="card"><p style={{color:'var(--texto2)'}}>No hay partidos generados aún.</p></div>
+          : (hasDivs
+              ? divIds.map(divId => {
+                  const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                  const rows = computePosHistorial(divId);
+                  return (
+                    <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                      <h2 style={{marginBottom:'.4rem'}}>{nombre}</h2>
+                      <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                        Contador de jornadas en cada posición de la clasificación acumulada H2H tras cada jornada.
+                        En caso de empate a puntos todos los equipos comparten la misma posición.
+                      </p>
+                      <PosHistorialTable rows={rows} />
+                    </div>
+                  );
+                })
+              : (() => {
+                  const rows = computePosHistorial(null);
+                  return (
+                    <div className="card">
+                      <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                        Contador de jornadas en cada posición de la clasificación acumulada H2H tras cada jornada.
+                        En caso de empate a puntos todos los equipos comparten la misma posición.
+                      </p>
+                      <PosHistorialTable rows={rows} />
+                    </div>
+                  );
+                })()
+            )
+      )}
+
       {tab === 'clasificacion' && (
         <>
           {/* Sub-tabs: General / Local / Visitante */}
           <div className="card" style={{paddingBottom:'.6rem'}}>
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
-              {[['general','General'],['local','Local'],['visitante','Visitante'],['posiciones','Posiciones']].map(([k,l]) => (
+              {[['general','General'],['local','Local'],['visitante','Visitante']].map(([k,l]) => (
                 <button key={k} onClick={() => setSubTabClasif(k)}
                         style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
                                 cursor:'pointer', fontWeight: subTabClasif===k ? 700 : 400,
@@ -5937,53 +5971,25 @@ function LigaH2H({ federacion, participantes }) {
             </div>
           </div>
 
-          {subTabClasif !== 'posiciones'
-            ? (hasDivs
-                ? divIds.map(divId => {
-                    const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                    const rows = subTabClasif === 'general'
-                      ? computeClasif(divId)
-                      : computeClasifSide(divId, subTabClasif);
-                    return (
-                      <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                        <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
-                        <ClasifTable rows={rows} />
-                      </div>
-                    );
-                  })
-                : (() => {
-                    const rows = subTabClasif === 'general'
-                      ? computeClasif(null)
-                      : computeClasifSide(null, subTabClasif);
-                    return <div className="card"><ClasifTable rows={rows} /></div>;
-                  })()
-              )
-            : (hasDivs
-                ? divIds.map(divId => {
-                    const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                    const rows = computePosHistorial(divId);
-                    return (
-                      <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                        <h2 style={{marginBottom:'.5rem'}}>{nombre}</h2>
-                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                          Contador de jornadas en cada posición tras acumular los resultados de cada jornada (dense rank: en caso de empate a puntos, todos comparten la misma posición).
-                        </p>
-                        <PosHistorialTable rows={rows} />
-                      </div>
-                    );
-                  })
-                : (() => {
-                    const rows = computePosHistorial(null);
-                    return (
-                      <div className="card">
-                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                          Contador de jornadas en cada posición tras acumular los resultados de cada jornada (dense rank: en caso de empate a puntos, todos comparten la misma posición).
-                        </p>
-                        <PosHistorialTable rows={rows} />
-                      </div>
-                    );
-                  })()
-              )
+          {hasDivs
+            ? divIds.map(divId => {
+                const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                const rows = subTabClasif === 'general'
+                  ? computeClasif(divId)
+                  : computeClasifSide(divId, subTabClasif);
+                return (
+                  <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                    <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
+                    <ClasifTable rows={rows} />
+                  </div>
+                );
+              })
+            : (() => {
+                const rows = subTabClasif === 'general'
+                  ? computeClasif(null)
+                  : computeClasifSide(null, subTabClasif);
+                return <div className="card"><ClasifTable rows={rows} /></div>;
+              })()
           }
         </>
       )}

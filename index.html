@@ -5393,8 +5393,52 @@ function LigaH2H({ federacion, participantes }) {
       else if (gl === gv) { L.pe++; L.pts++;    V.pe++; V.pts++; }
       else               { V.pg++; V.pts += 3; L.pp++; }
     });
-    return Object.values(stats).sort((a, b) =>
-      b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
+
+    // Desempate: 1) gol average particular, 2) GF total, 3) DIF total
+    const calcH2H = (ids) => {
+      const idSet = new Set(ids);
+      const h = {};
+      ids.forEach(id => { h[id] = { pts: 0, gf: 0, gc: 0 }; });
+      ms.forEach(m => {
+        if (m.pts_local === null || m.pts_visitante === null) return;
+        if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
+        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+        h[m.local_id].gf    += gl; h[m.local_id].gc    += gv;
+        h[m.visitante_id].gf += gv; h[m.visitante_id].gc += gl;
+        if (gl > gv)        { h[m.local_id].pts     += 3; }
+        else if (gl === gv) { h[m.local_id].pts     += 1; h[m.visitante_id].pts += 1; }
+        else                { h[m.visitante_id].pts += 3; }
+      });
+      return h;
+    };
+
+    const rows = Object.values(stats);
+    const byPts = {};
+    rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
+
+    const criterios = (() => {
+      try { return JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif"]'); }
+      catch { return ['h2h','gf','dif']; }
+    })();
+
+    const result = [];
+    Object.keys(byPts).map(Number).sort((a, b) => b - a).forEach(pts => {
+      const group = byPts[pts];
+      if (group.length === 1) { result.push(group[0]); return; }
+      const h2h = calcH2H(group.map(r => r.id));
+      group.sort((a, b) => {
+        for (const crit of criterios) {
+          let diff = 0;
+          if      (crit === 'h2h') diff = h2h[b.id].pts - h2h[a.id].pts;
+          else if (crit === 'gf')  diff = b.gf - a.gf;
+          else if (crit === 'dif') diff = (b.gf - b.gc) - (a.gf - a.gc);
+          if (diff !== 0) return diff;
+        }
+        return 0;
+      });
+      group.forEach(r => result.push(r));
+    });
+    return result;
   };
 
   const PartidoFila = ({ m }) => {
@@ -5534,6 +5578,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   // Sorteo físico
   const [modoSorteo,   setModoSorteo]   = useState(false);
   const [asignaciones, setAsignaciones] = useState({}); // { divKey: [participante_id, ...] }
+  // Criterios de desempate
+  const CRITERIOS_H2H = { h2h: 'Gol average particular', gf: 'Goles a favor', dif: 'Diferencia de goles' };
+  const parsarOrden = (val) => { try { return JSON.parse(val || '["h2h","gf","dif"]'); } catch { return ['h2h','gf','dif']; } };
+  const [desempateOrden, setDesempateOrden] = useState(() => parsarOrden(federacion?.h2h_desempate_orden));
 
   // Agrupar participantes por división (calculado una sola vez en render)
   const grupos = React.useMemo(() => {
@@ -5562,6 +5610,23 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   };
 
   useEffect(() => { cargar(); }, [federacion?.id]);
+
+  const moverCrit = (idx, dir) => {
+    const arr = [...desempateOrden];
+    const ni = idx + dir;
+    if (ni < 0 || ni >= arr.length) return;
+    [arr[idx], arr[ni]] = [arr[ni], arr[idx]];
+    setDesempateOrden(arr);
+  };
+
+  const guardarDesempate = async () => {
+    const val = JSON.stringify(desempateOrden);
+    const { error } = await sb.from('federaciones').update({ h2h_desempate_orden: val }).eq('id', federacion.id);
+    if (error) { setMsg('Error al guardar: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, h2h_desempate_orden: val });
+    setMsg('Criterios guardados');
+    setTimeout(() => setMsg(''), 2500);
+  };
 
   const toggleH2H = async (val) => {
     await sb.from('federaciones').update({ h2h_habilitado: val }).eq('id', federacion.id);
@@ -5748,6 +5813,36 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
           activo={h2hOn}
           onToggle={toggleH2H}
         />
+
+        {/* ── Criterios de desempate ── */}
+        <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+          <div style={{fontWeight:700, marginBottom:'.25rem'}}>Criterios de desempate</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Orden de aplicación cuando dos o más equipos están igualados a puntos. El primero tiene mayor prioridad.
+          </div>
+          <div style={{display:'flex', flexDirection:'column', gap:'.4rem', marginBottom:'.75rem'}}>
+            {desempateOrden.map((crit, i) => (
+              <div key={crit} style={{display:'flex', alignItems:'center', gap:'.6rem'}}>
+                <span style={{fontWeight:700, color:'var(--texto2)', minWidth:18,
+                              textAlign:'right', fontSize:'.85rem'}}>{i + 1}.</span>
+                <span style={{flex:1, fontSize:'.9rem'}}>{CRITERIOS_H2H[crit]}</span>
+                <div style={{display:'flex', gap:'.25rem'}}>
+                  <button onClick={() => moverCrit(i, -1)} disabled={i === 0}
+                          style={{padding:'.18rem .42rem', borderRadius:6, fontSize:'.8rem',
+                                  border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                  cursor: i === 0 ? 'default' : 'pointer',
+                                  opacity: i === 0 ? .3 : 1}}>▲</button>
+                  <button onClick={() => moverCrit(i, 1)} disabled={i === desempateOrden.length - 1}
+                          style={{padding:'.18rem .42rem', borderRadius:6, fontSize:'.8rem',
+                                  border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                  cursor: i === desempateOrden.length - 1 ? 'default' : 'pointer',
+                                  opacity: i === desempateOrden.length - 1 ? .3 : 1}}>▼</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button className="btn-ok" onClick={guardarDesempate}>Guardar orden</button>
+        </div>
 
         {/* ── Opciones de generación ── */}
         {!modoSorteo && (

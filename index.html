@@ -1626,40 +1626,63 @@ function CalendarioFantasy({ participantes, federacion }) {
     pts: clas.find(r => r.participante_id === p.id && r.jornada === jornada)?.puntos_jornada ?? null,
   })).sort((a, b) => (b.pts ?? -1) - (a.pts ?? -1));
 
-  // Desempate 3: jornadas en las que el equipo fue primero (máxima puntuación)
-  const jGanadasMap = {};
-  [...new Set(clas.map(r => r.jornada))].forEach(j => {
+  // ── Jornadas únicas ordenadas (base de todos los cálculos) ──
+  const allJornadas = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
+  const jornadasConDatos = allJornadas;
+
+  // ── Ranking por jornada: 1º, 2º, 3º (dense rank) ─────────────
+  const jPos1Map = {}, jPos2Map = {}, jPos3Map = {};
+  allJornadas.forEach(j => {
     const rowsJ = clas.filter(r => r.jornada === j);
     if (!rowsJ.length) return;
-    const maxPts = Math.max(...rowsJ.map(r => r.puntos_jornada));
+    const uniqueScores = [...new Set(rowsJ.map(r => r.puntos_jornada))].sort((a, b) => b - a);
+    const [s1, s2, s3] = uniqueScores;
     rowsJ.forEach(r => {
-      if (r.puntos_jornada === maxPts)
-        jGanadasMap[r.participante_id] = (jGanadasMap[r.participante_id] || 0) + 1;
+      const p = r.puntos_jornada;
+      if (p === s1) jPos1Map[r.participante_id] = (jPos1Map[r.participante_id] || 0) + 1;
+      if (p === s2) jPos2Map[r.participante_id] = (jPos2Map[r.participante_id] || 0) + 1;
+      if (p === s3) jPos3Map[r.participante_id] = (jPos3Map[r.participante_id] || 0) + 1;
+    });
+  });
+
+  // ── Jornadas como 1º y en podio en la clasificación acumulada ─
+  // Para cada jornada j, se calcula el acumulado hasta j y se rankea.
+  // Dense rank: 1º = 0 equipos con más puntos; podio = menos de 3 por encima.
+  const acumPrimerMap = {}, acumPodiumMap = {};
+  const cumuTotales = {};
+  participantes.forEach(p => { cumuTotales[p.id] = 0; });
+  allJornadas.forEach(j => {
+    clas.filter(r => r.jornada === j).forEach(r => {
+      cumuTotales[r.participante_id] = (cumuTotales[r.participante_id] || 0) + r.puntos_jornada;
+    });
+    const teams = participantes
+      .map(p => ({ id: p.id, total: cumuTotales[p.id] || 0 }))
+      .filter(t => t.total > 0);
+    teams.forEach(t => {
+      const above = teams.filter(o => o.total > t.total).length;
+      if (above === 0) acumPrimerMap[t.id] = (acumPrimerMap[t.id] || 0) + 1;
+      if (above < 3)  acumPodiumMap[t.id]  = (acumPodiumMap[t.id]  || 0) + 1;
     });
   });
 
   const filasAcum = [...participantes].map(p => {
     const regs = clas.filter(r => r.participante_id === p.id);
-    const scores = regs.map(r => r.puntos_jornada).sort((a, b) => b - a); // desc para comparación léxica
+    const scores = regs.map(r => r.puntos_jornada).sort((a, b) => b - a);
     return {
       id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
       total: regs.reduce((s, r) => s + r.puntos_jornada, 0),
       jornadas: regs.length, scores,
-      jGanadas: jGanadasMap[p.id] || 0,
+      jGanadas: jPos1Map[p.id] || 0,
       valorPlt: valoresPlantilla[p.id] || 0,
     };
   }).sort((a, b) => {
-    // 1. Puntos acumulados
     if (b.total !== a.total) return b.total - a.total;
-    // 2. Puntuación máxima, luego segunda máxima, etc.
     const len = Math.max(a.scores.length, b.scores.length);
     for (let i = 0; i < len; i++) {
       const pa = a.scores[i] ?? -Infinity, pb = b.scores[i] ?? -Infinity;
       if (pb !== pa) return pb - pa;
     }
-    // 3. Número de jornadas ganadas
     if (b.jGanadas !== a.jGanadas) return b.jGanadas - a.jGanadas;
-    // 4. Valor de plantilla
     return b.valorPlt - a.valorPlt;
   });
 
@@ -1674,26 +1697,27 @@ function CalendarioFantasy({ participantes, federacion }) {
     const stddev = Math.sqrt(scores.reduce((s, x) => s + (x - media) ** 2, 0) / n);
     const maxPts = Math.max(...scores);
     const minPts = Math.min(...scores);
-    // Jornada en la que se consiguió el máximo
     const regMax = regs.find(r => r.puntos_jornada === maxPts);
     return {
       id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
       n, total, media, stddev, maxPts, minPts,
       jornadaMax: regMax?.jornada ?? null,
-      jGanadas: jGanadasMap[p.id] || 0,
+      j1: jPos1Map[p.id] || 0,
+      j2: jPos2Map[p.id] || 0,
+      j3: jPos3Map[p.id] || 0,
+      acumPrimer: acumPrimerMap[p.id] || 0,
+      acumPodium: acumPodiumMap[p.id] || 0,
     };
   }).filter(Boolean).sort((a, b) => b.media - a.media);
 
-  // ── Top puntuaciones globales (todas, ordenadas) ──────────────
+  // ── Ranking global de puntuaciones ────────────────────────────
   const topPuntuaciones = [...clas]
     .sort((a, b) => b.puntos_jornada - a.puntos_jornada)
     .map(r => ({
       ...r,
-      nombre:    participantes.find(p => p.id === r.participante_id)?.nombre    || '—',
+      nombre:     participantes.find(p => p.id === r.participante_id)?.nombre     || '—',
       escudo_url: participantes.find(p => p.id === r.participante_id)?.escudo_url || null,
     }));
-
-  const jornadasConDatos = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
 
   const btnJornada = (j) => ({
     padding: '.22rem .5rem', borderRadius: 6, fontSize: '.75rem', cursor: 'pointer',
@@ -1839,7 +1863,7 @@ function CalendarioFantasy({ participantes, federacion }) {
               <div className="card" style={{marginBottom:'.75rem'}}>
                 <h2 style={{marginBottom:'.75rem'}}>Estadísticas por equipo</h2>
                 <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                  Ordenado por media. Desviación típica: cuanto mayor, más irregular el rendimiento.
+                  Ordenado por media. Desv. típ.: cuanto mayor, más irregular el rendimiento. J. 1º/2º/3º: jornadas en las que el equipo obtuvo la mayor, segunda o tercera puntuación.
                 </p>
                 <div style={{overflowX:'auto'}}>
                   <table>
@@ -1851,7 +1875,9 @@ function CalendarioFantasy({ participantes, federacion }) {
                         <th style={{textAlign:'right'}}>Desv. típ.</th>
                         <th style={{textAlign:'right', color:'var(--verde)'}}>Máx</th>
                         <th style={{textAlign:'right', color:'#dc3545'}}>Mín</th>
-                        <th style={{textAlign:'right'}}>J. ganadas</th>
+                        <th style={{textAlign:'right'}}>J. 1º</th>
+                        <th style={{textAlign:'right'}}>J. 2º</th>
+                        <th style={{textAlign:'right'}}>J. 3º</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1871,9 +1897,52 @@ function CalendarioFantasy({ participantes, federacion }) {
                             <span style={{fontWeight:400, fontSize:'.75rem', color:'var(--texto2)', marginLeft:'.3rem'}}>J{e.jornadaMax}</span>
                           </td>
                           <td style={{textAlign:'right', color:'#dc3545'}}>{e.minPts}</td>
-                          <td style={{textAlign:'right', fontWeight:700}}>{e.jGanadas}</td>
+                          <td style={{textAlign:'right', fontWeight:700}}>{e.j1}</td>
+                          <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.j2}</td>
+                          <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.j3}</td>
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* ── Podio en la clasificación acumulada ── */}
+              <div className="card" style={{marginBottom:'.75rem'}}>
+                <h2 style={{marginBottom:'.75rem'}}>Podio en la clasificación acumulada</h2>
+                <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                  Tras cada jornada se computa el acumulado. Se cuenta cuántas veces cada equipo lideró la clasificación (1º) o estuvo en el podio (top 3).
+                </p>
+                <div style={{overflowX:'auto'}}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Equipo</th>
+                        <th style={{textAlign:'right'}}>J. como 1º</th>
+                        <th style={{textAlign:'right'}}>J. en podio</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...filasEstadisticas]
+                        .sort((a, b) => b.acumPrimer - a.acumPrimer || b.acumPodium - a.acumPodium)
+                        .map((e, i) => (
+                          <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.06)' : undefined}}>
+                            <td style={{fontWeight:600}}>
+                              <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                                {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                                {e.nombre}
+                              </span>
+                            </td>
+                            <td style={{textAlign:'right', fontWeight:700, color: e.acumPrimer > 0 ? 'var(--verde)' : 'var(--texto2)'}}>
+                              {e.acumPrimer}
+                            </td>
+                            <td style={{textAlign:'right', fontWeight: e.acumPodium > 0 ? 700 : 400,
+                                        color: e.acumPodium > 0 ? 'var(--texto)' : 'var(--texto2)'}}>
+                              {e.acumPodium}
+                            </td>
+                          </tr>
+                        ))
+                      }
                     </tbody>
                   </table>
                 </div>

@@ -340,7 +340,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     if (!participanteId || !sb) { setJugadores([]); return; }
     const [{ data: pl, error }, { data: pres }] = await Promise.all([
       sb.from('plantillas')
-        .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado)')
+        .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado, lesionado)')
         .eq('participante_id', participanteId),
       sb.from('participantes').select('presupuesto, escudo_url').eq('id', participanteId).single(),
     ]);
@@ -364,9 +364,10 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
 
   const activarPendiente = async (fp) => {
     const plantillaActual = (jugadores || []);
-    const llena  = plantillaActual.length >= 14;
+    const activosCount = plantillaActual.filter(p => !p.jugadores?.lesionado).length;
+    const llena  = activosCount >= 14;
     const liberar = llena ? (liberarSel[fp.id] || '') : null;
-    if (llena && !liberar) { alert('La plantilla está llena (14). Selecciona qué jugador liberar primero.'); return; }
+    if (llena && !liberar) { alert('La plantilla está llena (14 activos). Selecciona qué jugador liberar primero.'); return; }
     setProcesandoPend(fp.id);
     const { error } = await sb.rpc('activar_fichaje_pendiente', {
       p_pendiente_id:       fp.id,
@@ -421,7 +422,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     if (error) {
       alert('Error al vender: ' + error.message);
     } else {
-      const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
+      const pct = modalVenta.lesionado ? 1 : (federacion?.pct_venta_mercado ?? 100) / 100;
       const valorVenta = Math.round((modalVenta.valor || 0) * pct);
       const nuevo = (presupuesto || 0) + valorVenta;
       const { error: errPres } = await sb.from('participantes')
@@ -485,6 +486,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     posicion:   p.jugadores?.posicion || '',
     valor:      p.jugadores?.valor_mercado || 0,
     compra:     p.precio_compra || 0,
+    lesionado:  p.jugadores?.lesionado || false,
   }));
 
   const presupuestoDisplay = presupuesto ?? null;
@@ -505,7 +507,14 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         </div>
         <div>
           <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
-          <div style={{fontSize:'1.4rem', fontWeight:800}}>{lista.length}</div>
+          <div style={{fontSize:'1.4rem', fontWeight:800}}>
+            {lista.filter(j => !j.lesionado).length}
+            {lista.some(j => j.lesionado) && (
+              <span style={{fontSize:'.85rem', fontWeight:500, color:'#dc3545', marginLeft:6}}>
+                +{lista.filter(j => j.lesionado).length} les.
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="card">
@@ -544,8 +553,13 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                 {lista.map((j, i) => {
                   const dif = (j.valor || 0) - (j.compra || 0);
                   return (
-                    <tr key={i}>
-                      <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
+                    <tr key={i} style={j.lesionado ? {background:'rgba(220,53,69,.06)'} : {}}>
+                      <td style={{fontWeight:600}}>
+                        <span style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                          {nombreJugador(j.nombre, j.posicion, j.equipo)}
+                          {j.lesionado && <span style={{background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>LES</span>}
+                        </span>
+                      </td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
@@ -580,17 +594,22 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             <div className="modal" onClick={e => e.stopPropagation()}>
               <h3>Vender al mercado</h3>
               <p>
-                Vendes a <strong>{nombreJugador(modalVenta.nombre, modalVenta.posicion, modalVenta.equipo)}</strong><br/>
+                Vendes a <strong>{nombreJugador(modalVenta.nombre, modalVenta.posicion, modalVenta.equipo)}</strong>
+                {modalVenta.lesionado && <span style={{marginLeft:6, background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.7rem', padding:'1px 5px', fontWeight:700}}>LES</span>}
+                <br/>
                 Precio de compra: <strong>{fmt(modalVenta.compra || 0)}</strong><br/>
                 Valor actual de mercado: <strong>{fmt(modalVenta.valor || 0)}</strong><br/>
                 {(() => {
-                  const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
+                  const pct = modalVenta.lesionado ? 1 : (federacion?.pct_venta_mercado ?? 100) / 100;
                   const recuperas = Math.round((modalVenta.valor || 0) * pct);
                   const dif = recuperas - (modalVenta.compra || 0);
                   return <>
-                    {pct < 1 && <span style={{color:'var(--texto2)', fontSize:'.88rem'}}>
-                      Recuperas ({federacion.pct_venta_mercado}%): <strong>{fmt(recuperas)}</strong><br/>
-                    </span>}
+                    {modalVenta.lesionado
+                      ? <span style={{color:'#198754', fontSize:'.88rem'}}>Venta sin penalización (lesionado): <strong>{fmt(recuperas)}</strong><br/></span>
+                      : pct < 1 && <span style={{color:'var(--texto2)', fontSize:'.88rem'}}>
+                          Recuperas ({federacion.pct_venta_mercado}%): <strong>{fmt(recuperas)}</strong><br/>
+                        </span>
+                    }
                     <span className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                       {dif >= 0 ? 'Ganancia: +' : 'Pérdida: '}{fmt(Math.abs(dif))}
                     </span>
@@ -649,7 +668,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             const jug     = fp.jugadores || {};
             const nom     = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
             const esTrasp = !!fp.traspaso_de_id;
-            const llena   = lista.length >= 14;
+            const llena   = lista.filter(j => !j.lesionado).length >= 14;
             const sel     = liberarSel[fp.id] || '';
             const enProc  = procesandoPend === fp.id;
             return (
@@ -805,7 +824,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([
-      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true),
+      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true),
       partIds.length
         ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
@@ -861,7 +880,15 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     return s;
   }, [todasPlantillas, todasPendientes, participanteId]);
 
-  const miPlantillaLlena = misJugadoresIds.size >= 14;
+  const miActivosCount = useMemo(() => {
+    let count = 0;
+    for (const id of misJugadoresIds) {
+      if (!jugadoresMap.get(id)?.lesionado) count++;
+    }
+    return count;
+  }, [misJugadoresIds, jugadoresMap]);
+
+  const miPlantillaLlena = miActivosCount >= 14;
 
   // Equipos LaLiga cuya portería ya está cogida (plantilla o pendiente) en MI división
   const porteríasBloqueadas = useMemo(() => {
@@ -967,11 +994,12 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
     // Obtener plantilla actualizada para validar
     const { data: miPlantilla } = await sb.from('plantillas')
-      .select('id, jugadores(posicion)').eq('participante_id', participanteId);
+      .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
 
-    // Límite 14 jugadores
-    if ((miPlantilla?.length || 0) >= 14) {
-      alert('Tu equipo ya tiene 14 jugadores (máximo permitido).');
+    // Límite 14 jugadores (sin contar lesionados)
+    const activosCnt = (miPlantilla || []).filter(p => !p.jugadores?.lesionado).length;
+    if (activosCnt >= 14) {
+      alert('Tu equipo ya tiene 14 jugadores activos (máximo permitido).');
       setModal(null);
       return;
     }
@@ -1027,12 +1055,12 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     let presupuestoRestante = partData?.presupuesto ?? 0;
 
     const { data: miPlantilla } = await sb.from('plantillas')
-      .select('id, jugadores(posicion)').eq('participante_id', participanteId);
+      .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
     const TARGET = 14;
-    const huecos = TARGET - (miPlantilla?.length || 0);
+    const huecos = TARGET - (miPlantilla || []).filter(p => !p.jugadores?.lesionado).length;
 
     if (huecos <= 0) {
-      alert('Tu plantilla ya tiene 14 jugadores.');
+      alert('Tu plantilla ya tiene 14 jugadores activos.');
       setSorteando(false); setModalSorteo(false); return;
     }
 
@@ -1173,7 +1201,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     .filter(p => p.participante_id === participanteId)
     .map(p => {
       const jug = jugadoresMap.get(p.jugador_id);
-      return { jugador_id: p.jugador_id, nombre: jug?.nombre || '', posicion: jug?.posicion || '', equipo: jug?.equipo || '' };
+      return { jugador_id: p.jugador_id, nombre: jug?.nombre || '', posicion: jug?.posicion || '', equipo: jug?.equipo || '', lesionado: jug?.lesionado || false };
     });
 
   const activarFichaje = async (fichajeId, liberarJugadorId) => {
@@ -1216,7 +1244,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     cargar();
   };
 
-  const plantillaActivaCnt = todasPlantillas.filter(p => p.participante_id === participanteId).length;
+  const plantillaActivaCnt = todasPlantillas.filter(p => p.participante_id === participanteId && !jugadoresMap.get(p.jugador_id)?.lesionado).length;
   const huecosRestantes = 14 - plantillaActivaCnt;
 
   return (
@@ -1238,13 +1266,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
         <div className="card">
           <h2 style={{marginBottom:'.75rem'}}>Liberar jugadores</h2>
           <p style={{color:'var(--texto2)', fontSize:'.88rem', marginBottom:'1.25rem'}}>
-            {miPlantilla.length >= 14
+            {miPlantilla.filter(p => !p.lesionado).length >= 14
               ? 'Tu plantilla está llena. Para cada fichaje pendiente selecciona qué jugador liberas para hacerle hueco.'
-              : `Tienes ${14 - miPlantilla.length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
+              : `Tienes ${14 - miPlantilla.filter(p => !p.lesionado).length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
           </p>
           {misFichajes.map(f => {
             const jug = jugadoresMap.get(f.jugador_id);
-            const plazasLibres = 14 - miPlantilla.length;
+            const plazasLibres = 14 - miPlantilla.filter(p => !p.lesionado).length;
             const sel = liberarSel[f.id] || '';
             return (
               <div key={f.id} style={{display:'flex', flexWrap:'wrap', alignItems:'flex-start',
@@ -1314,7 +1342,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
           </div>
           {sorteoHabilitado && participanteId && federacion?.ventas_habilitadas && (
             <button className="btn-fichar" disabled={huecosRestantes <= 0}
-                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 14 jugadores' : ''}
+                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 14 jugadores activos' : ''}
                     onClick={() => setModalSorteo(true)}>
               🎲 Sorteo aleatorio
             </button>
@@ -1358,11 +1386,12 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
               return (
                 <tr key={j.id}>
                   <td style={{fontWeight:600}}>
-                    {j.posicion === 'POR'
-                      ? <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                          <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo.toUpperCase()}
-                        </span>
-                      : j.nombre}
+                    <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                      {j.posicion === 'POR'
+                        ? <><Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo.toUpperCase()}</>
+                        : j.nombre}
+                      {j.lesionado && <span style={{background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>LES</span>}
+                    </span>
                   </td>
                   <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
                   <td style={{color:'var(--texto2)'}}>
@@ -2210,7 +2239,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     setJugadores(null);
     setPresupuesto(null);
     sb.from('plantillas')
-      .select('id, jugador_id, precio_compra, jugadores(nombre, equipo, posicion, valor_mercado)')
+      .select('id, jugador_id, precio_compra, jugadores(nombre, equipo, posicion, valor_mercado, lesionado)')
       .eq('participante_id', equipoId)
       .then(({ data, error }) => setJugadores(error ? [] : (data || [])));
     sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
@@ -2295,6 +2324,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     posicion:   p.jugadores?.posicion || '',
     valor:      p.jugadores?.valor_mercado || 0,
     compra:     p.precio_compra || 0,
+    lesionado:  p.jugadores?.lesionado || false,
   }));
 
   const puedeOfrecer = !!(sesionParticipanteId && equipoId !== sesionParticipanteId && federacion?.ventas_habilitadas);
@@ -2492,8 +2522,13 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                 {lista.map((j, i) => {
                   const dif = (j.valor || 0) - (j.compra || 0);
                   return (
-                    <tr key={i}>
-                      <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
+                    <tr key={i} style={j.lesionado ? {background:'rgba(220,53,69,.06)'} : {}}>
+                      <td style={{fontWeight:600}}>
+                        <span style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                          {nombreJugador(j.nombre, j.posicion, j.equipo)}
+                          {j.lesionado && <span style={{background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>LES</span>}
+                        </span>
+                      </td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
@@ -3510,13 +3545,13 @@ function AdminFichajesPendientes({ participantes, federacion }) {
         .in('participante_id', partIds)
         .order('id', { ascending: true }),
       sb.from('plantillas')
-        .select('participante_id, jugador_id, jugadores(nombre, equipo, posicion)')
+        .select('participante_id, jugador_id, jugadores(nombre, equipo, posicion, lesionado)')
         .in('participante_id', partIds),
     ]);
     const pm = {};
     for (const p of (plants || [])) {
       if (!pm[p.participante_id]) pm[p.participante_id] = [];
-      pm[p.participante_id].push({ jugador_id: p.jugador_id, nombre: p.jugadores?.nombre || '', posicion: p.jugadores?.posicion || '', equipo: p.jugadores?.equipo || '' });
+      pm[p.participante_id].push({ jugador_id: p.jugador_id, nombre: p.jugadores?.nombre || '', posicion: p.jugadores?.posicion || '', equipo: p.jugadores?.equipo || '', lesionado: p.jugadores?.lesionado || false });
     }
     setPendientes(pends || []);
     setPlantillasMap(pm);
@@ -3526,9 +3561,10 @@ function AdminFichajesPendientes({ participantes, federacion }) {
 
   const activar = async (pend) => {
     const plantilla = plantillasMap[pend.participante_id] || [];
-    const liberar   = plantilla.length >= 14 ? (liberarSel[pend.id] || '') : null;
-    if (plantilla.length >= 14 && !liberar) {
-      alert('El equipo tiene la plantilla llena (14). Selecciona qué jugador liberar primero.');
+    const activosCount = plantilla.filter(p => !p.lesionado).length;
+    const liberar   = activosCount >= 14 ? (liberarSel[pend.id] || '') : null;
+    if (activosCount >= 14 && !liberar) {
+      alert('El equipo tiene la plantilla llena (14 activos). Selecciona qué jugador liberar primero.');
       return;
     }
     setProcesando(pend.id);
@@ -3605,7 +3641,8 @@ function AdminFichajesPendientes({ participantes, federacion }) {
         const jug      = pend.jugadores || {};
         const nomJug   = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
         const plantilla = plantillasMap[pend.participante_id] || [];
-        const llena     = plantilla.length >= 14;
+        const activosAdm = plantilla.filter(p => !p.lesionado).length;
+        const llena     = activosAdm >= 14;
         const sel       = liberarSel[pend.id] || '';
         const enProceso = procesando === pend.id;
 
@@ -3643,7 +3680,8 @@ function AdminFichajesPendientes({ participantes, federacion }) {
             <div style={{minWidth:80, flex:'0 0 auto'}}>
               <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Plantilla</div>
               <div style={{fontWeight:600, color: llena ? '#dc3545' : '#198754'}}>
-                {plantilla.length}/14 {llena ? '(llena)' : ''}
+                {activosAdm}/14 {llena ? '(llena)' : ''}
+                {plantilla.length > activosAdm && <span style={{fontSize:'.8rem', color:'#dc3545', marginLeft:4}}>(+{plantilla.length - activosAdm} les.)</span>}
               </div>
             </div>
 
@@ -5010,8 +5048,15 @@ function AdminJugadores({ participantes, federacion }) {
   const [borrando, setBorrando]     = useState(null);
 
   const cargarJugadores = async () => {
-    const { data } = await sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').order('equipo').order('nombre');
+    const { data } = await sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado, lesionado').order('equipo').order('nombre');
     setJugadores(data || []);
+  };
+
+  const toggleLesionado = async (j) => {
+    const nuevoEstado = !j.lesionado;
+    const { error } = await sb.from('jugadores').update({ lesionado: nuevoEstado }).eq('id', j.id);
+    if (error) { alert('Error: ' + error.message); return; }
+    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, lesionado: nuevoEstado } : p));
   };
 
   useEffect(() => { if (sb) cargarJugadores(); }, []);
@@ -5143,19 +5188,29 @@ function AdminJugadores({ participantes, federacion }) {
             ? <div className="empty">No hay jugadores que coincidan.</div>
             : <table>
                 <thead>
-                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th style={{ textAlign:'right' }}>Valor</th><th></th></tr>
+                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
                 </thead>
                 <tbody>
                   {listaFiltrada.map(j => (
                     <tr key={j.id}>
                       <td style={{ fontWeight:600 }}>
                         {j.posicion === 'POR' ? <em style={{ color:'var(--texto2)' }}>Portería</em> : j.nombre}
+                        {j.lesionado && <span style={{ marginLeft:6, background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.7rem', padding:'1px 5px', fontWeight:700 }}>LES</span>}
                       </td>
                       <td style={{ display:'flex', alignItems:'center', gap:6 }}>
                         <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                       </td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
                       <td style={{ textAlign:'right', fontVariantNumeric:'tabular-nums' }}>{fmt(j.valor_mercado ?? 0)}</td>
+                      <td style={{ textAlign:'center' }}>
+                        <button onClick={() => toggleLesionado(j)}
+                                style={{ background: j.lesionado ? '#dc3545' : 'var(--gris)',
+                                         color: j.lesionado ? '#fff' : 'var(--texto)',
+                                         border:'none', padding:'.25rem .55rem', borderRadius:6,
+                                         cursor:'pointer', fontSize:'.75rem', fontWeight:700 }}>
+                          {j.lesionado ? 'Lesionado' : 'Sano'}
+                        </button>
+                      </td>
                       <td style={{ textAlign:'right' }}>
                         <button onClick={() => borrar(j)} disabled={borrando === j.id}
                                 style={{ background:'#dc3545', color:'#fff', border:'none',

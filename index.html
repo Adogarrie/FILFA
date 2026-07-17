@@ -1569,12 +1569,13 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
 // ── CALENDARIO FANTASY ─────────────────────────────────────────
 function CalendarioFantasy({ participantes, federacion }) {
-  const [clas, setClas]         = useState([]);
-  const [vista, setVista]       = useState('jornada');
-  const [jornada, setJornada]   = useState(1);
-  const [jugadores, setJugadores] = useState([]);   // jugadores reales: { id, nombre, equipo, posicion }
-  const [abierto, setAbierto]   = useState(null);   // participante_id expandido
-  const [detalle, setDetalle]   = useState({});     // { [pid_jornada]: { alis, ptsMap } }
+  const [clas, setClas]               = useState([]);
+  const [vista, setVista]             = useState('jornada');
+  const [jornada, setJornada]         = useState(1);
+  const [jugadores, setJugadores]     = useState([]);
+  const [abierto, setAbierto]         = useState(null);
+  const [detalle, setDetalle]         = useState({});
+  const [valoresPlantilla, setValoresPlantilla] = useState({});
 
   useEffect(() => {
     if (!sb) return;
@@ -1588,6 +1589,20 @@ function CalendarioFantasy({ participantes, federacion }) {
       .select('participante_id, jornada, puntos_jornada')
       .in('participante_id', participantes.map(p => p.id))
       .then(({ data }) => setClas(data || []));
+  }, [participantes]);
+
+  useEffect(() => {
+    if (!sb || participantes.length === 0) return;
+    sb.from('plantillas')
+      .select('participante_id, jugadores(valor_mercado)')
+      .in('participante_id', participantes.map(p => p.id))
+      .then(({ data }) => {
+        const map = {};
+        (data || []).forEach(r => {
+          map[r.participante_id] = (map[r.participante_id] || 0) + (r.jugadores?.valor_mercado || 0);
+        });
+        setValoresPlantilla(map);
+      });
   }, [participantes]);
 
   const abrirEquipo = async (pid) => {
@@ -1611,10 +1626,42 @@ function CalendarioFantasy({ participantes, federacion }) {
     pts: clas.find(r => r.participante_id === p.id && r.jornada === jornada)?.puntos_jornada ?? null,
   })).sort((a, b) => (b.pts ?? -1) - (a.pts ?? -1));
 
+  // Desempate 3: jornadas en las que el equipo fue primero (máxima puntuación)
+  const jGanadasMap = {};
+  [...new Set(clas.map(r => r.jornada))].forEach(j => {
+    const rowsJ = clas.filter(r => r.jornada === j);
+    if (!rowsJ.length) return;
+    const maxPts = Math.max(...rowsJ.map(r => r.puntos_jornada));
+    rowsJ.forEach(r => {
+      if (r.puntos_jornada === maxPts)
+        jGanadasMap[r.participante_id] = (jGanadasMap[r.participante_id] || 0) + 1;
+    });
+  });
+
   const filasAcum = [...participantes].map(p => {
     const regs = clas.filter(r => r.participante_id === p.id);
-    return { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null, total: regs.reduce((s, r) => s + r.puntos_jornada, 0), jornadas: regs.length };
-  }).sort((a, b) => b.total - a.total);
+    const scores = regs.map(r => r.puntos_jornada).sort((a, b) => b - a); // desc para comparación léxica
+    return {
+      id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
+      total: regs.reduce((s, r) => s + r.puntos_jornada, 0),
+      jornadas: regs.length, scores,
+      jGanadas: jGanadasMap[p.id] || 0,
+      valorPlt: valoresPlantilla[p.id] || 0,
+    };
+  }).sort((a, b) => {
+    // 1. Puntos acumulados
+    if (b.total !== a.total) return b.total - a.total;
+    // 2. Puntuación máxima, luego segunda máxima, etc.
+    const len = Math.max(a.scores.length, b.scores.length);
+    for (let i = 0; i < len; i++) {
+      const pa = a.scores[i] ?? -Infinity, pb = b.scores[i] ?? -Infinity;
+      if (pb !== pa) return pb - pa;
+    }
+    // 3. Número de jornadas ganadas
+    if (b.jGanadas !== a.jGanadas) return b.jGanadas - a.jGanadas;
+    // 4. Valor de plantilla
+    return b.valorPlt - a.valorPlt;
+  });
 
   const jornadasConDatos = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
 

@@ -3197,15 +3197,15 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
         sb.from('jornadas_cierre').select('cierre')
           .eq('federacion_id', federacionId).eq('jornada', jornada).maybeSingle(),
         sb.from('cesiones')
-          .select('jugador_id, jugadores(id, nombre, equipo, posicion), cedente:participantes!cedente_id(nombre)')
-          .eq('cesionario_id', participanteId).eq('federacion_id', federacionId)
+          .select('jugador_id, jugadores(id, nombre, equipo, posicion)')
+          .eq('participante_id', participanteId).eq('federacion_id', federacionId)
           .eq('jornada', jornada).eq('estado', 'aprobada'),
       ]);
       setCierre(cierreRow?.cierre || null);
 
       const idsPlantilla = new Set(plantilla.map(j => j.id));
       const cedidos = (cesData || [])
-        .map(c => c.jugadores ? { ...c.jugadores, _cedente: c.cedente?.nombre || '?', _esCedido: true } : null)
+        .map(c => c.jugadores ? { ...c.jugadores, _esCedido: true } : null)
         .filter(j => j && j.id && !idsPlantilla.has(j.id));
       setJugadoresCedidos(cedidos);
 
@@ -3436,9 +3436,8 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
                             <td style={{fontWeight:600}}>
                               {nombreJugador(j.nombre, j.posicion, j.equipo)}
                               {esCedido && (
-                                <span title={`Cedido por ${j._cedente}`}
-                                      style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
-                                              padding:'1px 4px', borderRadius:3, background:'#0dcaf0', color:'#000', verticalAlign:'middle'}}>
+                                <span style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
+                                             padding:'1px 4px', borderRadius:3, background:'#0dcaf0', color:'#000', verticalAlign:'middle'}}>
                                   CESIÓN
                                 </span>
                               )}
@@ -5298,59 +5297,65 @@ function AdminJugadores({ participantes, federacion }) {
 }
 
 // ── CESIONES (usuario) ─────────────────────────────────────────
-function Cesiones({ federacion, miParticipanteId, participantes }) {
+function Cesiones({ federacion, miParticipanteId }) {
   const federacionId = federacion?.id;
-  const [tab, setTab]               = useState('solicitudes');
-  const [solicitudes, setSolicitudes] = useState([]);
-  const [cedidas, setCedidas]         = useState([]);
-  const [cargando, setCargando]       = useState(true);
-  const [formAbierto, setFormAbierto] = useState(false);
-  const [fJornada, setFJornada]       = useState(federacion?.jornada_actual || 1);
-  const [fCedente, setFCedente]       = useState('');
-  const [fJugador, setFJugador]       = useState('');
-  const [plantillaCedente, setPlantillaCedente] = useState([]);
-  const [enviando, setEnviando]       = useState(false);
-  const [msg, setMsg]                 = useState('');
-
-  const COLS = 'id, jornada, estado, created_at, jugadores(id, nombre, equipo, posicion), cedente:participantes!cedente_id(id, nombre), cesionario:participantes!cesionario_id(id, nombre)';
+  const [solicitudes, setSolicitudes]   = useState([]);
+  const [cargando, setCargando]         = useState(true);
+  const [formAbierto, setFormAbierto]   = useState(false);
+  const [fJornada, setFJornada]         = useState(federacion?.jornada_actual || 1);
+  const [fJugador, setFJugador]         = useState('');
+  const [busqueda, setBusqueda]         = useState('');
+  const [jugadoresLibres, setJugadoresLibres] = useState([]);
+  const [cargandoMercado, setCargandoMercado] = useState(false);
+  const [enviando, setEnviando]         = useState(false);
+  const [msg, setMsg]                   = useState('');
 
   useEffect(() => { if (federacionId && miParticipanteId) cargar(); }, [federacionId, miParticipanteId]);
 
   const cargar = async () => {
     setCargando(true);
-    const [{ data: sol }, { data: ced }] = await Promise.all([
-      sb.from('cesiones').select(COLS).eq('federacion_id', federacionId).eq('cesionario_id', miParticipanteId).order('created_at', { ascending: false }),
-      sb.from('cesiones').select(COLS).eq('federacion_id', federacionId).eq('cedente_id', miParticipanteId).order('created_at', { ascending: false }),
-    ]);
-    setSolicitudes(sol || []);
-    setCedidas(ced || []);
+    const { data } = await sb.from('cesiones')
+      .select('id, jornada, estado, created_at, jugadores(id, nombre, equipo, posicion)')
+      .eq('federacion_id', federacionId)
+      .eq('participante_id', miParticipanteId)
+      .order('created_at', { ascending: false });
+    setSolicitudes(data || []);
     setCargando(false);
   };
 
-  useEffect(() => {
-    if (!fCedente || !sb) { setPlantillaCedente([]); setFJugador(''); return; }
-    sb.from('plantillas').select('jugador_id, jugadores(id, nombre, equipo, posicion)')
-      .eq('participante_id', fCedente)
-      .then(({ data }) => {
-        const jugs = (data || []).map(p => p.jugadores).filter(Boolean);
-        jugs.sort((a, b) => POS_ORDEN[a.posicion] - POS_ORDEN[b.posicion]);
-        setPlantillaCedente(jugs);
-        setFJugador('');
-      });
-  }, [fCedente]);
+  const cargarMercado = async () => {
+    if (!sb) return;
+    setCargandoMercado(true);
+    const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacionId);
+    const partIds = (parts || []).map(p => p.id);
+    let ocupados = new Set();
+    if (partIds.length > 0) {
+      const { data: pl } = await sb.from('plantillas').select('jugador_id').in('participante_id', partIds);
+      ocupados = new Set((pl || []).map(p => p.jugador_id));
+    }
+    const { data: jugs } = await sb.from('jugadores')
+      .select('id, nombre, equipo, posicion, valor_mercado')
+      .order('nombre');
+    setJugadoresLibres((jugs || []).filter(j => !ocupados.has(j.id)));
+    setCargandoMercado(false);
+  };
+
+  const abrirForm = () => {
+    setFormAbierto(true); setMsg(''); setFJugador(''); setBusqueda('');
+    cargarMercado();
+  };
 
   const enviarSolicitud = async () => {
-    if (!fCedente || !fJugador) { setMsg('Selecciona equipo y jugador.'); return; }
+    if (!fJugador) { setMsg('Selecciona un jugador.'); return; }
     setEnviando(true);
     const { error } = await sb.from('cesiones').insert({
       federacion_id: federacionId, jugador_id: fJugador,
-      cedente_id: fCedente, cesionario_id: miParticipanteId, jornada: fJornada,
+      participante_id: miParticipanteId, jornada: fJornada,
     });
     setEnviando(false);
     if (error) { setMsg('Error: ' + error.message); return; }
     setMsg('Solicitud enviada. Pendiente de aprobación del admin.');
-    setFormAbierto(false);
-    setFCedente(''); setFJugador('');
+    setFormAbierto(false); setFJugador('');
     cargar();
   };
 
@@ -5368,40 +5373,30 @@ function Cesiones({ federacion, miParticipanteId, participantes }) {
   };
 
   const cesionesActivas = federacion?.cesiones_habilitadas ?? true;
-  const otrasPartidas = participantes.filter(p => p.id !== miParticipanteId);
-  const lista = tab === 'solicitudes' ? solicitudes : cedidas;
-  const pendSol = solicitudes.filter(c => c.estado === 'pendiente').length;
-  const pendCed = cedidas.filter(c => c.estado === 'pendiente').length;
+  const q = busqueda.toLowerCase();
+  const jugFiltrados = jugadoresLibres.filter(j =>
+    !q || j.nombre.toLowerCase().includes(q) || (j.equipo || '').toLowerCase().includes(q)
+  );
+  const pendientes = solicitudes.filter(c => c.estado === 'pendiente').length;
 
   return (
     <div className="card">
       <h3 style={{marginTop:0}}>Cesiones</h3>
       <p style={{fontSize:'.85rem', color:'var(--texto2)', marginTop:'-0.5rem', marginBottom:'1rem'}}>
-        Solicita el préstamo de un jugador de otro equipo para una jornada. Los puntos cuentan al 100%. Sujeto a aprobación del administrador.
+        Solicita la cesión temporal de un jugador libre del mercado para una jornada concreta. Los puntos cuentan al 100%. Sujeto a aprobación del administrador.
       </p>
-      <div className="tabs" style={{marginBottom:'1rem'}}>
-        <button className={`tab ${tab==='solicitudes'?'active':''}`} onClick={() => setTab('solicitudes')}>
-          Mis solicitudes{pendSol > 0 ? ` (${pendSol} pend.)` : ''}
-        </button>
-        <button className={`tab ${tab==='cedidas'?'active':''}`} onClick={() => setTab('cedidas')}>
-          Me piden{pendCed > 0 ? ` (${pendCed} pend.)` : ''}
-        </button>
-      </div>
       {cargando ? <Spinner /> : (
         <>
-          {lista.length === 0
-            ? <div className="empty">No hay cesiones en esta categoría.</div>
+          {solicitudes.length === 0
+            ? <div className="empty">No tienes solicitudes de cesión.</div>
             : (
-              <div style={{overflowX:'auto'}}>
+              <div style={{overflowX:'auto', marginBottom:'1.2rem'}}>
                 <table>
                   <thead><tr>
-                    <th>J.</th><th>Jugador</th>
-                    <th>{tab === 'solicitudes' ? 'Equipo cedente' : 'Equipo cesionario'}</th>
-                    <th>Estado</th>
-                    {tab === 'solicitudes' && <th></th>}
+                    <th>J.</th><th>Jugador</th><th>Estado</th><th></th>
                   </tr></thead>
                   <tbody>
-                    {lista.map(c => (
+                    {solicitudes.map(c => (
                       <tr key={c.id}>
                         <td><strong>J{c.jornada}</strong></td>
                         <td>
@@ -5409,19 +5404,16 @@ function Cesiones({ federacion, miParticipanteId, participantes }) {
                           <strong>{nombreJugador(c.jugadores?.nombre, c.jugadores?.posicion, c.jugadores?.equipo)}</strong>
                           <span style={{color:'var(--texto2)', fontSize:'.8rem', marginLeft:4}}>{c.jugadores?.equipo}</span>
                         </td>
-                        <td style={{fontSize:'.9rem'}}>{tab === 'solicitudes' ? c.cedente?.nombre : c.cesionario?.nombre}</td>
                         <td>{estadoBadge(c.estado)}</td>
-                        {tab === 'solicitudes' && (
-                          <td style={{textAlign:'right'}}>
-                            {c.estado === 'pendiente' && (
-                              <button onClick={() => cancelar(c.id)}
-                                      style={{padding:'.2rem .5rem', fontSize:'.75rem', border:'1.5px solid #dc3545',
-                                              borderRadius:6, color:'#dc3545', background:'transparent', cursor:'pointer'}}>
-                                Cancelar
-                              </button>
-                            )}
-                          </td>
-                        )}
+                        <td style={{textAlign:'right'}}>
+                          {c.estado === 'pendiente' && (
+                            <button onClick={() => cancelar(c.id)}
+                                    style={{padding:'.2rem .5rem', fontSize:'.75rem', border:'1.5px solid #dc3545',
+                                            borderRadius:6, color:'#dc3545', background:'transparent', cursor:'pointer'}}>
+                              Cancelar
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -5429,62 +5421,62 @@ function Cesiones({ federacion, miParticipanteId, participantes }) {
               </div>
             )
           }
-          {tab === 'solicitudes' && (
-            <div style={{marginTop:'1.2rem'}}>
-              {!cesionesActivas && (
-                <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
-                             borderRadius:8, fontSize:'.85rem', border:'1px solid #ffc107', marginBottom:'.75rem'}}>
-                  Las solicitudes de cesión están desactivadas en esta federación.
-                </div>
-              )}
-              {!formAbierto
-                ? <button className="btn-ok" disabled={!cesionesActivas}
-                          onClick={() => { setFormAbierto(true); setMsg(''); }}>+ Nueva solicitud</button>
-                : (
-                  <div style={{background:'var(--fondo2)', borderRadius:'var(--radio)', padding:'1rem', marginTop:'.5rem'}}>
-                    <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', marginBottom:'.8rem'}}>
-                      <div>
-                        <label style={{fontSize:'.8rem', color:'var(--texto2)', display:'block', marginBottom:3}}>Jornada</label>
-                        <select value={fJornada} onChange={e => setFJornada(Number(e.target.value))}
-                                style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
-                          {Array.from({length:38},(_,i)=>i+1).map(j => <option key={j} value={j}>J{j}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label style={{fontSize:'.8rem', color:'var(--texto2)', display:'block', marginBottom:3}}>Equipo cedente</label>
-                        <select value={fCedente} onChange={e => setFCedente(e.target.value)}
-                                style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)', minWidth:160}}>
-                          <option value="">Selecciona equipo…</option>
-                          {otrasPartidas.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label style={{fontSize:'.8rem', color:'var(--texto2)', display:'block', marginBottom:3}}>Jugador</label>
-                        <select value={fJugador} onChange={e => setFJugador(e.target.value)}
-                                disabled={!fCedente || plantillaCedente.length === 0}
-                                style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)', minWidth:200}}>
-                          <option value="">Selecciona jugador…</option>
-                          {plantillaCedente.map(j => (
-                            <option key={j.id} value={j.id}>[{j.posicion}] {j.nombre} ({j.equipo})</option>
-                          ))}
-                        </select>
-                      </div>
+          <div>
+            {!cesionesActivas && (
+              <div style={{background:'#fff3cd', color:'#856404', padding:'.5rem .85rem',
+                           borderRadius:8, fontSize:'.85rem', border:'1px solid #ffc107', marginBottom:'.75rem'}}>
+                Las solicitudes de cesión están desactivadas en esta federación.
+              </div>
+            )}
+            {!formAbierto
+              ? <button className="btn-ok" disabled={!cesionesActivas}
+                        onClick={abrirForm}>+ Nueva solicitud</button>
+              : (
+                <div style={{background:'var(--fondo2)', borderRadius:'var(--radio)', padding:'1rem'}}>
+                  <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', marginBottom:'.8rem'}}>
+                    <div>
+                      <label style={{fontSize:'.8rem', color:'var(--texto2)', display:'block', marginBottom:3}}>Jornada</label>
+                      <select value={fJornada} onChange={e => setFJornada(Number(e.target.value))}
+                              style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+                        {Array.from({length:38},(_,i)=>i+1).map(j => <option key={j} value={j}>J{j}</option>)}
+                      </select>
                     </div>
-                    <div style={{display:'flex', gap:'.5rem', alignItems:'center'}}>
-                      <button className="btn-ok" onClick={enviarSolicitud} disabled={enviando || !fCedente || !fJugador}>
-                        {enviando ? 'Enviando…' : 'Solicitar cesión'}
-                      </button>
-                      <button onClick={() => setFormAbierto(false)}
-                              style={{padding:'.4rem .9rem', border:'1.5px solid var(--borde)', borderRadius:6, cursor:'pointer', background:'transparent'}}>
-                        Cancelar
-                      </button>
-                      {msg && <span style={{fontSize:'.85rem', color: msg.startsWith('Error') ? '#dc3545' : '#198754'}}>{msg}</span>}
+                    <div style={{flex:1, minWidth:220}}>
+                      <label style={{fontSize:'.8rem', color:'var(--texto2)', display:'block', marginBottom:3}}>Buscar jugador libre</label>
+                      <input type="text" value={busqueda} onChange={e => { setBusqueda(e.target.value); setFJugador(''); }}
+                             placeholder="Nombre o equipo…"
+                             style={{width:'100%', padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                     boxSizing:'border-box', marginBottom:'.4rem'}} />
+                      {cargandoMercado
+                        ? <span style={{fontSize:'.8rem', color:'var(--texto2)'}}>Cargando jugadores…</span>
+                        : (
+                          <select value={fJugador} onChange={e => setFJugador(e.target.value)}
+                                  style={{width:'100%', padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)', boxSizing:'border-box'}}>
+                            <option value="">Selecciona jugador… ({jugFiltrados.length} disponibles)</option>
+                            {jugFiltrados.slice(0, 100).map(j => (
+                              <option key={j.id} value={j.id}>
+                                [{j.posicion}] {j.nombre} ({j.equipo}) — {fmt(j.valor_mercado)}
+                              </option>
+                            ))}
+                          </select>
+                        )
+                      }
                     </div>
                   </div>
-                )
-              }
-            </div>
-          )}
+                  <div style={{display:'flex', gap:'.5rem', alignItems:'center'}}>
+                    <button className="btn-ok" onClick={enviarSolicitud} disabled={enviando || !fJugador}>
+                      {enviando ? 'Enviando…' : 'Solicitar cesión'}
+                    </button>
+                    <button onClick={() => setFormAbierto(false)}
+                            style={{padding:'.4rem .9rem', border:'1.5px solid var(--borde)', borderRadius:6, cursor:'pointer', background:'transparent'}}>
+                      Cancelar
+                    </button>
+                    {msg && <span style={{fontSize:'.85rem', color: msg.startsWith('Error') ? '#dc3545' : '#198754'}}>{msg}</span>}
+                  </div>
+                </div>
+              )
+            }
+          </div>
         </>
       )}
     </div>
@@ -5492,7 +5484,7 @@ function Cesiones({ federacion, miParticipanteId, participantes }) {
 }
 
 // ── ADMIN — CESIONES ───────────────────────────────────────────
-function AdminCesiones({ federacion }) {
+function AdminCesiones({ federacion, participantes }) {
   const federacionId = federacion?.id;
   const [cesiones, setCesiones] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -5503,7 +5495,7 @@ function AdminCesiones({ federacion }) {
   const cargar = async () => {
     setCargando(true);
     const { data } = await sb.from('cesiones')
-      .select('id, jornada, estado, created_at, jugadores(id, nombre, equipo, posicion), cedente:participantes!cedente_id(id, nombre), cesionario:participantes!cesionario_id(id, nombre)')
+      .select('id, jornada, estado, created_at, jugadores(id, nombre, equipo, posicion), participante:participantes!participante_id(id, nombre)')
       .eq('federacion_id', federacionId)
       .order('created_at', { ascending: false });
     setCesiones(data || []);
@@ -5534,7 +5526,7 @@ function AdminCesiones({ federacion }) {
   return (
     <div>
       <p style={{fontSize:'.85rem', color:'var(--texto2)', marginTop:0}}>
-        Gestiona las solicitudes de cesión entre equipos de la federación.
+        Solicitudes de cesión de jugadores libres del mercado para una jornada concreta.
       </p>
       <div style={{display:'flex', gap:'.5rem', marginBottom:'1rem', flexWrap:'wrap', alignItems:'center'}}>
         {['pendiente','aprobada','rechazada','todas'].map(f => (
@@ -5554,7 +5546,7 @@ function AdminCesiones({ federacion }) {
           <div style={{overflowX:'auto'}}>
             <table>
               <thead><tr>
-                <th>J.</th><th>Jugador</th><th>Cedente → Cesionario</th><th>Estado</th><th></th>
+                <th>J.</th><th>Jugador libre</th><th>Equipo solicitante</th><th>Estado</th><th></th>
               </tr></thead>
               <tbody>
                 {lista.map(c => (
@@ -5565,11 +5557,7 @@ function AdminCesiones({ federacion }) {
                       <strong>{nombreJugador(c.jugadores?.nombre, c.jugadores?.posicion, c.jugadores?.equipo)}</strong>
                       <span style={{color:'var(--texto2)', fontSize:'.8rem', marginLeft:4}}>{c.jugadores?.equipo}</span>
                     </td>
-                    <td style={{fontSize:'.85rem'}}>
-                      <span style={{fontWeight:600}}>{c.cedente?.nombre}</span>
-                      <span style={{color:'var(--texto2)'}}> → </span>
-                      <span style={{fontWeight:600}}>{c.cesionario?.nombre}</span>
-                    </td>
+                    <td style={{fontWeight:600}}>{c.participante?.nombre}</td>
                     <td>{estadoBadge(c.estado)}</td>
                     <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
                       {c.estado === 'pendiente' && (
@@ -6040,8 +6028,7 @@ function App() {
         )}
         {vista === 'Cesiones' && (
           <Cesiones federacion={federacion}
-                    miParticipanteId={session?.participante_id}
-                    participantes={participantes} />
+                    miParticipanteId={session?.participante_id} />
         )}
         {vista === 'Calendario' && (
           <CalendarioFantasy participantes={participantes} federacion={federacion} />

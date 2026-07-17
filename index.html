@@ -7131,6 +7131,23 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
   const jornadas = [...new Set(partidos.map(p => p.jornada))].sort((a, b) => a - b);
+  const [copiadoJ, setCopiadoJ] = useState(null);
+
+  const generarPlantillaH2H = (j) => {
+    const ms = partidos.filter(p => p.jornada === j);
+    const lineas = [`EN DIRECTO J${j}`];
+    ms.forEach((m, i) => {
+      lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} 0 (5) - 0 (0) ${nomMap[m.visitante_id] || '—'}`);
+    });
+    return lineas.join('\n');
+  };
+
+  const copiarPlantilla = (j) => {
+    const texto = generarPlantillaH2H(j);
+    navigator.clipboard.writeText(texto).catch(() => {});
+    setCopiadoJ(j);
+    setTimeout(() => setCopiadoJ(c => c === j ? null : c), 2000);
+  };
 
   const Opcion = ({ label, desc, activo, onToggle }) => (
     <div style={{display:'flex', alignItems:'flex-start', gap:'1rem',
@@ -7303,9 +7320,17 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
             const ms = partidos.filter(p => p.jornada === j);
             return (
               <div key={j} style={{marginBottom:'1.25rem'}}>
-                <div style={{fontWeight:700, fontSize:'.82rem', color:'var(--verde)',
-                             letterSpacing:'.05em', marginBottom:'.4rem'}}>
-                  JORNADA {j}
+                <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginBottom:'.4rem'}}>
+                  <span style={{fontWeight:700, fontSize:'.82rem', color:'var(--verde)',
+                               letterSpacing:'.05em'}}>
+                    JORNADA {j}
+                  </span>
+                  <button onClick={() => copiarPlantilla(j)}
+                          style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
+                                  border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                  cursor:'pointer', fontWeight:600}}>
+                    {copiadoJ === j ? '¡Copiado!' : 'Copiar plantilla'}
+                  </button>
                 </div>
                 {ms.map(m => {
                   const r = resultados[m.id] || {};

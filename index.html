@@ -5149,7 +5149,7 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Ofertas', 'Alineación', 'Mercado', 'Equipos', 'Calendario',
+  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Ofertas', 'Alineación', 'Mercado', 'Equipos', 'Calendario', 'Ayuda',
                        ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -5253,6 +5253,9 @@ function App() {
         {vista === 'Calendario' && (
           <CalendarioFantasy participantes={participantes} federacion={federacion} />
         )}
+        {vista === 'Ayuda' && (
+          <Ayuda isAdmin={isAdmin} />
+        )}
         {vista === 'Tablón' && (
           <Tablon federacionId={federacion?.id} isAdmin={isAdmin} />
         )}
@@ -5267,6 +5270,169 @@ function App() {
         )}
       </main>
     </>
+  );
+}
+
+// ── AYUDA ──────────────────────────────────────────────────────
+function Ayuda({ isAdmin }) {
+  const [abierto, setAbierto] = React.useState(null);
+  const toggle = (k) => setAbierto(a => a === k ? null : k);
+
+  const secciones = [
+    {
+      id: 'plantilla',
+      titulo: '🗂 Tu plantilla',
+      contenido: [
+        ['Límite de jugadores', 'Cada equipo puede tener como máximo 14 jugadores en su plantilla activa. Si ya tienes 14 y fichas uno nuevo, el jugador queda en "Fichajes pendientes" hasta que liberes un hueco.'],
+        ['Presupuesto', 'Cada equipo dispone de un presupuesto inicial fijado por el admin. Cada fichaje descuenta su precio de tu presupuesto. Si vendes o liberas un jugador, recuperas su valor de mercado actual.'],
+        ['Liberar jugadores', 'Puedes vender un jugador desde Mi Plantilla. Recibirás su valor de mercado actual (no necesariamente lo que pagaste por él).'],
+        ['Escudo del equipo', 'Puedes subir una imagen como escudo del equipo desde Equipos → Editar perfil. El escudo aparece en el calendario, clasificaciones y en la vista de tu equipo.'],
+      ]
+    },
+    {
+      id: 'mercado',
+      titulo: '🛒 Fichar del mercado',
+      contenido: [
+        ['Compra directa', 'En la pestaña Mercado verás todos los jugadores disponibles (sin equipo fantasy). Pulsa "Fichar" para añadirlo a tu plantilla al precio de mercado actual.'],
+        ['Condiciones', 'Necesitas presupuesto suficiente y tener menos de 14 jugadores, o aceptar que quede como fichaje pendiente si ya tienes la plantilla completa.'],
+        ['Mercado habilitado', 'El admin puede abrir o cerrar el mercado. Si está cerrado, no podrás fichar ni poner jugadores a la venta.'],
+      ]
+    },
+    {
+      id: 'pujas',
+      titulo: '🔨 Pujas por jugadores',
+      contenido: [
+        ['Cómo pujar', 'En la pestaña Mercado encontrarás jugadores disponibles para puja. Introduce tu oferta y confírmala. Puedes modificar o retirar tu puja mientras el mercado esté abierto.'],
+        ['Cierre automático', 'El admin configura una hora de cierre diaria. En ese momento el sistema resuelve todas las pujas pendientes automáticamente.'],
+        ['Resolución', 'Gana la puja más alta. En caso de empate, gana la puja más antigua (la que se registró antes).'],
+        ['Presupuesto insuficiente', 'Si en el momento del cierre no tienes suficiente presupuesto para cubrir tu puja ganadora, el jugador no se adjudica y el proceso queda desierto.'],
+        ['Portería única', 'Dentro de la misma división, solo puede haber un equipo con la portería de cada club real. Si ya está asignada, las pujas por esa portería quedan desiertas.'],
+        ['Resto de pujas', 'Al adjudicarse un jugador, el tablón muestra quién lo ganó, por cuánto, y el listado del resto de equipos que habían pujado y sus importes.'],
+      ]
+    },
+    {
+      id: 'pendientes',
+      titulo: '⏳ Fichajes pendientes',
+      contenido: [
+        ['¿Qué son?', 'Si ganas una puja o aceptas un traspaso pero ya tienes 14 jugadores, el fichaje queda "pendiente de plaza". El dinero ya se descuenta en el momento del fichaje.'],
+        ['Activar', 'Desde Mi Plantilla, sección "Pendientes de plaza", puedes activar el fichaje. Si la plantilla sigue llena, deberás elegir qué jugador liberar (recuperas su valor de mercado).'],
+        ['Descartar', 'Si no quieres al jugador, puedes descartarlo. Solo se te devuelve el 80 % de lo que pagaste (penalización del 20 %). En traspasos, el jugador vuelve al equipo vendedor si tiene hueco; si no, queda libre en el mercado.'],
+      ]
+    },
+    {
+      id: 'alineacion',
+      titulo: '📋 Alineación',
+      contenido: [
+        ['Titulares y suplentes', 'Cada jornada debes configurar tu alineación en la pestaña Alineación. Tienes 11 titulares y el resto son suplentes.'],
+        ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],
+        ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
+        ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
+      ]
+    },
+    {
+      id: 'ofertas',
+      titulo: '🤝 Ofertas entre equipos',
+      contenido: [
+        ['Enviar una oferta', 'Desde Equipos → ficha de otro equipo, pulsa el botón de oferta junto a cualquiera de sus jugadores e introduce el importe. La oferta llega al equipo propietario.'],
+        ['Recibir y gestionar', 'En la pestaña Ofertas verás las ofertas recibidas. Puedes aceptarlas o rechazarlas. Al aceptar, el jugador pasa a fichajes pendientes del comprador y el dinero se transfiere inmediatamente.'],
+        ['Editar o retirar', 'En la pestaña Ofertas → Enviadas puedes editar el importe o retirar una oferta que aún esté pendiente.'],
+        ['Mercado cerrado', 'El admin puede deshabilitar las ventas. Con el mercado cerrado no se pueden enviar ni aceptar ofertas.'],
+      ]
+    },
+    {
+      id: 'sorteo',
+      titulo: '🎲 Sorteo aleatorio de jugadores',
+      contenido: [
+        ['¿Qué es?', 'El admin puede realizar un sorteo para repartir jugadores aleatoriamente entre los equipos al inicio de la temporada o cuando se necesite.'],
+        ['Cómo funciona', 'Se selecciona un conjunto de jugadores y el sistema los distribuye de forma aleatoria entre los participantes, respetando el presupuesto y el límite de plantilla de cada equipo.'],
+        ['Control del admin', 'El admin puede configurar cuántos jugadores recibe cada equipo y el precio al que se asignan antes de ejecutar el sorteo.'],
+      ]
+    },
+    {
+      id: 'tablon',
+      titulo: '📣 Tablón de anuncios',
+      contenido: [
+        ['¿Qué aparece?', 'El tablón recoge automáticamente los eventos importantes de la federación: fichajes, traspasos, cambios de nombre, entrenadores, resultados de pujas, etc.'],
+        ['Anuncios del admin', 'El admin puede publicar mensajes personalizados en el tablón para comunicar noticias a todos los equipos.'],
+      ]
+    },
+    {
+      id: 'admin',
+      titulo: '🛠 Rol del Admin',
+      contenido: [
+        ['Gestión de la federación', 'El admin crea y configura la federación: nombre, logo, presupuesto inicial, número de jornadas, hora de cierre de pujas, etc.'],
+        ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno.'],
+        ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos. También puede gestionar los jugadores de cualquier plantilla.'],
+        ['Introducir puntuaciones', 'El admin (o moderador) introduce los puntos obtenidos por cada jugador real cada jornada. Esto genera la clasificación de la liga.'],
+        ['Ejecutar el cierre de pujas', 'Aunque el cierre es automático a la hora configurada, el admin puede forzarlo manualmente desde el panel de administración.'],
+        ['Fichajes pendientes', 'El admin puede activar o descartar fichajes pendientes de cualquier equipo, y asignar qué jugador se libera si la plantilla está llena.'],
+        ['Pujas (AdminPujas)', 'El admin puede ver todas las pujas activas por jugador, resolver manualmente una adjudicación y publicar el anuncio correspondiente en el tablón.'],
+        ['Sorteo', 'Solo el admin puede lanzar el sorteo aleatorio de jugadores.'],
+      ]
+    },
+    {
+      id: 'moderador',
+      titulo: '👮 Rol del Moderador',
+      contenido: [
+        ['¿Qué es un moderador?', 'El admin puede otorgar permisos de moderador a un equipo. El moderador tiene acceso al panel de administración con capacidades reducidas.'],
+        ['Permisos', 'El moderador puede introducir puntuaciones de jugadores y gestionar alineaciones, pero no puede modificar la configuración de la federación, eliminar equipos ni ejecutar el sorteo.'],
+      ]
+    },
+  ];
+
+  const styleCard = {
+    borderRadius: 10,
+    border: '1.5px solid var(--borde)',
+    marginBottom: '.5rem',
+    overflow: 'hidden',
+  };
+  const styleHeader = (abierta) => ({
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '.75rem 1rem',
+    cursor: 'pointer',
+    background: abierta ? 'var(--verde)' : 'var(--fondo)',
+    color: abierta ? '#fff' : 'var(--texto)',
+    fontWeight: 600,
+    fontSize: '.95rem',
+    userSelect: 'none',
+    transition: 'background .15s',
+  });
+
+  return (
+    <div style={{maxWidth: 680, margin: '0 auto'}}>
+      <div className="card" style={{marginBottom:'1rem'}}>
+        <h2 style={{marginBottom:'.25rem'}}>Guía de uso</h2>
+        <p style={{color:'var(--texto2)', fontSize:'.87rem', margin:0}}>
+          Pulsa cada sección para desplegarla.
+        </p>
+      </div>
+
+      {secciones.map(sec => {
+        const esta = abierto === sec.id;
+        return (
+          <div key={sec.id} style={styleCard}>
+            <div style={styleHeader(esta)} onClick={() => toggle(sec.id)}>
+              <span>{sec.titulo}</span>
+              <span style={{fontSize:'.8rem', opacity:.8}}>{esta ? '▲' : '▼'}</span>
+            </div>
+            {esta && (
+              <div style={{padding:'.75rem 1rem', display:'flex', flexDirection:'column', gap:'.75rem',
+                           background:'var(--fondo)'}}>
+                {sec.contenido.map(([titulo, texto]) => (
+                  <div key={titulo}>
+                    <div style={{fontWeight:700, fontSize:'.85rem', color:'var(--verde)',
+                                 marginBottom:'.2rem'}}>{titulo}</div>
+                    <div style={{fontSize:'.87rem', color:'var(--texto)', lineHeight:1.55}}>{texto}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

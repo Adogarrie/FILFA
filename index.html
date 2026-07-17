@@ -419,7 +419,8 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     if (error) {
       alert('Error al vender: ' + error.message);
     } else {
-      const valorVenta = modalVenta.valor || 0;
+      const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
+      const valorVenta = Math.round((modalVenta.valor || 0) * pct);
       const nuevo = (presupuesto || 0) + valorVenta;
       const { error: errPres } = await sb.from('participantes')
         .update({ presupuesto: nuevo })
@@ -443,7 +444,8 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const confirmarVentaTodo = async () => {
     if (!isAdmin || lista.length === 0) return;
     setVendiendoTodo(true);
-    const total = lista.reduce((s, j) => s + (j.valor || 0), 0);
+    const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
+    const total = Math.round(lista.reduce((s, j) => s + (j.valor || 0), 0) * pct);
     const { error } = await sb.from('plantillas')
       .delete()
       .eq('participante_id', participanteId);
@@ -580,10 +582,17 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                 Precio de compra: <strong>{fmt(modalVenta.compra || 0)}</strong><br/>
                 Valor actual de mercado: <strong>{fmt(modalVenta.valor || 0)}</strong><br/>
                 {(() => {
-                  const dif = (modalVenta.valor || 0) - (modalVenta.compra || 0);
-                  return <span className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
-                    {dif >= 0 ? 'Ganancia: +' : 'Pérdida: '}{fmt(Math.abs(dif))}
-                  </span>;
+                  const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
+                  const recuperas = Math.round((modalVenta.valor || 0) * pct);
+                  const dif = recuperas - (modalVenta.compra || 0);
+                  return <>
+                    {pct < 1 && <span style={{color:'var(--texto2)', fontSize:'.88rem'}}>
+                      Recuperas ({federacion.pct_venta_mercado}%): <strong>{fmt(recuperas)}</strong><br/>
+                    </span>}
+                    <span className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
+                      {dif >= 0 ? 'Ganancia: +' : 'Pérdida: '}{fmt(Math.abs(dif))}
+                    </span>
+                  </>;
                 })()}
               </p>
               <div className="modal-btns">
@@ -603,10 +612,17 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             <div className="modal" onClick={e => e.stopPropagation()}>
               <h3>Vender toda la plantilla</h3>
               <p>
-                Se venderán al mercado los <strong>{lista.length}</strong> jugadores de{' '}
-                <strong>{participanteNombre}</strong>, devolviendo un total de{' '}
-                <strong>{fmt(lista.reduce((s, j) => s + (j.valor || 0), 0))}</strong> a su presupuesto.<br/>
-                Esta acción no se puede deshacer.
+                {(() => {
+                  const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
+                  const total = Math.round(lista.reduce((s, j) => s + (j.valor || 0), 0) * pct);
+                  return <>
+                    Se venderán al mercado los <strong>{lista.length}</strong> jugadores de{' '}
+                    <strong>{participanteNombre}</strong>, devolviendo un total de{' '}
+                    <strong>{fmt(total)}</strong> a su presupuesto
+                    {pct < 1 && <> ({federacion.pct_venta_mercado}% del valor de mercado)</>}
+                    .<br/>Esta acción no se puede deshacer.
+                  </>;
+                })()}
               </p>
               <div className="modal-btns">
                 <button className="btn-cancel" disabled={vendiendoTodo}
@@ -3656,6 +3672,7 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
   const [sorteo,     setSorteo]     = useState(!!federacion?.sorteo_habilitado);
   const [ptsMod,     setPtsMod]     = useState(!!federacion?.puntos_mod_habilitado);
   const [horaCierre, setHoraCierre] = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
+  const [pctVenta,   setPctVenta]   = useState(federacion?.pct_venta_mercado ?? 100);
   const [msg, setMsg]               = useState('');
 
   const cambiar = async (campo, valor, setEstado) => {
@@ -3676,6 +3693,18 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
       .update({ hora_cierre_pujas: val }).eq('id', federacion.id);
     if (error) { alert('Error al guardar: ' + error.message); return; }
     onFederacionUpdate({ ...federacion, hora_cierre_pujas: val });
+    setMsg('Guardado');
+    setTimeout(() => setMsg(''), 2500);
+  };
+
+  const guardarPctVenta = async () => {
+    if (!sb || !federacion) return;
+    const val = Math.max(1, Math.min(100, Number(pctVenta) || 100));
+    setPctVenta(val);
+    const { error } = await sb.from('federaciones')
+      .update({ pct_venta_mercado: val }).eq('id', federacion.id);
+    if (error) { alert('Error al guardar: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, pct_venta_mercado: val });
     setMsg('Guardado');
     setTimeout(() => setMsg(''), 2500);
   };
@@ -3739,6 +3768,28 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
                  style={{padding:'.45rem .7rem', borderRadius:8,
                          border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
           <button className="btn-ok" onClick={guardarHora}>Guardar</button>
+        </div>
+      </div>
+
+      <div style={{display:'flex', alignItems:'center', gap:'1rem',
+                   padding:'1rem 0', flexWrap:'wrap'}}>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700, marginBottom:'.2rem'}}>Porcentaje de recuperación al vender</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>
+            Porcentaje del valor de mercado que recibe el equipo al vender un jugador al mercado.
+            100 % = recupera el valor íntegro. Valores inferiores suponen una penalización por venta.
+          </div>
+        </div>
+        <div style={{display:'flex', gap:'.5rem', alignItems:'center', flexShrink:0}}>
+          <div style={{display:'flex', alignItems:'center', gap:'.3rem'}}>
+            <input type="number" min={1} max={100} value={pctVenta}
+                   onChange={e => setPctVenta(e.target.value)}
+                   style={{width:70, padding:'.45rem .7rem', borderRadius:8,
+                           border:'1.5px solid var(--borde)', fontSize:'.95rem',
+                           textAlign:'center'}} />
+            <span style={{fontWeight:700, fontSize:'.95rem'}}>%</span>
+          </div>
+          <button className="btn-ok" onClick={guardarPctVenta}>Guardar</button>
         </div>
       </div>
     </div>

@@ -5625,11 +5625,12 @@ function PosHistorialTable({ rows }) {
 
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes }) {
-  const [tab,          setTab]         = useState('calendario');
-  const [subTabClasif, setSubTabClasif] = useState('general');
-  const [partidos,     setPartidos]    = useState([]);
-  const [jornada,      setJornada]     = useState(1);
-  const [divisiones,   setDivisiones]  = useState([]);
+  const [tab,              setTab]             = useState('calendario');
+  const [subTabClasif,     setSubTabClasif]     = useState('general');
+  const [partidos,         setPartidos]         = useState([]);
+  const [jornada,          setJornada]          = useState(1);
+  const [jornadaHistorial, setJornadaHistorial] = useState(1);
+  const [divisiones,       setDivisiones]       = useState([]);
 
   useEffect(() => {
     if (!sb) return;
@@ -5664,7 +5665,7 @@ function LigaH2H({ federacion, participantes }) {
   const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))];
   const hasDivs = divIds.length > 0;
 
-  const computeClasif = (divId) => {
+  const computeClasif = (divId, jEnd = null) => {
     const equips = divId
       ? participantes.filter(p => p.division_id === divId)
       : participantes;
@@ -5673,7 +5674,8 @@ function LigaH2H({ federacion, participantes }) {
       stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
                       pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
     });
-    const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    const msBase = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    const ms = jEnd !== null ? msBase.filter(m => m.jornada <= jEnd) : msBase;
     ms.forEach(m => {
       if (m.pts_local === null || m.pts_visitante === null) return;
       const L = stats[m.local_id], V = stats[m.visitante_id];
@@ -5958,7 +5960,7 @@ function LigaH2H({ federacion, participantes }) {
           {/* Sub-tabs: General / Local / Visitante */}
           <div className="card" style={{paddingBottom:'.6rem'}}>
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
-              {[['general','General'],['local','Local'],['visitante','Visitante']].map(([k,l]) => (
+              {[['general','General'],['local','Local'],['visitante','Visitante'],['historial','Por jornada']].map(([k,l]) => (
                 <button key={k} onClick={() => setSubTabClasif(k)}
                         style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
                                 cursor:'pointer', fontWeight: subTabClasif===k ? 700 : 400,
@@ -5971,25 +5973,73 @@ function LigaH2H({ federacion, participantes }) {
             </div>
           </div>
 
-          {hasDivs
-            ? divIds.map(divId => {
-                const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                const rows = subTabClasif === 'general'
-                  ? computeClasif(divId)
-                  : computeClasifSide(divId, subTabClasif);
+          {subTabClasif === 'historial'
+            ? (() => {
+                const jornadasJugadas = [...new Set(
+                  partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)
+                )].sort((a, b) => a - b);
+                const jSel = jornadasJugadas.includes(jornadaHistorial)
+                  ? jornadaHistorial
+                  : (jornadasJugadas[jornadasJugadas.length - 1] ?? 1);
                 return (
-                  <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                    <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
-                    <ClasifTable rows={rows} />
-                  </div>
+                  <>
+                    <div className="card" style={{paddingBottom:'.6rem'}}>
+                      <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
+                        Clasificación acumulada hasta la jornada seleccionada:
+                      </div>
+                      <div style={{display:'flex', gap:'.25rem', flexWrap:'wrap'}}>
+                        {jornadasJugadas.map(j => (
+                          <button key={j} onClick={() => setJornadaHistorial(j)}
+                                  style={{padding:'.22rem .5rem', borderRadius:6, fontSize:'.75rem',
+                                          cursor:'pointer', border:'1.5px solid var(--borde)',
+                                          background: jSel===j ? 'var(--verde)' : 'var(--fondo)',
+                                          color:      jSel===j ? '#fff'         : 'var(--texto)',
+                                          fontWeight: jSel===j ? 700            : 400}}>
+                            J{j}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {jornadasJugadas.length === 0
+                      ? <div className="card"><p style={{color:'var(--texto2)'}}>Aún no hay resultados introducidos.</p></div>
+                      : hasDivs
+                        ? divIds.map(divId => {
+                            const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                            return (
+                              <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                                <h2 style={{marginBottom:'.75rem'}}>{nombre} — hasta J{jSel}</h2>
+                                <ClasifTable rows={computeClasif(divId, jSel)} />
+                              </div>
+                            );
+                          })
+                        : <div className="card">
+                            <h2 style={{marginBottom:'.75rem'}}>Hasta J{jSel}</h2>
+                            <ClasifTable rows={computeClasif(null, jSel)} />
+                          </div>
+                    }
+                  </>
                 );
-              })
-            : (() => {
-                const rows = subTabClasif === 'general'
-                  ? computeClasif(null)
-                  : computeClasifSide(null, subTabClasif);
-                return <div className="card"><ClasifTable rows={rows} /></div>;
               })()
+            : (hasDivs
+                ? divIds.map(divId => {
+                    const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                    const rows = subTabClasif === 'general'
+                      ? computeClasif(divId)
+                      : computeClasifSide(divId, subTabClasif);
+                    return (
+                      <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
+                        <ClasifTable rows={rows} />
+                      </div>
+                    );
+                  })
+                : (() => {
+                    const rows = subTabClasif === 'general'
+                      ? computeClasif(null)
+                      : computeClasifSide(null, subTabClasif);
+                    return <div className="card"><ClasifTable rows={rows} /></div>;
+                  })()
+              )
           }
         </>
       )}

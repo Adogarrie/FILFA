@@ -2152,14 +2152,21 @@ function AdminPtsJugadores({ participantes, federacion }) {
       if (error) { alert('Error: ' + error.message); setGuardando(false); return; }
     }
 
-    // 2. Recalcular totales de cada equipo fantasy desde sus titulares
+    // 2. Recalcular totales de cada equipo fantasy (aplicando sustituciones automáticas si las hay)
     if (participantes && participantes.length > 0) {
       const partIds = participantes.map(p => p.id);
-      const { data: alis } = await sb.from('alineaciones')
-        .select('participante_id, jugador_id')
-        .eq('jornada', jornada)
-        .eq('es_titular', true)
-        .in('participante_id', partIds);
+      const [{ data: alis }, { data: subsAuto }] = await Promise.all([
+        sb.from('alineaciones')
+          .select('participante_id, jugador_id')
+          .eq('jornada', jornada)
+          .eq('es_titular', true)
+          .in('participante_id', partIds),
+        sb.from('sustituciones_auto')
+          .select('participante_id, jugador_sale_id, jugador_entra_id')
+          .eq('jornada', jornada)
+          .eq('federacion_id', federacion?.id)
+          .in('participante_id', partIds),
+      ]);
 
       const ptsMapa = Object.fromEntries(rows.map(r => [r.jugador_id, r.pts]));
       const alisPorEquipo = {};
@@ -2168,11 +2175,23 @@ function AdminPtsJugadores({ participantes, federacion }) {
         alisPorEquipo[a.participante_id].push(a.jugador_id);
       });
 
-      const clasRows = participantes.map(p => ({
-        participante_id: p.id,
-        jornada,
-        puntos_jornada: (alisPorEquipo[p.id] || []).reduce((s, jid) => s + (ptsMapa[jid] ?? 0), 0),
-      }));
+      const subsPorPart = {};
+      (subsAuto || []).forEach(s => {
+        if (!subsPorPart[s.participante_id]) subsPorPart[s.participante_id] = [];
+        subsPorPart[s.participante_id].push(s);
+      });
+
+      const clasRows = participantes.map(p => {
+        let jids = alisPorEquipo[p.id] || [];
+        for (const s of (subsPorPart[p.id] || [])) {
+          jids = jids.map(jid => jid === s.jugador_sale_id ? s.jugador_entra_id : jid);
+        }
+        return {
+          participante_id: p.id,
+          jornada,
+          puntos_jornada: jids.reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0),
+        };
+      });
       await sb.from('clasificacion').upsert(clasRows, { onConflict: 'participante_id,jornada' });
     }
 
@@ -5598,6 +5617,327 @@ function AdminCesiones({ federacion, participantes }) {
   );
 }
 
+// ── HELPER: CÁLCULO DE SUSTITUCIONES AUTOMÁTICAS ─────────────
+// Recibe los registros de alineaciones (titulares + suplentes),
+// el Set de jugador_ids que no jugaron y un mapa jugador_id → {posicion}.
+// Devuelve array de { participante_id, jugador_sale_id, jugador_entra_id }.
+function calcularSustitucionesAuto(alisData, noJugoSet, jugadoresMap) {
+  const FORMACIONES = [[5,4,1],[5,3,2],[5,2,3],[4,5,1],[4,4,2],[4,3,3],[4,2,4],[3,5,2],[3,6,1],[3,4,3],[3,3,4]];
+
+  function esValida(jids) {
+    if (jids.length !== 11) return false;
+    const c = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
+    for (const jid of jids) { const p = jugadoresMap[jid]?.posicion; if (p) c[p] = (c[p]||0) + 1; }
+    if (c.POR !== 1) return false;
+    return FORMACIONES.some(f => f[0]===c.DEF && f[1]===c.MED && f[2]===c.DEL);
+  }
+
+  const porParticipante = {};
+  for (const a of alisData) {
+    if (!porParticipante[a.participante_id]) porParticipante[a.participante_id] = { titulars: [], bench: [] };
+    if (a.es_titular) porParticipante[a.participante_id].titulars.push(a.jugador_id);
+    else if (a.orden_suplente != null) porParticipante[a.participante_id].bench.push({ jid: a.jugador_id, orden: a.orden_suplente });
+  }
+
+  const posOrder = { DEF: 0, MED: 1, DEL: 2, POR: 3 };
+  const resultado = [];
+
+  for (const [partId, { titulars, bench }] of Object.entries(porParticipante)) {
+    bench.sort((a, b) => a.orden - b.orden);
+    const benchIds = bench.map(b => b.jid);
+    const titOrdenados = [...titulars].sort((a, b) =>
+      (posOrder[jugadoresMap[a]?.posicion] ?? 3) - (posOrder[jugadoresMap[b]?.posicion] ?? 3)
+    );
+    const efectivos = [...titulars];
+    const usados = new Set();
+
+    for (const jid of titOrdenados) {
+      if (!noJugoSet.has(jid)) continue;
+      if (jugadoresMap[jid]?.posicion === 'POR') continue;
+
+      const probar = sid => esValida(efectivos.map(t => t === jid ? sid : t));
+      let candidato = benchIds.find(sid => !usados.has(sid) && !noJugoSet.has(sid) && probar(sid));
+      if (!candidato) candidato = benchIds.find(sid => !usados.has(sid) && probar(sid));
+
+      if (candidato) {
+        resultado.push({ participante_id: partId, jugador_sale_id: jid, jugador_entra_id: candidato });
+        usados.add(candidato);
+        const idx = efectivos.indexOf(jid); if (idx !== -1) efectivos[idx] = candidato;
+      }
+    }
+  }
+  return resultado;
+}
+
+// ── ADMIN: JUGADORES QUE NO JUGARON + SUSTITUCIONES AUTOMÁTICAS ──
+function AdminNoJugo({ federacion, participantes }) {
+  const federacionId = federacion?.id;
+  const [jornada, setJornada]         = useState(1);
+  const [alisData, setAlisData]       = useState([]);
+  const [jugMap, setJugMap]           = useState({});
+  const [titulares, setTitulares]     = useState([]);
+  const [noJugo, setNoJugo]           = useState(new Set());
+  const [subsPreview, setSubsPreview] = useState([]);
+  const [cargando, setCargando]       = useState(false);
+  const [guardando, setGuardando]     = useState(false);
+  const [msg, setMsg]                 = useState('');
+
+  useEffect(() => { if (federacionId && participantes?.length) cargar(); }, [federacionId, jornada, participantes]);
+
+  const cargar = async () => {
+    setCargando(true);
+    const partIds = participantes.map(p => p.id);
+    const [{ data: alis }, { data: njData }] = await Promise.all([
+      sb.from('alineaciones')
+        .select('jugador_id, participante_id, orden_suplente, es_titular, jugadores(id, nombre, equipo, posicion)')
+        .eq('jornada', jornada)
+        .in('participante_id', partIds),
+      sb.from('jornada_no_jugo')
+        .select('jugador_id')
+        .eq('federacion_id', federacionId)
+        .eq('jornada', jornada),
+    ]);
+
+    const mapa = {};
+    for (const a of (alis || [])) { if (a.jugadores) mapa[a.jugador_id] = a.jugadores; }
+    setJugMap(mapa);
+    setAlisData(alis || []);
+
+    const uniqueTit = new Map();
+    for (const a of (alis || [])) {
+      if (a.es_titular && a.jugadores && a.jugadores.posicion !== 'POR') {
+        uniqueTit.set(a.jugador_id, a.jugadores);
+      }
+    }
+    setTitulares([...uniqueTit.values()]);
+    const njSet = new Set((njData || []).map(r => r.jugador_id));
+    setNoJugo(njSet);
+    setCargando(false);
+  };
+
+  // Recalcular preview cada vez que cambia noJugo o los datos
+  useEffect(() => {
+    if (!alisData.length) { setSubsPreview([]); return; }
+    setSubsPreview(calcularSustitucionesAuto(alisData, noJugo, jugMap));
+  }, [noJugo, alisData, jugMap]);
+
+  const toggleNoJugo = jid => {
+    setNoJugo(prev => {
+      const next = new Set(prev);
+      next.has(jid) ? next.delete(jid) : next.add(jid);
+      return next;
+    });
+  };
+
+  const guardar = async () => {
+    setGuardando(true);
+    const partIds = participantes.map(p => p.id);
+
+    // 1. Persistir no_jugo
+    await sb.from('jornada_no_jugo').delete().eq('federacion_id', federacionId).eq('jornada', jornada);
+    if (noJugo.size > 0) {
+      const rows = [...noJugo].map(jid => ({ federacion_id: federacionId, jugador_id: jid, jornada }));
+      const { error } = await sb.from('jornada_no_jugo').insert(rows);
+      if (error) { alert('Error al guardar no_jugo: ' + error.message); setGuardando(false); return; }
+    }
+
+    // 2. Persistir sustituciones_auto
+    await sb.from('sustituciones_auto').delete().eq('federacion_id', federacionId).eq('jornada', jornada);
+    if (subsPreview.length > 0) {
+      const rows = subsPreview.map(s => ({ federacion_id: federacionId, jornada, ...s }));
+      const { error } = await sb.from('sustituciones_auto').insert(rows);
+      if (error) { alert('Error al guardar sustituciones: ' + error.message); setGuardando(false); return; }
+    }
+
+    // 3. Recalcular clasificacion con sustituciones aplicadas
+    const { data: ptsData } = await sb.from('puntos_jugador')
+      .select('jugador_id, pts')
+      .eq('federacion_id', federacionId)
+      .eq('jornada', jornada);
+
+    if (ptsData && ptsData.length > 0) {
+      const ptsMapa = Object.fromEntries(ptsData.map(r => [r.jugador_id, r.pts]));
+      const alisPorPart = {};
+      for (const a of alisData) {
+        if (!a.es_titular) continue;
+        if (!alisPorPart[a.participante_id]) alisPorPart[a.participante_id] = [];
+        alisPorPart[a.participante_id].push(a.jugador_id);
+      }
+      const subsPorPart = {};
+      for (const s of subsPreview) {
+        if (!subsPorPart[s.participante_id]) subsPorPart[s.participante_id] = [];
+        subsPorPart[s.participante_id].push(s);
+      }
+      const clasRows = participantes.map(p => {
+        let jids = alisPorPart[p.id] || [];
+        for (const s of (subsPorPart[p.id] || [])) {
+          jids = jids.map(jid => jid === s.jugador_sale_id ? s.jugador_entra_id : jid);
+        }
+        return { participante_id: p.id, jornada, puntos_jornada: jids.reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0) };
+      });
+      await sb.from('clasificacion').upsert(clasRows, { onConflict: 'participante_id,jornada' });
+    }
+
+    setGuardando(false);
+    setMsg('Guardado. Sustituciones calculadas y clasificación actualizada.');
+    setTimeout(() => setMsg(''), 5000);
+  };
+
+  // Agrupar titulares por equipo real
+  const equipos = [...new Set(titulares.map(j => j.equipo))].sort();
+  const partMap = Object.fromEntries((participantes || []).map(p => [p.id, p]));
+
+  // Agrupar subsPreview por participante para mostrar tabla
+  const subsPorPart = {};
+  for (const s of subsPreview) {
+    if (!subsPorPart[s.participante_id]) subsPorPart[s.participante_id] = [];
+    subsPorPart[s.participante_id].push(s);
+  }
+
+  const hayDatos = titulares.length > 0;
+
+  return (
+    <div>
+      {/* Selector de jornada */}
+      <div className="card" style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap'}}>
+        <span style={{fontWeight:600}}>Jornada:</span>
+        <div style={{display:'flex', gap:'.28rem', flexWrap:'wrap'}}>
+          {Array.from({length:38}, (_, i) => i+1).map(j => (
+            <button key={j} onClick={() => { setJornada(j); setMsg(''); }}
+                    style={{padding:'.22rem .48rem', borderRadius:6, fontSize:'.75rem',
+                            border:'1.5px solid var(--borde)', cursor:'pointer',
+                            background: jornada===j?'var(--verde)':'#fff',
+                            color: jornada===j?'#fff':'var(--texto)', fontWeight: jornada===j?700:400}}>
+              {j}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {cargando && <div className="card"><div className="empty">Cargando…</div></div>}
+
+      {!cargando && !hayDatos && (
+        <div className="card">
+          <div className="empty">No hay alineaciones para la jornada {jornada}.</div>
+        </div>
+      )}
+
+      {!cargando && hayDatos && (
+        <>
+          {/* Titulares agrupados por equipo real */}
+          <div className="card">
+            <div style={{fontWeight:700, marginBottom:'.75rem'}}>
+              Marcar jugadores que jugaron 0 minutos en J{jornada}
+            </div>
+            <p style={{fontSize:'.82rem', color:'var(--texto-2)', marginBottom:'1rem'}}>
+              Los porteros no aparecen aquí (la portería se gestiona automáticamente).
+              Al guardar se calculan las sustituciones y se recalculan los puntos de equipo.
+            </p>
+            {equipos.map(eq => {
+              const jugsEq = titulares.filter(j => j.equipo === eq);
+              return (
+                <div key={eq} style={{marginBottom:'1rem'}}>
+                  <div style={{fontWeight:600, fontSize:'.85rem', color:'var(--texto-2)',
+                               borderBottom:'1px solid var(--borde)', paddingBottom:'.25rem', marginBottom:'.4rem',
+                               display:'flex', alignItems:'center', gap:'.4rem'}}>
+                    <Escudo equipo={eq} size={ESCUDO_SIZE} /> {eq}
+                  </div>
+                  <div style={{display:'flex', flexWrap:'wrap', gap:'.4rem'}}>
+                    {jugsEq.map(j => {
+                      const marcado = noJugo.has(j.id);
+                      return (
+                        <label key={j.id} style={{
+                          display:'flex', alignItems:'center', gap:'.35rem',
+                          padding:'.3rem .6rem', borderRadius:6, cursor:'pointer', fontSize:'.85rem',
+                          border: `1.5px solid ${marcado ? '#ef4444' : 'var(--borde)'}`,
+                          background: marcado ? '#fef2f2' : 'var(--fondo)',
+                          color: marcado ? '#b91c1c' : 'var(--texto)',
+                        }}>
+                          <input type="checkbox" checked={marcado} onChange={() => toggleNoJugo(j.id)}
+                                 style={{accentColor:'#ef4444'}} />
+                          <span style={{fontWeight: marcado ? 700 : 400}}>{j.nombre}</span>
+                          <span style={{fontSize:'.72rem', opacity:.6}}>{j.posicion}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Preview de sustituciones calculadas */}
+          <div className="card">
+            <div style={{fontWeight:700, marginBottom:'.75rem'}}>
+              Sustituciones automáticas calculadas
+              {noJugo.size === 0 && <span style={{fontWeight:400, fontSize:'.82rem', color:'var(--texto-2)'}}> — marca jugadores arriba para ver las sustituciones</span>}
+            </div>
+            {subsPreview.length === 0 && noJugo.size > 0 && (
+              <div className="empty">No hay sustituciones posibles (ningún suplente encaja en la formación).</div>
+            )}
+            {subsPreview.length > 0 && (
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:'.87rem'}}>
+                <thead>
+                  <tr style={{borderBottom:'2px solid var(--borde)'}}>
+                    <th style={{textAlign:'left', padding:'.3rem .5rem'}}>Equipo</th>
+                    <th style={{textAlign:'left', padding:'.3rem .5rem'}}>Sale</th>
+                    <th style={{textAlign:'left', padding:'.3rem .5rem'}}>Entra</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subsPreview.map((s, i) => {
+                    const jSale  = jugMap[s.jugador_sale_id];
+                    const jEntra = jugMap[s.jugador_entra_id];
+                    const equipo = partMap[s.participante_id];
+                    return (
+                      <tr key={i} style={{borderBottom:'1px solid var(--borde)'}}>
+                        <td style={{padding:'.3rem .5rem', fontWeight:600}}>{equipo?.nombre ?? '—'}</td>
+                        <td style={{padding:'.3rem .5rem', color:'#b91c1c'}}>
+                          {jSale?.nombre ?? s.jugador_sale_id}
+                          <span style={{fontSize:'.72rem', marginLeft:'.3rem', opacity:.6}}>{jSale?.posicion}</span>
+                        </td>
+                        <td style={{padding:'.3rem .5rem', color:'#15803d'}}>
+                          {jEntra?.nombre ?? s.jugador_entra_id}
+                          <span style={{fontSize:'.72rem', marginLeft:'.3rem', opacity:.6}}>{jEntra?.posicion}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {/* Equipos sin sustitución pese a tener jugadores sin jugar */}
+            {noJugo.size > 0 && (() => {
+              const partConNoJugo = new Set(
+                alisData.filter(a => a.es_titular && noJugo.has(a.jugador_id) && jugMap[a.jugador_id]?.posicion !== 'POR')
+                        .map(a => a.participante_id)
+              );
+              const partConSub = new Set(subsPreview.map(s => s.participante_id));
+              const sinSub = [...partConNoJugo].filter(pid => !partConSub.has(pid));
+              if (!sinSub.length) return null;
+              return (
+                <div style={{marginTop:'.75rem', padding:'.6rem', background:'#fffbeb',
+                             border:'1px solid #fbbf24', borderRadius:6, fontSize:'.82rem', color:'#92400e'}}>
+                  <strong>Sin sustitución posible:</strong>{' '}
+                  {sinSub.map(pid => partMap[pid]?.nombre ?? pid).join(', ')}
+                  {' — ningún suplente compatible encaja en ninguna formación válida.'}
+                </div>
+              );
+            })()}
+          </div>
+
+          <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+            <button onClick={guardar} disabled={guardando} className="btn-primary">
+              {guardando ? 'Guardando…' : 'Guardar y aplicar sustituciones'}
+            </button>
+            {msg && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msg}</span>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador }) {
   // [key, label, soloAdmin]
   const TABS_DEF = [
@@ -5612,6 +5952,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['jugadores',    'Jugadores',     true],
     ['h2h',          'Liga H2H',      true],
     ['cesiones',     'Cesiones',      true],
+    ['nojugo',       'No Jugaron',    true],
   ];
   // Moderadores solo ven tabs con soloAdmin=false, SALVO que la federacion tenga puntos_mod_habilitado
   const ptsMod = federacion?.puntos_mod_habilitado;
@@ -5651,6 +5992,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'jugadores'    && <AdminJugadores participantes={participantes} federacion={federacion} />}
       {subtab === 'h2h'          && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} />}
       {subtab === 'cesiones'     && <AdminCesiones federacion={federacion} participantes={participantes} />}
+      {subtab === 'nojugo'      && <AdminNoJugo federacion={federacion} participantes={participantes} />}
     </div>
   );
 }

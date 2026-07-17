@@ -5571,6 +5571,27 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     setTimeout(() => setMsg(''), 2500);
   };
 
+  // ── Utilidades ─────────────────────────────────────────────
+  const shuffle = (arr) => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
+  // Reordena para que J1 = (E1 vs E2, E3 vs E4, E5 vs E6...)
+  // En el algoritmo circular fijo-rotación, para lograr ese J1 hay que
+  // intercalar: [E1,E3,E5,...,E6,E4,E2] antes de aplicar el círculo.
+  const reorderParaSorteo = (teams) => {
+    if (teams.length < 2 || teams.length % 2 !== 0) return teams;
+    const izq = [], der = [];
+    for (let i = 0; i < teams.length; i += 2) izq.push(teams[i]);
+    for (let i = teams.length - 1; i >= 0; i -= 2) der.push(teams[i]);
+    return [...izq, ...der];
+  };
+
   // ── Algoritmo round-robin simétrico ────────────────────────
   const generarRR = (equipos) => {
     const teams = [...equipos];
@@ -5593,7 +5614,9 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   };
 
   // ── Insertar filas en la DB ─────────────────────────────────
-  const insertarCalendario = async (gruposOrdenados) => {
+  // sorteoFisico=true → reordena para J1=E1vsE2,E3vsE4...
+  // sorteoFisico=false → mezcla aleatoriamente
+  const insertarCalendario = async (gruposOrdenados, sorteoFisico = false) => {
     const { error: delErr } = await sb.from('h2h_partidos').delete().eq('federacion_id', federacion.id);
     if (delErr) { setMsg('Error al borrar: ' + delErr.message); return false; }
 
@@ -5602,7 +5625,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     Object.entries(gruposOrdenados).forEach(([key, equips]) => {
       if (equips.length < 2) return;
       const divId = key === '__' ? null : Number(key);
-      generarRR(equips).forEach((ronda, idx) => {
+      const ordenados = sorteoFisico ? reorderParaSorteo(equips) : shuffle(equips);
+      generarRR(ordenados).forEach((ronda, idx) => {
         const j = idx + 1;
         if (j > maxJornada) maxJornada = j;
         ronda.forEach(p => rows.push({
@@ -5662,7 +5686,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
         .filter(Boolean);
     });
 
-    const ok = await insertarCalendario(gruposOrdenados);
+    const ok = await insertarCalendario(gruposOrdenados, true);
     setGenerando(false);
     if (ok) setModoSorteo(false);
   };
@@ -5750,22 +5774,31 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
         {modoSorteo && (
           <div style={{padding:'1rem 0'}}>
             <div style={{fontWeight:700, fontSize:'1rem', marginBottom:'.3rem'}}>🎲 Sorteo físico</div>
-            <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'1rem'}}>
-              Asigna cada equipo al número de bola que ha sacado en el sorteo.
-              El calendario se generará respetando ese orden.
+            <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
+              Asigna cada equipo al número de bola que ha sacado en el sorteo físico.
+              La <strong>Jornada 1</strong> quedará según los pares que ves debajo de cada división.
             </div>
 
             {Object.entries(asignaciones).map(([divKey, slots]) => {
               const equipsDivision = grupos[divKey] || [];
               const divLabel = hasDivs && divKey !== '__' ? `División ${divKey}` : null;
+              // Cruces de J1: (E1vsE2, E3vsE4, ...)
+              const j1 = [];
+              for (let i = 0; i < slots.length - 1; i += 2) j1.push(`Equipo ${i+1} vs Equipo ${i+2}`);
+              const j1Str = j1.join(' · ');
               return (
                 <div key={divKey} style={{marginBottom:'1.25rem'}}>
                   {divLabel && (
                     <div style={{fontWeight:700, fontSize:'.82rem', color:'var(--verde)',
-                                 letterSpacing:'.05em', marginBottom:'.5rem'}}>
+                                 letterSpacing:'.05em', marginBottom:'.35rem'}}>
                       {divLabel.toUpperCase()}
                     </div>
                   )}
+                  <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.5rem',
+                               background:'var(--fondo2)', borderRadius:6, padding:'.3rem .6rem',
+                               border:'1px solid var(--borde)'}}>
+                    <strong>J1:</strong> {j1Str}
+                  </div>
                   <div style={{display:'flex', flexDirection:'column', gap:'.4rem'}}>
                     {slots.map((val, idx) => {
                       const asignadosEnDiv = slots.filter((_, i) => i !== idx);

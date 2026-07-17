@@ -1663,6 +1663,36 @@ function CalendarioFantasy({ participantes, federacion }) {
     return b.valorPlt - a.valorPlt;
   });
 
+  // ── Estadísticas por equipo ──────────────────────────────────
+  const filasEstadisticas = [...participantes].map(p => {
+    const regs = clas.filter(r => r.participante_id === p.id);
+    const scores = regs.map(r => r.puntos_jornada);
+    const n = scores.length;
+    if (n === 0) return null;
+    const total = scores.reduce((s, x) => s + x, 0);
+    const media = total / n;
+    const stddev = Math.sqrt(scores.reduce((s, x) => s + (x - media) ** 2, 0) / n);
+    const maxPts = Math.max(...scores);
+    const minPts = Math.min(...scores);
+    // Jornada en la que se consiguió el máximo
+    const regMax = regs.find(r => r.puntos_jornada === maxPts);
+    return {
+      id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
+      n, total, media, stddev, maxPts, minPts,
+      jornadaMax: regMax?.jornada ?? null,
+      jGanadas: jGanadasMap[p.id] || 0,
+    };
+  }).filter(Boolean).sort((a, b) => b.media - a.media);
+
+  // ── Top puntuaciones globales (todas, ordenadas) ──────────────
+  const topPuntuaciones = [...clas]
+    .sort((a, b) => b.puntos_jornada - a.puntos_jornada)
+    .map(r => ({
+      ...r,
+      nombre:    participantes.find(p => p.id === r.participante_id)?.nombre    || '—',
+      escudo_url: participantes.find(p => p.id === r.participante_id)?.escudo_url || null,
+    }));
+
   const jornadasConDatos = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
 
   const btnJornada = (j) => ({
@@ -1716,8 +1746,9 @@ function CalendarioFantasy({ participantes, federacion }) {
   return (
     <div>
       <div className="tabs">
-        <button className={`tab ${vista==='jornada'?'active':''}`} onClick={() => setVista('jornada')}>Por jornada</button>
-        <button className={`tab ${vista==='acumulado'?'active':''}`} onClick={() => setVista('acumulado')}>Acumulado</button>
+        <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Por jornada</button>
+        <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Acumulado</button>
+        <button className={`tab ${vista==='estadisticas'?'active':''}`} onClick={() => setVista('estadisticas')}>Estadísticas</button>
       </div>
 
       {vista === 'jornada' && (
@@ -1798,6 +1829,102 @@ function CalendarioFantasy({ participantes, federacion }) {
               </table>
           }
         </div>
+      )}
+
+      {vista === 'estadisticas' && (
+        clas.length === 0
+          ? <div className="card"><div className="empty">Aún no hay puntuaciones introducidas.</div></div>
+          : <>
+              {/* ── Tabla de estadísticas por equipo ── */}
+              <div className="card" style={{marginBottom:'.75rem'}}>
+                <h2 style={{marginBottom:'.75rem'}}>Estadísticas por equipo</h2>
+                <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                  Ordenado por media. Desviación típica: cuanto mayor, más irregular el rendimiento.
+                </p>
+                <div style={{overflowX:'auto'}}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Equipo</th>
+                        <th style={{textAlign:'right'}}>J. jug.</th>
+                        <th style={{textAlign:'right'}}>Media</th>
+                        <th style={{textAlign:'right'}}>Desv. típ.</th>
+                        <th style={{textAlign:'right', color:'var(--verde)'}}>Máx</th>
+                        <th style={{textAlign:'right', color:'#dc3545'}}>Mín</th>
+                        <th style={{textAlign:'right'}}>J. ganadas</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filasEstadisticas.map((e, i) => (
+                        <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.06)' : undefined}}>
+                          <td style={{fontWeight:600}}>
+                            <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                              {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                              {e.nombre}
+                            </span>
+                          </td>
+                          <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.n}</td>
+                          <td style={{textAlign:'right', fontWeight:700}}>{e.media.toFixed(1)}</td>
+                          <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.stddev.toFixed(1)}</td>
+                          <td style={{textAlign:'right', fontWeight:700, color:'var(--verde)'}}>
+                            {e.maxPts}
+                            <span style={{fontWeight:400, fontSize:'.75rem', color:'var(--texto2)', marginLeft:'.3rem'}}>J{e.jornadaMax}</span>
+                          </td>
+                          <td style={{textAlign:'right', color:'#dc3545'}}>{e.minPts}</td>
+                          <td style={{textAlign:'right', fontWeight:700}}>{e.jGanadas}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* ── Top puntuaciones globales ── */}
+              <div className="card">
+                <h2 style={{marginBottom:'.75rem'}}>Ranking de puntuaciones</h2>
+                <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                  Todas las puntuaciones de jornada ordenadas de mayor a menor.
+                </p>
+                <div style={{overflowX:'auto'}}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Equipo</th>
+                        <th style={{textAlign:'right'}}>Jornada</th>
+                        <th style={{textAlign:'right', color:'var(--verde)'}}>Puntos</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topPuntuaciones.map((r, i) => {
+                        const esPrimero = i === 0;
+                        const esMismosPts = i > 0 && r.puntos_jornada === topPuntuaciones[i-1].puntos_jornada;
+                        return (
+                          <tr key={`${r.participante_id}_${r.jornada}`}
+                              style={{background: esPrimero ? 'rgba(26,127,55,.06)' : undefined}}>
+                            <td style={{color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>
+                              {esMismosPts ? '=' : i + 1}
+                            </td>
+                            <td style={{fontWeight:600}}>
+                              <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                                {r.escudo_url && <img src={r.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                                {r.nombre}
+                              </span>
+                            </td>
+                            <td style={{textAlign:'right', color:'var(--texto2)'}}>J{r.jornada}</td>
+                            <td style={{textAlign:'right', fontWeight: esPrimero ? 800 : 700,
+                                        fontSize: esPrimero ? '1.05rem' : undefined,
+                                        color: esPrimero ? 'var(--verde)' : 'var(--texto)'}}>
+                              {r.puntos_jornada}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
       )}
     </div>
   );

@@ -1710,9 +1710,10 @@ function CalendarioFantasy({ participantes, federacion }) {
     };
   }).filter(Boolean).sort((a, b) => b.media - a.media);
 
-  // ── Ranking global de puntuaciones ────────────────────────────
+  // ── Ranking global de puntuaciones (top 30) ──────────────────
   const topPuntuaciones = [...clas]
     .sort((a, b) => b.puntos_jornada - a.puntos_jornada)
+    .slice(0, 30)
     .map(r => ({
       ...r,
       nombre:     participantes.find(p => p.id === r.participante_id)?.nombre     || '—',
@@ -5581,6 +5582,47 @@ function App() {
   );
 }
 
+function PosHistorialTable({ rows }) {
+  const th = (label, color) => (
+    <th style={{textAlign:'right', whiteSpace:'nowrap', color: color || undefined}}>{label}</th>
+  );
+  const td = (val, color, bold) => (
+    <td style={{textAlign:'right', fontWeight: bold ? 700 : (val > 0 ? 500 : 400),
+                color: val > 0 ? (color || 'var(--texto)') : 'var(--texto2)'}}>{val}</td>
+  );
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table>
+        <thead>
+          <tr>
+            <th>Equipo</th>
+            {th('J. 1º',      'var(--verde)')}
+            {th('J. podio')}
+            {th('J. último',  '#dc3545')}
+            {th('J. últ. 3')}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((e, i) => (
+            <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.05)' : undefined}}>
+              <td style={{fontWeight:600}}>
+                <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                  {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                  {e.nombre}
+                </span>
+              </td>
+              {td(e.j1,     'var(--verde)', true)}
+              {td(e.jpodio)}
+              {td(e.jult,   '#dc3545', true)}
+              {td(e.jult3,  '#dc3545')}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes }) {
   const [tab,          setTab]         = useState('calendario');
@@ -5734,6 +5776,42 @@ function LigaH2H({ federacion, participantes }) {
       b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
   };
 
+  // Contador histórico de posiciones tras cada jornada (dense rank)
+  const computePosHistorial = (divId) => {
+    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const ms     = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    const jugadas = [...new Set(
+      ms.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)
+    )].sort((a, b) => a - b);
+
+    const cnt = {};
+    equips.forEach(p => { cnt[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+                                         j1:0, jpodio:0, jult:0, jult3:0 }; });
+
+    jugadas.forEach(jEnd => {
+      const pts = {};
+      equips.forEach(p => { pts[p.id] = 0; });
+      ms.filter(m => m.jornada <= jEnd && m.pts_local !== null && m.pts_visitante !== null)
+        .forEach(m => {
+          if (pts[m.local_id]    === undefined || pts[m.visitante_id] === undefined) return;
+          const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+          if (gl > gv)        { pts[m.local_id]    += 3; }
+          else if (gl === gv) { pts[m.local_id]    += 1; pts[m.visitante_id] += 1; }
+          else                { pts[m.visitante_id] += 3; }
+        });
+      const arr = equips.map(p => ({ id: p.id, pts: pts[p.id] || 0 }));
+      arr.forEach(t => {
+        const above = arr.filter(o => o.pts > t.pts).length;
+        const below = arr.filter(o => o.pts < t.pts).length;
+        if (above === 0) cnt[t.id].j1++;
+        if (above < 3)  cnt[t.id].jpodio++;
+        if (below === 0) cnt[t.id].jult++;
+        if (below < 3)  cnt[t.id].jult3++;
+      });
+    });
+    return Object.values(cnt).sort((a, b) => b.j1 - a.j1 || b.jpodio - a.jpodio);
+  };
+
   const PartidoFila = ({ m }) => {
     const L = nomMap[m.local_id] || {};
     const V = nomMap[m.visitante_id] || {};
@@ -5846,7 +5924,7 @@ function LigaH2H({ federacion, participantes }) {
           {/* Sub-tabs: General / Local / Visitante */}
           <div className="card" style={{paddingBottom:'.6rem'}}>
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
-              {[['general','General'],['local','Local'],['visitante','Visitante']].map(([k,l]) => (
+              {[['general','General'],['local','Local'],['visitante','Visitante'],['posiciones','Posiciones']].map(([k,l]) => (
                 <button key={k} onClick={() => setSubTabClasif(k)}
                         style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
                                 cursor:'pointer', fontWeight: subTabClasif===k ? 700 : 400,
@@ -5859,25 +5937,53 @@ function LigaH2H({ federacion, participantes }) {
             </div>
           </div>
 
-          {hasDivs
-            ? divIds.map(divId => {
-                const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                const rows = subTabClasif === 'general'
-                  ? computeClasif(divId)
-                  : computeClasifSide(divId, subTabClasif);
-                return (
-                  <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                    <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
-                    <ClasifTable rows={rows} />
-                  </div>
-                );
-              })
-            : (() => {
-                const rows = subTabClasif === 'general'
-                  ? computeClasif(null)
-                  : computeClasifSide(null, subTabClasif);
-                return <div className="card"><ClasifTable rows={rows} /></div>;
-              })()
+          {subTabClasif !== 'posiciones'
+            ? (hasDivs
+                ? divIds.map(divId => {
+                    const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                    const rows = subTabClasif === 'general'
+                      ? computeClasif(divId)
+                      : computeClasifSide(divId, subTabClasif);
+                    return (
+                      <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
+                        <ClasifTable rows={rows} />
+                      </div>
+                    );
+                  })
+                : (() => {
+                    const rows = subTabClasif === 'general'
+                      ? computeClasif(null)
+                      : computeClasifSide(null, subTabClasif);
+                    return <div className="card"><ClasifTable rows={rows} /></div>;
+                  })()
+              )
+            : (hasDivs
+                ? divIds.map(divId => {
+                    const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                    const rows = computePosHistorial(divId);
+                    return (
+                      <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.5rem'}}>{nombre}</h2>
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          Contador de jornadas en cada posición tras acumular los resultados de cada jornada (dense rank: en caso de empate a puntos, todos comparten la misma posición).
+                        </p>
+                        <PosHistorialTable rows={rows} />
+                      </div>
+                    );
+                  })
+                : (() => {
+                    const rows = computePosHistorial(null);
+                    return (
+                      <div className="card">
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          Contador de jornadas en cada posición tras acumular los resultados de cada jornada (dense rank: en caso de empate a puntos, todos comparten la misma posición).
+                        </p>
+                        <PosHistorialTable rows={rows} />
+                      </div>
+                    );
+                  })()
+              )
           }
         </>
       )}

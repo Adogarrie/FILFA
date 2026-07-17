@@ -6921,6 +6921,16 @@ function LigaH2H({ federacion, participantes }) {
 
 
 // ── ADMIN — LIGA H2H ───────────────────────────────────────────
+const BAREMO_DEFAULT = [[0,35,0],[36,44,1],[45,53,2],[54,62,3],[63,71,4],[72,80,5],[81,89,6],[90,98,7],[99,107,8]];
+
+function ptsToGoles(pts, baremo) {
+  for (let i = 0; i < baremo.length; i++) {
+    const [min, max, g] = baremo[i];
+    if (pts >= min && (pts <= max || i === baremo.length - 1)) return g;
+  }
+  return 0;
+}
+
 function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const [h2hOn,      setH2hOn]      = useState(!!federacion?.h2h_habilitado);
   const [partidos,   setPartidos]   = useState([]);
@@ -6935,6 +6945,14 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const CRITERIOS_H2H = { h2h: 'Gol average particular', gf: 'Goles a favor', dif: 'Diferencia de goles' };
   const parsarOrden = (val) => { try { return JSON.parse(val || '["h2h","gf","dif"]'); } catch { return ['h2h','gf','dif']; } };
   const [desempateOrden, setDesempateOrden] = useState(() => parsarOrden(federacion?.h2h_desempate_orden));
+  // Fantasy ↔ H2H
+  const parsarBaremo = (val) => { try { return JSON.parse(val || 'null') || BAREMO_DEFAULT; } catch { return BAREMO_DEFAULT; } };
+  const [jornadaConfig, setJornadaConfig] = useState({});  // { jornada_h2h: jornada_fantasy|null }
+  const [baremo,        setBaremo]        = useState(() => parsarBaremo(federacion?.h2h_baremo));
+  const [ptsLocalV1,    setPtsLocalV1]    = useState(federacion?.h2h_pts_local_v1 ?? 5);
+  const [ptsLocalV2,    setPtsLocalV2]    = useState(federacion?.h2h_pts_local_v2 ?? 5);
+  const [calculando,    setCalculando]    = useState(null);
+  const [msgCfg,        setMsgCfg]        = useState('');
 
   // Agrupar participantes por división (calculado una sola vez en render)
   const grupos = React.useMemo(() => {
@@ -6962,7 +6980,70 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     setResultados(res);
   };
 
-  useEffect(() => { cargar(); }, [federacion?.id]);
+  useEffect(() => { if (federacion?.id) { cargar(); cargarConfig(); } }, [federacion?.id]);
+
+  const cargarConfig = async () => {
+    const { data } = await sb.from('h2h_jornada_config')
+      .select('jornada_h2h, jornada_fantasy')
+      .eq('federacion_id', federacion.id);
+    const cfg = {};
+    (data || []).forEach(r => { cfg[r.jornada_h2h] = r.jornada_fantasy; });
+    setJornadaConfig(cfg);
+  };
+
+  const setJornadaFantasy = async (j_h2h, raw) => {
+    const val = raw === '' ? null : Number(raw);
+    await sb.from('h2h_jornada_config').upsert(
+      { federacion_id: federacion.id, jornada_h2h: j_h2h, jornada_fantasy: val },
+      { onConflict: 'federacion_id,jornada_h2h' }
+    );
+    setJornadaConfig(prev => ({ ...prev, [j_h2h]: val }));
+  };
+
+  const guardarBaremo = async () => {
+    const { error } = await sb.from('federaciones')
+      .update({ h2h_baremo: JSON.stringify(baremo) }).eq('id', federacion.id);
+    if (error) { setMsgCfg('Error: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, h2h_baremo: JSON.stringify(baremo) });
+    setMsgCfg('Baremo guardado');
+    setTimeout(() => setMsgCfg(''), 2500);
+  };
+
+  const guardarPtsLocal = async () => {
+    const { error } = await sb.from('federaciones')
+      .update({ h2h_pts_local_v1: ptsLocalV1, h2h_pts_local_v2: ptsLocalV2 })
+      .eq('id', federacion.id);
+    if (error) { setMsgCfg('Error: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, h2h_pts_local_v1: ptsLocalV1, h2h_pts_local_v2: ptsLocalV2 });
+    setMsgCfg('Ventaja local guardada');
+    setTimeout(() => setMsgCfg(''), 2500);
+  };
+
+  const calcularDesdeFantasy = async (j_h2h) => {
+    const jornada_fantasy = jornadaConfig[j_h2h];
+    if (!jornada_fantasy) return;
+    setCalculando(j_h2h);
+    const maxJ = Math.max(...jornadas, 0);
+    const vuelta = j_h2h <= maxJ / 2 ? 1 : 2;
+    const ptsLocal = vuelta === 1 ? ptsLocalV1 : ptsLocalV2;
+    const partIds = participantes.map(p => p.id);
+    const { data: clsData } = await sb.from('clasificacion')
+      .select('participante_id, puntos_jornada')
+      .eq('jornada', jornada_fantasy)
+      .in('participante_id', partIds);
+    const ptsMap = {};
+    (clsData || []).forEach(r => { ptsMap[r.participante_id] = r.puntos_jornada ?? 0; });
+    const ms = partidos.filter(p => p.jornada === j_h2h);
+    await Promise.all(ms.map(m => {
+      const gl = ptsToGoles((ptsMap[m.local_id] ?? 0) + ptsLocal, baremo);
+      const gv = ptsToGoles(ptsMap[m.visitante_id] ?? 0, baremo);
+      return sb.from('h2h_partidos').update({ pts_local: gl, pts_visitante: gv }).eq('id', m.id);
+    }));
+    setCalculando(null);
+    await cargar();
+    setMsg(`J${j_h2h} calculada desde jornada fantasy ${jornada_fantasy}`);
+    setTimeout(() => setMsg(''), 3000);
+  };
 
   const moverCrit = (idx, dir) => {
     const arr = [...desempateOrden];
@@ -7134,10 +7215,13 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const [copiadoJ, setCopiadoJ] = useState(null);
 
   const generarPlantillaH2H = (j) => {
+    const maxJ = Math.max(...jornadas, 0);
+    const vuelta = j <= maxJ / 2 ? 1 : 2;
+    const ptsL = vuelta === 1 ? ptsLocalV1 : ptsLocalV2;
     const ms = partidos.filter(p => p.jornada === j);
     const lineas = [`EN DIRECTO J${j}`];
     ms.forEach((m, i) => {
-      lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} 0 (5) - 0 (0) ${nomMap[m.visitante_id] || '—'}`);
+      lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} 0 (${ptsL}) - 0 (0) ${nomMap[m.visitante_id] || '—'}`);
     });
     return lineas.join('\n');
   };
@@ -7212,6 +7296,95 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
             ))}
           </div>
           <button className="btn-ok" onClick={guardarDesempate}>Guardar orden</button>
+        </div>
+
+        {/* ── Baremo de puntos ── */}
+        <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+          <div style={{fontWeight:700, marginBottom:'.2rem'}}>Baremo de puntos fantasy → goles H2H</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Define cuántos goles obtiene un equipo según sus puntos fantasy. El último tramo aplica a todo lo que supere el máximo.
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table style={{borderCollapse:'collapse', fontSize:'.87rem', width:'100%', maxWidth:380}}>
+              <thead>
+                <tr style={{borderBottom:'2px solid var(--borde)'}}>
+                  <th style={{padding:'.3rem .5rem', textAlign:'center'}}>Pts mín</th>
+                  <th style={{padding:'.3rem .5rem', textAlign:'center'}}>Pts máx</th>
+                  <th style={{padding:'.3rem .5rem', textAlign:'center'}}>Goles</th>
+                  <th style={{padding:'.3rem .5rem'}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {baremo.map(([min, max, g], i) => (
+                  <tr key={i} style={{borderBottom:'1px solid var(--borde)'}}>
+                    <td style={{padding:'.25rem .4rem'}}>
+                      <input type="number" value={min} min={0}
+                             onChange={e => setBaremo(b => b.map((r,j) => j===i ? [Number(e.target.value), r[1], r[2]] : r))}
+                             style={{width:70, textAlign:'center', padding:'.2rem', border:'1.5px solid var(--borde)',
+                                     borderRadius:6, fontSize:'.86rem', fontVariantNumeric:'tabular-nums'}} />
+                    </td>
+                    <td style={{padding:'.25rem .4rem'}}>
+                      {i < baremo.length - 1
+                        ? <input type="number" value={max} min={0}
+                                 onChange={e => setBaremo(b => b.map((r,j) => j===i ? [r[0], Number(e.target.value), r[2]] : r))}
+                                 style={{width:70, textAlign:'center', padding:'.2rem', border:'1.5px solid var(--borde)',
+                                         borderRadius:6, fontSize:'.86rem', fontVariantNumeric:'tabular-nums'}} />
+                        : <span style={{padding:'0 .5rem', color:'var(--texto2)', fontSize:'.82rem'}}>∞</span>
+                      }
+                    </td>
+                    <td style={{padding:'.25rem .4rem'}}>
+                      <input type="number" value={g} min={0}
+                             onChange={e => setBaremo(b => b.map((r,j) => j===i ? [r[0], r[1], Number(e.target.value)] : r))}
+                             style={{width:60, textAlign:'center', padding:'.2rem', border:'1.5px solid var(--borde)',
+                                     borderRadius:6, fontSize:'.86rem', fontVariantNumeric:'tabular-nums'}} />
+                    </td>
+                    <td style={{padding:'.25rem .4rem'}}>
+                      <button onClick={() => setBaremo(b => b.filter((_, j) => j !== i))}
+                              style={{padding:'.15rem .4rem', border:'1.5px solid var(--borde)', borderRadius:5,
+                                      background:'var(--fondo)', cursor:'pointer', fontSize:'.8rem', color:'#dc3545'}}>
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:'flex', gap:'.6rem', marginTop:'.6rem', flexWrap:'wrap', alignItems:'center'}}>
+            <button onClick={() => setBaremo(b => [...b, [b[b.length-1]?.[1]+1 ?? 0, b[b.length-1]?.[1]+9 ?? 9, b[b.length-1]?.[2]+1 ?? 0]])}
+                    style={{padding:'.3rem .7rem', border:'1.5px solid var(--borde)', borderRadius:6,
+                            background:'var(--fondo)', cursor:'pointer', fontSize:'.84rem'}}>
+              + Tramo
+            </button>
+            <button onClick={() => setBaremo(BAREMO_DEFAULT)}
+                    style={{padding:'.3rem .7rem', border:'1.5px solid var(--borde)', borderRadius:6,
+                            background:'var(--fondo)', cursor:'pointer', fontSize:'.84rem'}}>
+              Restaurar por defecto
+            </button>
+            <button className="btn-ok" onClick={guardarBaremo}>Guardar baremo</button>
+            {msgCfg && <span style={{fontSize:'.82rem', color:'var(--verde)', fontWeight:600}}>{msgCfg}</span>}
+          </div>
+        </div>
+
+        {/* ── Ventaja local por vuelta ── */}
+        <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+          <div style={{fontWeight:700, marginBottom:'.2rem'}}>Ventaja local (pts extra)</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Puntos que se suman al equipo local antes de aplicar el baremo. 0 = sin ventaja. Configurable por vuelta.
+          </div>
+          <div style={{display:'flex', gap:'1.5rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+            {[['Vuelta 1', ptsLocalV1, setPtsLocalV1], ['Vuelta 2', ptsLocalV2, setPtsLocalV2]].map(([label, val, setter]) => (
+              <label key={label} style={{display:'flex', flexDirection:'column', gap:'.3rem', fontSize:'.87rem', fontWeight:600}}>
+                {label}
+                <input type="number" value={val} min={0}
+                       onChange={e => setter(Number(e.target.value))}
+                       style={{width:70, padding:'.3rem .5rem', border:'1.5px solid var(--borde)',
+                               borderRadius:7, fontSize:'.95rem', textAlign:'center',
+                               fontVariantNumeric:'tabular-nums'}} />
+              </label>
+            ))}
+            <button className="btn-ok" onClick={guardarPtsLocal} style={{alignSelf:'flex-end'}}>Guardar</button>
+          </div>
         </div>
 
         {/* ── Opciones de generación ── */}
@@ -7320,11 +7493,34 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
             const ms = partidos.filter(p => p.jornada === j);
             return (
               <div key={j} style={{marginBottom:'1.25rem'}}>
-                <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginBottom:'.4rem'}}>
+                <div style={{display:'flex', alignItems:'center', gap:'.6rem', marginBottom:'.4rem', flexWrap:'wrap'}}>
                   <span style={{fontWeight:700, fontSize:'.82rem', color:'var(--verde)',
-                               letterSpacing:'.05em'}}>
+                               letterSpacing:'.05em', minWidth:80}}>
                     JORNADA {j}
                   </span>
+                  {/* Asignación de jornada fantasy */}
+                  <label style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.78rem', color:'var(--texto2)'}}>
+                    J. fantasy:
+                    <select value={jornadaConfig[j] ?? ''}
+                            onChange={e => setJornadaFantasy(j, e.target.value)}
+                            style={{padding:'.15rem .35rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                    fontSize:'.78rem', background:'var(--fondo)', color:'var(--texto)'}}>
+                      <option value="">—</option>
+                      {Array.from({length:38}, (_, i) => i+1).map(jf => (
+                        <option key={jf} value={jf}>{jf}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {/* Calcular desde fantasy */}
+                  {jornadaConfig[j] && (
+                    <button onClick={() => calcularDesdeFantasy(j)}
+                            disabled={calculando === j}
+                            style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
+                                    border:'1.5px solid #3b82f6', background: calculando===j ? '#eff6ff' : '#eff6ff',
+                                    color:'#1d4ed8', cursor:'pointer', fontWeight:600}}>
+                      {calculando === j ? 'Calculando…' : '⚡ Calcular'}
+                    </button>
+                  )}
                   <button onClick={() => copiarPlantilla(j)}
                           style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
                                   border:'1.5px solid var(--borde)', background:'var(--fondo)',

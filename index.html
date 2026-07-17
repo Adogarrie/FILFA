@@ -5387,10 +5387,11 @@ function App() {
 
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes }) {
-  const [tab,      setTab]      = useState('calendario');
-  const [partidos, setPartidos] = useState([]);
-  const [jornada,  setJornada]  = useState(1);
-  const [divisiones, setDivisiones] = useState([]);
+  const [tab,          setTab]         = useState('calendario');
+  const [subTabClasif, setSubTabClasif] = useState('general');
+  const [partidos,     setPartidos]    = useState([]);
+  const [jornada,      setJornada]     = useState(1);
+  const [divisiones,   setDivisiones]  = useState([]);
 
   useEffect(() => {
     if (!sb) return;
@@ -5512,6 +5513,31 @@ function LigaH2H({ federacion, participantes }) {
     return result;
   };
 
+  // Clasificación solo con partidos jugados como local o como visitante
+  const computeClasifSide = (divId, side) => {
+    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const stats = {};
+    equips.forEach(p => {
+      stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+    });
+    const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    ms.forEach(m => {
+      if (m.pts_local === null || m.pts_visitante === null) return;
+      const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+      const T = stats[side === 'local' ? m.local_id : m.visitante_id];
+      if (!T) return;
+      const tf = side === 'local' ? gl : gv;
+      const tc = side === 'local' ? gv : gl;
+      T.pj++; T.gf += tf; T.gc += tc;
+      if (tf > tc)      { T.pg++; T.pts += 3; }
+      else if (tf === tc) { T.pe++; T.pts++; }
+      else              { T.pp++; }
+    });
+    return Object.values(stats).sort((a, b) =>
+      b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
+  };
+
   const PartidoFila = ({ m }) => {
     const L = nomMap[m.local_id] || {};
     const V = nomMap[m.visitante_id] || {};
@@ -5542,8 +5568,7 @@ function LigaH2H({ federacion, participantes }) {
     );
   };
 
-  const ClasifTable = ({ divId }) => {
-    const rows = computeClasif(divId);
+  const ClasifTable = ({ rows }) => {
     return (
       <div style={{overflowX:'auto'}}>
         <table>
@@ -5621,17 +5646,44 @@ function LigaH2H({ federacion, participantes }) {
       )}
 
       {tab === 'clasificacion' && (
-        hasDivs
-          ? divIds.map(divId => {
-              const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-              return (
-                <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                  <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
-                  <ClasifTable divId={divId} />
-                </div>
-              );
-            })
-          : <div className="card"><ClasifTable divId={null} /></div>
+        <>
+          {/* Sub-tabs: General / Local / Visitante */}
+          <div className="card" style={{paddingBottom:'.6rem'}}>
+            <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
+              {[['general','General'],['local','Local'],['visitante','Visitante']].map(([k,l]) => (
+                <button key={k} onClick={() => setSubTabClasif(k)}
+                        style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
+                                cursor:'pointer', fontWeight: subTabClasif===k ? 700 : 400,
+                                border: '1.5px solid ' + (subTabClasif===k ? 'var(--verde)' : 'var(--borde)'),
+                                background: subTabClasif===k ? 'var(--verde)' : 'var(--fondo)',
+                                color: subTabClasif===k ? '#fff' : 'var(--texto)'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {hasDivs
+            ? divIds.map(divId => {
+                const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
+                const rows = subTabClasif === 'general'
+                  ? computeClasif(divId)
+                  : computeClasifSide(divId, subTabClasif);
+                return (
+                  <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
+                    <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
+                    <ClasifTable rows={rows} />
+                  </div>
+                );
+              })
+            : (() => {
+                const rows = subTabClasif === 'general'
+                  ? computeClasif(null)
+                  : computeClasifSide(null, subTabClasif);
+                return <div className="card"><ClasifTable rows={rows} /></div>;
+              })()
+          }
+        </>
       )}
     </div>
   );

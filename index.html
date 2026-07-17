@@ -394,14 +394,16 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     const jug = fp.jugadores;
     const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
     if (fp.traspaso_de_id) {
-      const refund = fmt(fp.precio_compra * 0.8);
-      if (!confirm(`¿Descartar el traspaso de ${nom}?\nSe reembolsará el 80% (${refund}).\nEl jugador volverá a ${fp.origen?.nombre || 'su equipo de origen'} si tiene plaza libre, o quedará libre.`)) return;
+      const pct = federacion?.pct_venta_mercado ?? 100;
+      const refund = fmt(Math.round(fp.precio_compra * pct / 100));
+      if (!confirm(`¿Descartar el traspaso de ${nom}?\nSe reembolsará el ${pct}% (${refund}).\nEl jugador volverá a ${fp.origen?.nombre || 'su equipo de origen'} si tiene plaza libre, o quedará libre.`)) return;
       setProcesandoPend(fp.id);
       const { data, error } = await sb.rpc('anular_traspaso_pendiente', { p_pendiente_id: fp.id, p_federacion_id: federacion?.id });
       setProcesandoPend(null);
       if (error || !data?.ok) { alert('Error: ' + (error?.message || data?.error || 'desconocido')); return; }
     } else {
-      if (!confirm(`¿Anular el fichaje pendiente de ${nom}?\nSe reembolsará el 80% del precio pagado (${fmt(fp.precio_compra * 0.8)}).`)) return;
+      const pct2 = federacion?.pct_venta_mercado ?? 100;
+      if (!confirm(`¿Anular el fichaje pendiente de ${nom}?\nSe reembolsará el ${pct2}% del precio pagado (${fmt(Math.round(fp.precio_compra * pct2 / 100))}).`)) return;
       setProcesandoPend(fp.id);
       const { error } = await sb.rpc('anular_fichaje_pendiente', { p_pendiente_id: fp.id, p_federacion_id: federacion?.id });
       setProcesandoPend(null);
@@ -3262,12 +3264,13 @@ function AdminFichajesPendientes({ participantes, federacion }) {
     const jug = pend.jugadores;
     const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
     const esTraspaso = !!pend.traspaso_de_id;
-    const refund80   = fmt(pend.precio_compra * 0.8);
+    const pct    = federacion?.pct_venta_mercado ?? 100;
+    const refund = fmt(Math.round(pend.precio_compra * pct / 100));
     const msg = esTraspaso
       ? `¿Descartar el traspaso de ${nom} para ${pend.participantes?.nombre}?\n` +
-        `Se reembolsará el 80% del traspaso (${refund80}).\n` +
+        `Se reembolsará el ${pct}% del traspaso (${refund}).\n` +
         `El jugador volverá a ${pend.origen?.nombre || 'su equipo de origen'} si tiene plaza libre, o quedará libre.`
-      : `¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe reembolsará el 80% del precio pagado (${fmt(pend.precio_compra * 0.8)}).`;
+      : `¿Anular el fichaje pendiente de ${nom} para ${pend.participantes?.nombre}?\nSe reembolsará el ${pct}% del precio pagado (${refund}).`;
     if (!confirm(msg)) return;
     setProcesando(pend.id);
     if (esTraspaso) {

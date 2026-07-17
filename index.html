@@ -5441,17 +5441,15 @@ function LigaH2H({ federacion, participantes }) {
       else               { V.pg++; V.pts += 3; L.pp++; }
     });
 
-    // Desempate: 1) gol average particular, 2) GF total, 3) DIF total
+    // Mini-tabla H2H entre un conjunto de equipos
     const calcH2H = (ids) => {
       const idSet = new Set(ids);
       const h = {};
-      ids.forEach(id => { h[id] = { pts: 0, gf: 0, gc: 0 }; });
+      ids.forEach(id => { h[id] = { pts: 0 }; });
       ms.forEach(m => {
         if (m.pts_local === null || m.pts_visitante === null) return;
         if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
         const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
-        h[m.local_id].gf    += gl; h[m.local_id].gc    += gv;
-        h[m.visitante_id].gf += gv; h[m.visitante_id].gc += gl;
         if (gl > gv)        { h[m.local_id].pts     += 3; }
         else if (gl === gv) { h[m.local_id].pts     += 1; h[m.visitante_id].pts += 1; }
         else                { h[m.visitante_id].pts += 3; }
@@ -5459,31 +5457,51 @@ function LigaH2H({ federacion, participantes }) {
       return h;
     };
 
-    const rows = Object.values(stats);
-    const byPts = {};
-    rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
+    // Ordena un grupo de equipos empatados de forma recursiva.
+    // Para h2h: si el criterio separa a algunos pero no a todos, los subgrupos
+    // aún empatados vuelven a intentar h2h con menos equipos (y luego el resto).
+    // Si el criterio no separa a nadie, se pasa al siguiente.
+    const sortGroup = (group, criterios) => {
+      if (group.length <= 1 || !criterios.length) return group;
+      const [first, ...rest] = criterios;
+
+      let scoreOf;
+      if      (first === 'h2h') { const h = calcH2H(group.map(r => r.id)); scoreOf = r => h[r.id].pts; }
+      else if (first === 'gf')  scoreOf = r => r.gf;
+      else if (first === 'dif') scoreOf = r => r.gf - r.gc;
+      else                      return sortGroup(group, rest);
+
+      const byScore = {};
+      group.forEach(r => { const s = scoreOf(r); (byScore[s] = byScore[s] || []).push(r); });
+      const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
+
+      // Este criterio no separa a nadie → pasar al siguiente
+      if (scores.length === 1) return sortGroup(group, rest);
+
+      // Hay separación: ordenar sub-grupos
+      const out = [];
+      scores.forEach(s => {
+        const sub = byScore[s];
+        if (sub.length === 1) { out.push(sub[0]); return; }
+        // Para h2h: reiniciar con todos los criterios en el sub-grupo más pequeño.
+        // Para el resto: continuar con los criterios restantes.
+        out.push(...sortGroup(sub, first === 'h2h' ? criterios : rest));
+      });
+      return out;
+    };
 
     const criterios = (() => {
       try { return JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif"]'); }
       catch { return ['h2h','gf','dif']; }
     })();
 
+    const rows = Object.values(stats);
+    const byPts = {};
+    rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
+
     const result = [];
     Object.keys(byPts).map(Number).sort((a, b) => b - a).forEach(pts => {
-      const group = byPts[pts];
-      if (group.length === 1) { result.push(group[0]); return; }
-      const h2h = calcH2H(group.map(r => r.id));
-      group.sort((a, b) => {
-        for (const crit of criterios) {
-          let diff = 0;
-          if      (crit === 'h2h') diff = h2h[b.id].pts - h2h[a.id].pts;
-          else if (crit === 'gf')  diff = b.gf - a.gf;
-          else if (crit === 'dif') diff = (b.gf - b.gc) - (a.gf - a.gc);
-          if (diff !== 0) return diff;
-        }
-        return 0;
-      });
-      group.forEach(r => result.push(r));
+      result.push(...sortGroup(byPts[pts], criterios));
     });
     return result;
   };

@@ -2116,6 +2116,12 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
               </div>
             </div>
             <div>
+              <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Valor de plantilla</div>
+              <div style={{fontSize:'1.4rem', fontWeight:800}}>
+                {jugadores ? fmt(lista.reduce((s, j) => s + (j.valor || 0), 0)) : '…'}
+              </div>
+            </div>
+            <div>
               <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
               <div style={{fontSize:'1.4rem', fontWeight:800}}>{jugadores ? lista.length : '…'}</div>
             </div>

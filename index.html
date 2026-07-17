@@ -1576,6 +1576,7 @@ function CalendarioFantasy({ participantes, federacion }) {
   const [abierto, setAbierto]         = useState(null);
   const [detalle, setDetalle]         = useState({});
   const [valoresPlantilla, setValoresPlantilla] = useState({});
+  const [jornadaAcum, setJornadaAcum] = useState(null); // null = total temporada
 
   useEffect(() => {
     if (!sb) return;
@@ -1665,26 +1666,40 @@ function CalendarioFantasy({ participantes, federacion }) {
     });
   });
 
-  const filasAcum = [...participantes].map(p => {
-    const regs = clas.filter(r => r.participante_id === p.id);
-    const scores = regs.map(r => r.puntos_jornada).sort((a, b) => b - a);
-    return {
-      id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
-      total: regs.reduce((s, r) => s + r.puntos_jornada, 0),
-      jornadas: regs.length, scores,
-      jGanadas: jPos1Map[p.id] || 0,
-      valorPlt: valoresPlantilla[p.id] || 0,
-    };
-  }).sort((a, b) => {
-    if (b.total !== a.total) return b.total - a.total;
-    const len = Math.max(a.scores.length, b.scores.length);
-    for (let i = 0; i < len; i++) {
-      const pa = a.scores[i] ?? -Infinity, pb = b.scores[i] ?? -Infinity;
-      if (pb !== pa) return pb - pa;
-    }
-    if (b.jGanadas !== a.jGanadas) return b.jGanadas - a.jGanadas;
-    return b.valorPlt - a.valorPlt;
-  });
+  const computeAcumRows = (clasFiltradas) => {
+    const j1MapLocal = {};
+    [...new Set(clasFiltradas.map(r => r.jornada))].forEach(j => {
+      const rowsJ = clasFiltradas.filter(r => r.jornada === j);
+      if (!rowsJ.length) return;
+      const maxPts = Math.max(...rowsJ.map(r => r.puntos_jornada));
+      rowsJ.forEach(r => {
+        if (r.puntos_jornada === maxPts)
+          j1MapLocal[r.participante_id] = (j1MapLocal[r.participante_id] || 0) + 1;
+      });
+    });
+    return [...participantes].map(p => {
+      const regs = clasFiltradas.filter(r => r.participante_id === p.id);
+      const scores = regs.map(r => r.puntos_jornada).sort((a, b) => b - a);
+      return {
+        id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
+        total: regs.reduce((s, r) => s + r.puntos_jornada, 0),
+        jornadas: regs.length, scores,
+        jGanadas: j1MapLocal[p.id] || 0,
+        valorPlt: valoresPlantilla[p.id] || 0,
+      };
+    }).sort((a, b) => {
+      if (b.total !== a.total) return b.total - a.total;
+      const len = Math.max(a.scores.length, b.scores.length);
+      for (let i = 0; i < len; i++) {
+        const pa = a.scores[i] ?? -Infinity, pb = b.scores[i] ?? -Infinity;
+        if (pb !== pa) return pb - pa;
+      }
+      if (b.jGanadas !== a.jGanadas) return b.jGanadas - a.jGanadas;
+      return b.valorPlt - a.valorPlt;
+    });
+  };
+
+  const filasAcum = computeAcumRows(clas);
 
   // ── Estadísticas por equipo ──────────────────────────────────
   const filasEstadisticas = [...participantes].map(p => {
@@ -1819,42 +1834,71 @@ function CalendarioFantasy({ participantes, federacion }) {
         </div>
       )}
 
-      {vista === 'acumulado' && (
-        <div className="card">
-          <h2>Clasificación acumulada</h2>
-          {filasAcum.every(e => e.total === 0)
-            ? <div className="empty">Aún no hay puntuaciones introducidas.</div>
-            : <table>
-                <thead>
-                  <tr>
-                    <th>Pos</th><th>Equipo</th>
-                    <th style={{textAlign:'right'}}>Total pts</th>
-                    <th style={{textAlign:'right'}}>Jornadas</th>
-                    <th style={{textAlign:'right'}}>Media</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filasAcum.map((e, i) => (
-                    <tr key={e.id} style={{background: i===0?'rgba(26,127,55,.06)':undefined}}>
-                      <td><Medalla pos={i + 1} /></td>
-                      <td style={{fontWeight:600}}>
-                        <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                          {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:20, height:20, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
-                          {e.nombre}
-                        </span>
-                      </td>
-                      <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.total}</td>
-                      <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.jornadas}</td>
-                      <td style={{textAlign:'right', color:'var(--texto2)'}}>
-                        {e.jornadas > 0 ? (e.total / e.jornadas).toFixed(1) : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-          }
-        </div>
-      )}
+      {vista === 'acumulado' && (() => {
+        const clasFiltradas = jornadaAcum !== null ? clas.filter(r => r.jornada <= jornadaAcum) : clas;
+        const filas = jornadaAcum !== null ? computeAcumRows(clasFiltradas) : filasAcum;
+        const titulo = jornadaAcum !== null ? `Clasificación hasta J${jornadaAcum}` : 'Clasificación acumulada';
+        return (
+          <>
+            <div className="card" style={{paddingBottom:'.6rem'}}>
+              <div style={{display:'flex', gap:'.25rem', flexWrap:'wrap', alignItems:'center'}}>
+                <button onClick={() => setJornadaAcum(null)}
+                        style={{padding:'.22rem .6rem', borderRadius:6, fontSize:'.75rem', cursor:'pointer',
+                                border:'1.5px solid ' + (jornadaAcum===null ? 'var(--verde)' : 'var(--borde)'),
+                                background: jornadaAcum===null ? 'var(--verde)' : 'var(--fondo)',
+                                color:      jornadaAcum===null ? '#fff'         : 'var(--texto)',
+                                fontWeight: jornadaAcum===null ? 700            : 400}}>
+                  Total
+                </button>
+                {jornadasConDatos.map(j => (
+                  <button key={j} onClick={() => setJornadaAcum(j)}
+                          style={{padding:'.22rem .5rem', borderRadius:6, fontSize:'.75rem', cursor:'pointer',
+                                  border:'1.5px solid ' + (jornadaAcum===j ? 'var(--verde)' : 'var(--borde)'),
+                                  background: jornadaAcum===j ? 'var(--verde)' : 'var(--fondo)',
+                                  color:      jornadaAcum===j ? '#fff'         : 'var(--texto)',
+                                  fontWeight: jornadaAcum===j ? 700            : 400}}>
+                    J{j}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="card">
+              <h2>{titulo}</h2>
+              {filas.every(e => e.total === 0)
+                ? <div className="empty">Aún no hay puntuaciones introducidas.</div>
+                : <table>
+                    <thead>
+                      <tr>
+                        <th>Pos</th><th>Equipo</th>
+                        <th style={{textAlign:'right'}}>Total pts</th>
+                        <th style={{textAlign:'right'}}>Jornadas</th>
+                        <th style={{textAlign:'right'}}>Media</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filas.map((e, i) => (
+                        <tr key={e.id} style={{background: i===0?'rgba(26,127,55,.06)':undefined}}>
+                          <td><Medalla pos={i + 1} /></td>
+                          <td style={{fontWeight:600}}>
+                            <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
+                              {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:20, height:20, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                              {e.nombre}
+                            </span>
+                          </td>
+                          <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.total}</td>
+                          <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.jornadas}</td>
+                          <td style={{textAlign:'right', color:'var(--texto2)'}}>
+                            {e.jornadas > 0 ? (e.total / e.jornadas).toFixed(1) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+              }
+            </div>
+          </>
+        );
+      })()}
 
       {vista === 'estadisticas' && (
         clas.length === 0

@@ -6625,10 +6625,13 @@ function LigaH2H({ federacion, participantes }) {
     return result;
   };
 
-  // Clasificación solo con partidos jugados como local o como visitante
-  const computeClasifSide = (divId, side) => {
+  // Clasificación solo con partidos de campo neutro (vuelta con ventaja local = 0)
+  const computeClasifNeutro = (divId) => {
+    const maxJ   = Math.max(...partidos.map(p => p.jornada), 0);
+    const ptsV1  = federacion?.h2h_pts_local_v1 ?? 5;
+    const ptsV2  = federacion?.h2h_pts_local_v2 ?? 5;
     const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
-    const stats = {};
+    const stats  = {};
     equips.forEach(p => {
       stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
                       pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
@@ -6636,6 +6639,40 @@ function LigaH2H({ federacion, participantes }) {
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
       if (m.pts_local === null || m.pts_visitante === null) return;
+      const vuelta   = m.jornada <= maxJ / 2 ? 1 : 2;
+      const ptsLocal = vuelta === 1 ? ptsV1 : ptsV2;
+      if (ptsLocal !== 0) return;
+      const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+      const L = stats[m.local_id], V = stats[m.visitante_id];
+      if (!L || !V) return;
+      L.pj++; L.gf += gl; L.gc += gv;
+      V.pj++; V.gf += gv; V.gc += gl;
+      if (gl > gv)        { L.pg++; L.pts += 3; V.pp++; }
+      else if (gl === gv) { L.pe++; L.pts++;    V.pe++; V.pts++; }
+      else                { V.pg++; V.pts += 3; L.pp++; }
+    });
+    return Object.values(stats).sort((a, b) =>
+      b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
+  };
+
+  // Clasificación solo con partidos jugados como local o como visitante.
+  // Los partidos de una vuelta con ventaja local = 0 se consideran campo neutro y no cuentan aquí.
+  const computeClasifSide = (divId, side) => {
+    const maxJ     = Math.max(...partidos.map(p => p.jornada), 0);
+    const ptsV1    = federacion?.h2h_pts_local_v1 ?? 5;
+    const ptsV2    = federacion?.h2h_pts_local_v2 ?? 5;
+    const equips   = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const stats    = {};
+    equips.forEach(p => {
+      stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+    });
+    const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    ms.forEach(m => {
+      if (m.pts_local === null || m.pts_visitante === null) return;
+      const vuelta   = m.jornada <= maxJ / 2 ? 1 : 2;
+      const ptsLocal = vuelta === 1 ? ptsV1 : ptsV2;
+      if (ptsLocal === 0) return; // campo neutro, no computa local/visitante
       const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
       const T = stats[side === 'local' ? m.local_id : m.visitante_id];
       if (!T) return;
@@ -6832,7 +6869,9 @@ function LigaH2H({ federacion, participantes }) {
           {/* Sub-tabs: General / Local / Visitante */}
           <div className="card" style={{paddingBottom:'.6rem'}}>
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
-              {[['general','General'],['local','Local'],['visitante','Visitante'],['historial','Por jornada']].map(([k,l]) => (
+              {[['general','General'],['local','Local'],['visitante','Visitante'],
+                ...((federacion?.h2h_pts_local_v1 === 0 || federacion?.h2h_pts_local_v2 === 0) ? [['neutro','Neutro']] : []),
+                ['historial','Por jornada']].map(([k,l]) => (
                 <button key={k} onClick={() => setSubTabClasif(k)}
                         style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
                                 cursor:'pointer', fontWeight: subTabClasif===k ? 700 : 400,
@@ -6895,9 +6934,9 @@ function LigaH2H({ federacion, participantes }) {
             : (hasDivs
                 ? divIds.map(divId => {
                     const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                    const rows = subTabClasif === 'general'
-                      ? computeClasif(divId)
-                      : computeClasifSide(divId, subTabClasif);
+                    const rows = subTabClasif === 'general'   ? computeClasif(divId)
+                               : subTabClasif === 'neutro'    ? computeClasifNeutro(divId)
+                               : computeClasifSide(divId, subTabClasif);
                     return (
                       <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
                         <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
@@ -6906,9 +6945,9 @@ function LigaH2H({ federacion, participantes }) {
                     );
                   })
                 : (() => {
-                    const rows = subTabClasif === 'general'
-                      ? computeClasif(null)
-                      : computeClasifSide(null, subTabClasif);
+                    const rows = subTabClasif === 'general'   ? computeClasif(null)
+                               : subTabClasif === 'neutro'    ? computeClasifNeutro(null)
+                               : computeClasifSide(null, subTabClasif);
                     return <div className="card"><ClasifTable rows={rows} /></div>;
                   })()
               )

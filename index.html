@@ -6503,6 +6503,7 @@ function LigaH2H({ federacion, participantes }) {
   const [jornada,          setJornada]          = useState(1);
   const [jornadaHistorial, setJornadaHistorial] = useState(1);
   const [divisiones,       setDivisiones]       = useState([]);
+  const [vueltasExtra,     setVueltasExtra]     = useState([]);
 
   useEffect(() => {
     if (!sb) return;
@@ -6512,15 +6513,18 @@ function LigaH2H({ federacion, participantes }) {
 
   useEffect(() => {
     if (!sb || !federacion?.id || !federacion?.h2h_habilitado) return;
-    sb.from('h2h_partidos')
-      .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
-      .eq('federacion_id', federacion.id)
-      .order('jornada')
-      .then(({ data }) => {
-        const p = data || [];
-        setPartidos(p);
-        if (p.length > 0) setJornada(1);
-      });
+    Promise.all([
+      sb.from('h2h_partidos')
+        .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
+        .eq('federacion_id', federacion.id).order('jornada'),
+      sb.from('h2h_vueltas_extra')
+        .select('vuelta_num, basada_en, pts_local, jornada_inicio')
+        .eq('federacion_id', federacion.id).order('vuelta_num'),
+    ]).then(([{ data: p }, { data: ve }]) => {
+      setPartidos(p || []);
+      setVueltasExtra(ve || []);
+      if ((p || []).length > 0) setJornada(1);
+    });
   }, [federacion?.id, federacion?.h2h_habilitado]);
 
   if (!federacion?.h2h_habilitado) {
@@ -6627,7 +6631,6 @@ function LigaH2H({ federacion, participantes }) {
 
   // Clasificación solo con partidos de campo neutro (vuelta con ventaja local = 0)
   const computeClasifNeutro = (divId) => {
-    const maxJ   = Math.max(...partidos.map(p => p.jornada), 0);
     const ptsV1  = federacion?.h2h_pts_local_v1 ?? 5;
     const ptsV2  = federacion?.h2h_pts_local_v2 ?? 5;
     const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
@@ -6639,8 +6642,7 @@ function LigaH2H({ federacion, participantes }) {
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
       if (m.pts_local === null || m.pts_visitante === null) return;
-      const vuelta   = m.jornada <= maxJ / 2 ? 1 : 2;
-      const ptsLocal = vuelta === 1 ? ptsV1 : ptsV2;
+      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, vueltasExtra);
       if (ptsLocal !== 0) return;
       const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
       const L = stats[m.local_id], V = stats[m.visitante_id];
@@ -6658,7 +6660,6 @@ function LigaH2H({ federacion, participantes }) {
   // Clasificación solo con partidos jugados como local o como visitante.
   // Los partidos de una vuelta con ventaja local = 0 se consideran campo neutro y no cuentan aquí.
   const computeClasifSide = (divId, side) => {
-    const maxJ     = Math.max(...partidos.map(p => p.jornada), 0);
     const ptsV1    = federacion?.h2h_pts_local_v1 ?? 5;
     const ptsV2    = federacion?.h2h_pts_local_v2 ?? 5;
     const equips   = divId ? participantes.filter(p => p.division_id === divId) : participantes;
@@ -6670,8 +6671,7 @@ function LigaH2H({ federacion, participantes }) {
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
       if (m.pts_local === null || m.pts_visitante === null) return;
-      const vuelta   = m.jornada <= maxJ / 2 ? 1 : 2;
-      const ptsLocal = vuelta === 1 ? ptsV1 : ptsV2;
+      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, vueltasExtra);
       if (ptsLocal === 0) return; // campo neutro, no computa local/visitante
       const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
       const T = stats[side === 'local' ? m.local_id : m.visitante_id];
@@ -6970,6 +6970,27 @@ function ptsToGoles(pts, baremo) {
   return 0;
 }
 
+// Determina a qué vuelta pertenece una jornada y sus puntos de local.
+// jornadasBase: total de jornadas del calendario base (sin extras).
+// vueltasExtra: array de { vuelta_num, basada_en, pts_local, jornada_inicio }.
+function getVueltaInfo(jornada, jornadasBase, ptsV1, ptsV2, vueltasExtra) {
+  const base = jornadasBase || 0;
+  if (base > 0) {
+    const porVuelta = Math.round(base / 2);
+    if (jornada <= porVuelta) return { vuelta: 1, ptsLocal: ptsV1 ?? 5 };
+    if (jornada <= base)      return { vuelta: 2, ptsLocal: ptsV2 ?? 5 };
+  }
+  // Vueltas extra: busca la de jornada_inicio más alta que sea ≤ jornada
+  const sorted = [...(vueltasExtra || [])].sort((a, b) => b.jornada_inicio - a.jornada_inicio);
+  const v = sorted.find(ve => jornada >= ve.jornada_inicio);
+  if (v) return { vuelta: v.vuelta_num, ptsLocal: v.pts_local };
+  // Fallback: si jornadasBase no está definido, usar v1/v2 dividiendo por la mitad
+  const maxFallback = Math.max(...(vueltasExtra?.map(v => v.jornada_inicio) || [0]), jornada);
+  return jornada <= maxFallback / 2
+    ? { vuelta: 1, ptsLocal: ptsV1 ?? 5 }
+    : { vuelta: 2, ptsLocal: ptsV2 ?? 5 };
+}
+
 function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const [h2hOn,      setH2hOn]      = useState(!!federacion?.h2h_habilitado);
   const [partidos,   setPartidos]   = useState([]);
@@ -6992,6 +7013,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const [ptsLocalV2,    setPtsLocalV2]    = useState(federacion?.h2h_pts_local_v2 ?? 5);
   const [calculando,    setCalculando]    = useState(null);
   const [msgCfg,        setMsgCfg]        = useState('');
+  // Vueltas extra
+  const [vueltasExtra,  setVueltasExtra]  = useState([]);
+  const [nuevaBase,     setNuevaBase]     = useState(1);   // 1 o 2
+  const [nuevaPtsLocal, setNuevaPtsLocal] = useState(5);
 
   // Agrupar participantes por división (calculado una sola vez en render)
   const grupos = React.useMemo(() => {
@@ -7022,12 +7047,76 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   useEffect(() => { if (federacion?.id) { cargar(); cargarConfig(); } }, [federacion?.id]);
 
   const cargarConfig = async () => {
-    const { data } = await sb.from('h2h_jornada_config')
-      .select('jornada_h2h, jornada_fantasy')
-      .eq('federacion_id', federacion.id);
+    const [{ data: jcData }, { data: veData }] = await Promise.all([
+      sb.from('h2h_jornada_config').select('jornada_h2h, jornada_fantasy').eq('federacion_id', federacion.id),
+      sb.from('h2h_vueltas_extra').select('*').eq('federacion_id', federacion.id).order('vuelta_num'),
+    ]);
     const cfg = {};
-    (data || []).forEach(r => { cfg[r.jornada_h2h] = r.jornada_fantasy; });
+    (jcData || []).forEach(r => { cfg[r.jornada_h2h] = r.jornada_fantasy; });
     setJornadaConfig(cfg);
+    setVueltasExtra(veData || []);
+  };
+
+  const añadirVueltaExtra = async () => {
+    const jornadasBase  = federacion?.h2h_jornadas_base;
+    if (!jornadasBase) { setMsgCfg('Genera el calendario base primero.'); return; }
+    const porVuelta     = Math.round(jornadasBase / 2);
+    const sorted        = [...vueltasExtra].sort((a, b) => a.jornada_inicio - b.jornada_inicio);
+    const ultimaJornada = sorted.length > 0
+      ? sorted[sorted.length - 1].jornada_inicio + porVuelta - 1
+      : jornadasBase;
+    const nuevaInicio   = ultimaJornada + 1;
+    const nuevaVuelta   = (sorted[sorted.length - 1]?.vuelta_num ?? 2) + 1;
+
+    // Copiar partidos de la vuelta base elegida
+    const inicioBase = nuevaBase === 1 ? 1 : porVuelta + 1;
+    const finBase    = nuevaBase === 1 ? porVuelta : jornadasBase;
+    const copias     = partidos
+      .filter(m => m.jornada >= inicioBase && m.jornada <= finBase)
+      .map(m => ({
+        federacion_id: federacion.id,
+        division_id:   m.division_id,
+        jornada:       nuevaInicio + (m.jornada - inicioBase),
+        local_id:      m.local_id,
+        visitante_id:  m.visitante_id,
+      }));
+
+    if (copias.length === 0) { setMsgCfg('No hay partidos en la vuelta base seleccionada.'); return; }
+
+    const { error: errV } = await sb.from('h2h_vueltas_extra').insert({
+      federacion_id: federacion.id, vuelta_num: nuevaVuelta,
+      basada_en: nuevaBase, pts_local: nuevaPtsLocal, jornada_inicio: nuevaInicio,
+    });
+    if (errV) { setMsgCfg('Error: ' + errV.message); return; }
+
+    const { error: errP } = await sb.from('h2h_partidos').insert(copias);
+    if (errP) {
+      await sb.from('h2h_vueltas_extra').delete().eq('federacion_id', federacion.id).eq('vuelta_num', nuevaVuelta);
+      setMsgCfg('Error al insertar partidos: ' + errP.message); return;
+    }
+
+    setMsgCfg(`Vuelta ${nuevaVuelta} añadida (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`);
+    setTimeout(() => setMsgCfg(''), 3500);
+    await cargar(); await cargarConfig();
+  };
+
+  const eliminarVueltaExtra = async (ve) => {
+    if (!confirm(`¿Eliminar vuelta ${ve.vuelta_num}? Se borrarán sus partidos y resultados.`)) return;
+    const jornadasBase = federacion?.h2h_jornadas_base ?? 0;
+    const porVuelta    = Math.round(jornadasBase / 2);
+    const jFin         = ve.jornada_inicio + porVuelta - 1;
+    await sb.from('h2h_partidos').delete()
+      .eq('federacion_id', federacion.id)
+      .gte('jornada', ve.jornada_inicio).lte('jornada', jFin);
+    await sb.from('h2h_vueltas_extra').delete().eq('id', ve.id);
+    setMsgCfg(`Vuelta ${ve.vuelta_num} eliminada.`);
+    setTimeout(() => setMsgCfg(''), 2500);
+    await cargar(); await cargarConfig();
+  };
+
+  const actualizarPtsLocalExtra = async (ve, nuevoPts) => {
+    await sb.from('h2h_vueltas_extra').update({ pts_local: nuevoPts }).eq('id', ve.id);
+    setVueltasExtra(prev => prev.map(v => v.id === ve.id ? { ...v, pts_local: nuevoPts } : v));
   };
 
   const setJornadaFantasy = async (j_h2h, raw) => {
@@ -7062,9 +7151,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     const jornada_fantasy = jornadaConfig[j_h2h];
     if (!jornada_fantasy) return;
     setCalculando(j_h2h);
-    const maxJ = Math.max(...jornadas, 0);
-    const vuelta = j_h2h <= maxJ / 2 ? 1 : 2;
-    const ptsLocal = vuelta === 1 ? ptsLocalV1 : ptsLocalV2;
+    const { ptsLocal } = getVueltaInfo(j_h2h, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, vueltasExtra);
     const partIds = participantes.map(p => p.id);
     const { data: clsData } = await sb.from('clasificacion')
       .select('participante_id, puntos_jornada')
@@ -7182,6 +7269,12 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     const { error } = await sb.from('h2h_partidos').insert(rows);
     if (error) { setMsg('Error al insertar: ' + error.message); return false; }
 
+    // Guardar jornadas base y limpiar vueltas extra (el calendario se rehace desde cero)
+    await sb.from('federaciones').update({ h2h_jornadas_base: maxJornada }).eq('id', federacion.id);
+    await sb.from('h2h_vueltas_extra').delete().eq('federacion_id', federacion.id);
+    onFederacionUpdate({ ...federacion, h2h_jornadas_base: maxJornada });
+    setVueltasExtra([]);
+
     setMsg(`¡Calendario generado! ${rows.length} partidos en ${maxJornada} jornadas.`);
     cargar();
     return true;
@@ -7254,9 +7347,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const [copiadoJ, setCopiadoJ] = useState(null);
 
   const generarPlantillaH2H = (j) => {
-    const maxJ = Math.max(...jornadas, 0);
-    const vuelta = j <= maxJ / 2 ? 1 : 2;
-    const ptsL = vuelta === 1 ? ptsLocalV1 : ptsLocalV2;
+    const { ptsLocal: ptsL } = getVueltaInfo(j, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, vueltasExtra);
     const ms = partidos.filter(p => p.jornada === j);
     const lineas = [`EN DIRECTO J${j}`];
     ms.forEach((m, i) => {
@@ -7424,6 +7515,80 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
             ))}
             <button className="btn-ok" onClick={guardarPtsLocal} style={{alignSelf:'flex-end'}}>Guardar</button>
           </div>
+        </div>
+
+        {/* ── Vueltas extra ── */}
+        <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+          <div style={{fontWeight:700, marginBottom:'.2rem'}}>Vueltas extra</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Añade más vueltas al calendario copiando los enfrentamientos de la ida o la vuelta existente.
+            Cada vuelta extra tiene su propia configuración de puntos de local.
+          </div>
+
+          {/* Lista de vueltas extra existentes */}
+          {vueltasExtra.length > 0 && (
+            <div style={{marginBottom:'1rem'}}>
+              {vueltasExtra.map(ve => {
+                const jornadasBase = federacion?.h2h_jornadas_base ?? 0;
+                const porVuelta    = Math.round(jornadasBase / 2);
+                const jFin         = ve.jornada_inicio + porVuelta - 1;
+                return (
+                  <div key={ve.id} style={{display:'flex', alignItems:'center', gap:'.75rem',
+                                           padding:'.5rem .75rem', borderRadius:8, marginBottom:'.4rem',
+                                           border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                           flexWrap:'wrap'}}>
+                    <span style={{fontWeight:700, minWidth:72}}>Vuelta {ve.vuelta_num}</span>
+                    <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>
+                      Basada en vuelta {ve.basada_en} · J{ve.jornada_inicio}–J{jFin}
+                    </span>
+                    <label style={{display:'flex', alignItems:'center', gap:'.35rem', fontSize:'.84rem', marginLeft:'auto'}}>
+                      Pts local:
+                      <input type="number" min={0} defaultValue={ve.pts_local}
+                             onBlur={e => actualizarPtsLocalExtra(ve, Number(e.target.value))}
+                             style={{width:60, padding:'.2rem .4rem', border:'1.5px solid var(--borde)',
+                                     borderRadius:6, fontSize:'.88rem', textAlign:'center'}} />
+                    </label>
+                    <button onClick={() => eliminarVueltaExtra(ve)}
+                            style={{padding:'.2rem .55rem', borderRadius:6, border:'1.5px solid #dc3545',
+                                    background:'#fff5f5', color:'#dc3545', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+                      Eliminar
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Formulario añadir vuelta extra */}
+          {federacion?.h2h_jornadas_base
+            ? (
+              <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+                <label style={{display:'flex', alignItems:'center', gap:'.4rem', fontSize:'.87rem', fontWeight:600}}>
+                  Basada en:
+                  <select value={nuevaBase} onChange={e => setNuevaBase(Number(e.target.value))}
+                          style={{padding:'.3rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)',
+                                  fontSize:'.87rem', background:'var(--fondo)'}}>
+                    <option value={1}>Vuelta 1 (ida)</option>
+                    <option value={2}>Vuelta 2 (vuelta)</option>
+                  </select>
+                </label>
+                <label style={{display:'flex', alignItems:'center', gap:'.4rem', fontSize:'.87rem', fontWeight:600}}>
+                  Pts local:
+                  <input type="number" min={0} value={nuevaPtsLocal}
+                         onChange={e => setNuevaPtsLocal(Number(e.target.value))}
+                         style={{width:65, padding:'.3rem .4rem', border:'1.5px solid var(--borde)',
+                                 borderRadius:7, fontSize:'.88rem', textAlign:'center'}} />
+                </label>
+                <button className="btn-ok" onClick={añadirVueltaExtra}>
+                  + Añadir vuelta {(vueltasExtra[vueltasExtra.length - 1]?.vuelta_num ?? 2) + 1}
+                </button>
+                {msgCfg && <span style={{fontSize:'.82rem', color:'var(--verde)', fontWeight:600}}>{msgCfg}</span>}
+              </div>
+            )
+            : <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>
+                Genera el calendario base primero para poder añadir vueltas extra.
+              </div>
+          }
         </div>
 
         {/* ── Opciones de generación ── */}

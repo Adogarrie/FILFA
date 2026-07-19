@@ -7968,6 +7968,7 @@ function Ayuda({ isAdmin }) {
         ['Compra directa', 'En la pestaña Mercado verás todos los jugadores disponibles (sin equipo fantasy). Pulsa "Fichar" para añadirlo a tu plantilla al precio de mercado actual.'],
         ['Condiciones', 'Necesitas presupuesto suficiente y tener menos de 14 jugadores, o aceptar que quede como fichaje pendiente si ya tienes la plantilla completa.'],
         ['Mercado habilitado', 'El admin puede abrir o cerrar el mercado. Si está cerrado, no podrás fichar ni poner jugadores a la venta.'],
+        ['Jugadores duplicados', 'Si el admin ha activado los jugadores duplicados, algunos jugadores ya fichados por otro equipo pueden seguir disponibles en el mercado. Aparecerá un indicador "X/N equipos" mostrando cuántas copias hay y cuántas quedan disponibles.'],
       ]
     },
     {
@@ -7979,6 +7980,7 @@ function Ayuda({ isAdmin }) {
         ['Resolución', 'Gana la puja más alta. En caso de empate, gana la puja más antigua (la que se registró antes).'],
         ['Presupuesto insuficiente', 'Si en el momento del cierre no tienes suficiente presupuesto para cubrir tu puja ganadora, el jugador no se adjudica y el proceso queda desierto.'],
         ['Portería única', 'Dentro de la misma división, solo puede haber un equipo con la portería de cada club real. Si ya está asignada, las pujas por esa portería quedan desiertas.'],
+        ['Jugadores duplicados', 'Si la opción está activa, varios equipos pueden pujar y ganar al mismo jugador (no porteros) hasta el límite configurado. El sistema comprueba en el momento de la adjudicación que no se supera ese límite.'],
         ['Resto de pujas', 'Al adjudicarse un jugador, el tablón muestra quién lo ganó, por cuánto, y el listado del resto de equipos que habían pujado y sus importes.'],
       ]
     },
@@ -7999,6 +8001,7 @@ function Ayuda({ isAdmin }) {
         ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
         ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
+        ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al primer suplente cuya posición sea compatible con alguna de las formaciones permitidas. Se da prioridad a los suplentes que hayan jugado algún minuto. Los porteros no participan en este mecanismo.'],
       ]
     },
     {
@@ -8009,6 +8012,30 @@ function Ayuda({ isAdmin }) {
         ['Recibir y gestionar', 'En la pestaña Ofertas verás las ofertas recibidas. Puedes aceptarlas o rechazarlas. Al aceptar, el jugador pasa a fichajes pendientes del comprador y el dinero se transfiere inmediatamente.'],
         ['Editar o retirar', 'En la pestaña Ofertas → Enviadas puedes editar el importe o retirar una oferta que aún esté pendiente.'],
         ['Mercado cerrado', 'El admin puede deshabilitar las ventas. Con el mercado cerrado no se pueden enviar ni aceptar ofertas.'],
+      ]
+    },
+    {
+      id: 'cesiones',
+      titulo: '🔄 Cesiones',
+      contenido: [
+        ['¿Qué es una cesión?', 'Permite solicitar el préstamo temporal de un jugador libre del mercado (sin equipo fantasy) para una jornada concreta. Los puntos cuentan al 100 % a tu favor.'],
+        ['Cómo solicitarla', 'Desde la pestaña Cesiones, elige la jornada y el jugador libre que quieres. La solicitud queda pendiente de aprobación del administrador.'],
+        ['Aprobación', 'Solo el admin puede aprobar o rechazar cada solicitud. Recibirás una notificación en el tablón cuando se resuelva.'],
+        ['Condición', 'Solo puedes ceder jugadores que no pertenezcan a ningún equipo fantasy en el momento de la solicitud. Si el jugador es fichado antes de que el admin la apruebe, la cesión puede quedar sin efecto.'],
+        ['Habilitación', 'El admin puede activar o desactivar las cesiones. Con esta opción desactivada no se pueden enviar nuevas solicitudes, aunque las ya aprobadas siguen siendo válidas.'],
+      ]
+    },
+    {
+      id: 'duplicados',
+      titulo: '👥 Jugadores duplicados',
+      contenido: [
+        ['¿Qué son?', 'Cuando el admin activa esta opción, un mismo jugador (nunca porteros) puede pertenecer a varios equipos simultáneamente, hasta el límite de copias configurado. Cada equipo puntúa de forma independiente con su copia.'],
+        ['Umbral de valor', 'El admin puede fijar un valor mínimo de mercado. Solo los jugadores que superen ese umbral pueden duplicarse. Si el umbral es 0, la opción aplica a todos los jugadores no-POR.'],
+        ['Límite de copias', 'El admin configura cuántos equipos pueden tener el mismo jugador al mismo tiempo (por ejemplo, 2 = máximo dos equipos con el mismo jugador).'],
+        ['En el mercado', 'Los jugadores duplicables ya fichados muestran un indicador "X/N equipos" en el mercado. Cuando alcanzan el máximo desaparecen de la lista.'],
+        ['Un equipo, una copia', 'Aunque haya copias disponibles, un mismo equipo nunca puede tener al mismo jugador dos veces.'],
+        ['Al desactivar la opción', 'El admin elimina automáticamente las copias extra (conservando la primera en ficharse) y devuelve el precio de compra al presupuesto de cada equipo afectado.'],
+        ['Al subir el umbral', 'Si el admin aumenta el valor mínimo, los jugadores duplicados que queden por debajo del nuevo umbral pierden sus copias extra automáticamente, con reembolso incluido.'],
       ]
     },
     {
@@ -8035,11 +8062,14 @@ function Ayuda({ isAdmin }) {
         ['Gestión de la federación', 'El admin crea y configura la federación: nombre, logo, presupuesto inicial, número de jornadas, hora de cierre de pujas, etc.'],
         ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno.'],
         ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos. También puede gestionar los jugadores de cualquier plantilla.'],
-        ['Introducir puntuaciones', 'El admin (o moderador) introduce los puntos obtenidos por cada jugador real cada jornada. Esto genera la clasificación de la liga.'],
+        ['Introducir puntuaciones', 'El admin (o moderador si está habilitado) introduce los puntos obtenidos por cada jugador real cada jornada. Esto genera la clasificación de la liga.'],
         ['Ejecutar el cierre de pujas', 'Aunque el cierre es automático a la hora configurada, el admin puede forzarlo manualmente desde el panel de administración.'],
         ['Fichajes pendientes', 'El admin puede activar o descartar fichajes pendientes de cualquier equipo, y asignar qué jugador se libera si la plantilla está llena.'],
         ['Pujas (AdminPujas)', 'El admin puede ver todas las pujas activas por jugador, resolver manualmente una adjudicación y publicar el anuncio correspondiente en el tablón.'],
         ['Sorteo', 'Solo el admin puede lanzar el sorteo aleatorio de jugadores.'],
+        ['Cesiones', 'El admin aprueba o rechaza las solicitudes de cesión de jugadores libres del mercado. También puede activar o desactivar la posibilidad de que los equipos envíen solicitudes.'],
+        ['No Jugaron / Sustituciones automáticas', 'El admin marca qué jugadores disputaron 0 minutos en cada jornada. El sistema calcula y aplica automáticamente las sustituciones en todas las alineaciones afectadas, y recalcula la clasificación.'],
+        ['Jugadores duplicados', 'El admin puede permitir que un mismo jugador (no porteros) pertenezca a varios equipos a la vez. Configura el valor mínimo de mercado y el número máximo de copias. Al desactivar o subir el umbral, el sistema elimina las copias extra con reembolso automático.'],
       ]
     },
     {

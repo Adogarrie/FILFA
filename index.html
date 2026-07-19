@@ -874,15 +874,22 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     return m;
   }, [jugadores]);
 
-  // IDs de jugadores no-POR en alguna plantilla o fichaje pendiente
-  const noPorterosOcupados = useMemo(() => {
-    const s = new Set();
-    for (const p of todasPlantillas)
-      if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR') s.add(p.jugador_id);
-    for (const p of todasPendientes)
-      if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR') s.add(p.jugador_id);
-    return s;
+  // Conteo de cuántos equipos tienen cada jugador no-POR (plantilla + pendientes)
+  const conteosPorJugador = useMemo(() => {
+    const m = {};
+    for (const p of [...todasPlantillas, ...todasPendientes])
+      if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR')
+        m[p.jugador_id] = (m[p.jugador_id] || 0) + 1;
+    return m;
   }, [todasPlantillas, todasPendientes, jugadoresMap]);
+
+  const duplHabilitado = !!federacion?.duplicados_habilitado;
+  const duplValorMin   = federacion?.duplicados_valor_min ?? 0;
+  const duplMax        = federacion?.duplicados_max ?? 2;
+
+  const esDuplicable = (jug) =>
+    duplHabilitado && jug.posicion !== 'POR' &&
+    (duplValorMin === 0 || (jug.valor_mercado || 0) >= duplValorMin);
 
   // IDs de jugadores que ya tiene MI equipo (plantilla activa + pendientes ganados)
   const misJugadoresIds = useMemo(() => {
@@ -926,7 +933,11 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     if (!jugadores) return [];
     const filtrada = jugadores.filter(j => {
       if (misJugadoresIds.has(j.id)) return false;
-      if (j.posicion !== 'POR' && noPorterosOcupados.has(j.id)) return false;
+      if (j.posicion !== 'POR') {
+        const cnt = conteosPorJugador[j.id] || 0;
+        if (cnt > 0 && !esDuplicable(j)) return false;
+        if (esDuplicable(j) && cnt >= duplMax) return false;
+      }
       if (j.posicion === 'POR' && porteríasBloqueadas.has(j.equipo)) return false; // portería de mi división
       const okPos    = !filtroPOS    || j.posicion === filtroPOS;
       const okEquipo = !filtroEquipo || j.equipo   === filtroEquipo;
@@ -948,21 +959,39 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       }
     }
     return [...Object.values(porEquipo), ...resto];
-  }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, noPorterosOcupados, porteríasBloqueadas]);
+  }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, conteosPorJugador, porteríasBloqueadas, duplHabilitado, duplValorMin, duplMax]);
 
   // ── Pujar (usuarios) ──────────────────────────────────────────
   const confirmarPuja = async () => {
     if (!sb || !participanteId || !modalPuja) return;
-    // Verificar que el jugador no está ya fichado (plantilla activa o pendiente) en esta federación
+    // Verificar disponibilidad del jugador (respetando límite de duplicados si está habilitado)
     const fedPartIds = (participantes || []).map(p => p.id);
     if (fedPartIds.length > 0) {
-      const [{ data: enPlantilla, error: e1 }, { data: enPendiente, error: e2 }] = await Promise.all([
-        sb.from('plantillas').select('id').eq('jugador_id', modalPuja.id).in('participante_id', fedPartIds).limit(1),
-        sb.from('fichajes_pendientes').select('id').eq('jugador_id', modalPuja.id).in('participante_id', fedPartIds).limit(1),
+      const [{ data: enPlantilla }, { data: enPendiente }] = await Promise.all([
+        sb.from('plantillas').select('id, participante_id').eq('jugador_id', modalPuja.id).in('participante_id', fedPartIds),
+        sb.from('fichajes_pendientes').select('id, participante_id').eq('jugador_id', modalPuja.id).in('participante_id', fedPartIds),
       ]);
-      if ((!e1 && enPlantilla?.length > 0) || (!e2 && enPendiente?.length > 0)) {
-        alert('Este jugador ya ha sido fichado por otro equipo.');
+      const todosRows = [...(enPlantilla||[]), ...(enPendiente||[])];
+      if (todosRows.some(r => r.participante_id === participanteId)) {
+        alert('Ya tienes a este jugador en tu equipo.');
         setModalPuja(null); cargar(); return;
+      }
+      const totalCount = todosRows.length;
+      if (totalCount > 0) {
+        if (modalPuja.posicion === 'POR') {
+          alert('Este jugador ya ha sido fichado por otro equipo.');
+          setModalPuja(null); cargar(); return;
+        }
+        const isDupl = duplHabilitado &&
+          (duplValorMin === 0 || (modalPuja.valor_mercado || 0) >= duplValorMin);
+        if (!isDupl) {
+          alert('Este jugador ya ha sido fichado por otro equipo.');
+          setModalPuja(null); cargar(); return;
+        }
+        if (totalCount >= duplMax) {
+          alert(`Este jugador ya está en ${totalCount} equipo(s). Máximo permitido: ${duplMax}.`);
+          setModalPuja(null); cargar(); return;
+        }
       }
     }
     const cantidad = parseFloat(String(cantidadPuja).replace(',', '.'));
@@ -1016,6 +1045,32 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
       alert('Tu equipo ya tiene 14 jugadores activos (máximo permitido).');
       setModal(null);
       return;
+    }
+
+    // Verificar límite de duplicados para jugadores no-POR
+    if (modal.posicion !== 'POR') {
+      const fedPartIds = (participantes || []).map(p => p.id);
+      if (fedPartIds.length > 0) {
+        const [{ data: enPl }, { data: enPend }] = await Promise.all([
+          sb.from('plantillas').select('id, participante_id').eq('jugador_id', modal.id).in('participante_id', fedPartIds),
+          sb.from('fichajes_pendientes').select('id, participante_id').eq('jugador_id', modal.id).in('participante_id', fedPartIds),
+        ]);
+        const todosRows = [...(enPl||[]), ...(enPend||[])];
+        if (todosRows.some(r => r.participante_id === participanteId)) {
+          alert('Este equipo ya tiene a este jugador en su plantilla.'); setModal(null); return;
+        }
+        const totalCount = todosRows.length;
+        if (totalCount > 0) {
+          const isDupl = duplHabilitado &&
+            (duplValorMin === 0 || (modal.valor_mercado || 0) >= duplValorMin);
+          if (!isDupl) {
+            alert('Este jugador ya está fichado por otro equipo.'); setModal(null); return;
+          }
+          if (totalCount >= duplMax) {
+            alert(`Este jugador ya está en ${totalCount} equipo(s). Máximo: ${duplMax}.`); setModal(null); return;
+          }
+        }
+      }
     }
 
     if (modal.posicion === 'POR') {
@@ -1427,7 +1482,18 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                           <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                         </span>}
                   </td>
-                  <td style={{textAlign:'right'}}>{fmt(j.valor_mercado || 0)}</td>
+                  <td style={{textAlign:'right'}}>
+                    {fmt(j.valor_mercado || 0)}
+                    {(() => {
+                      const cnt = conteosPorJugador[j.id] || 0;
+                      if (cnt === 0 || !esDuplicable(j)) return null;
+                      return (
+                        <span style={{display:'block', fontSize:'.72rem', color:'#d97706', fontWeight:600}}>
+                          {cnt}/{duplMax} equipo{duplMax !== 1 ? 's' : ''}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td style={{textAlign:'center', fontSize:'.85rem', color: nPujas > 0 ? '#d97706' : 'var(--texto2)'}}>
                     {nPujas > 0 ? `🔥 ${nPujas}` : '—'}
                   </td>
@@ -3861,10 +3927,13 @@ function AdminPujas({ participantes, federacion }) {
 
     if (error) {
       const msgs = {
-        puja_ya_resuelta:        'Esta puja ya fue adjudicada por otro administrador.',
-        presupuesto_insuficiente: `${ganador.equipo} no tiene presupuesto suficiente.`,
-        porteria_ocupada:        'Esta portería ya está en otro equipo de la misma división.',
-        no_autorizado:           'No tienes permisos para resolver pujas en esta federación.',
+        puja_ya_resuelta:           'Esta puja ya fue adjudicada por otro administrador.',
+        presupuesto_insuficiente:   `${ganador.equipo} no tiene presupuesto suficiente.`,
+        porteria_ocupada:           'Esta portería ya está en otro equipo de la misma división.',
+        no_autorizado:              'No tienes permisos para resolver pujas en esta federación.',
+        jugador_ya_en_equipo:       'Este equipo ya tiene a este jugador en su plantilla.',
+        jugador_ya_fichado:         'Este jugador ya ha sido fichado por otro equipo.',
+        limite_duplicados_alcanzado:'Se ha alcanzado el número máximo de equipos permitidos para este jugador.',
       };
       alert(msgs[error.message] || 'Error al resolver la puja: ' + error.message);
       setResolviendo(null);
@@ -4082,13 +4151,17 @@ function AdminCierres({ federacion }) {
 
 // ── ADMIN — MERCADO (ventas + sorteo) ─────────────────────────
 function AdminMercado({ federacion, onFederacionUpdate }) {
-  const [ventas,     setVentas]     = useState(!!federacion?.ventas_habilitadas);
-  const [sorteo,     setSorteo]     = useState(!!federacion?.sorteo_habilitado);
-  const [ptsMod,     setPtsMod]     = useState(!!federacion?.puntos_mod_habilitado);
-  const [cesiones,   setCesiones]   = useState(federacion?.cesiones_habilitadas ?? true);
-  const [horaCierre, setHoraCierre] = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
-  const [pctVenta,   setPctVenta]   = useState(federacion?.pct_venta_mercado ?? 100);
-  const [msg, setMsg]               = useState('');
+  const [ventas,       setVentas]       = useState(!!federacion?.ventas_habilitadas);
+  const [sorteo,       setSorteo]       = useState(!!federacion?.sorteo_habilitado);
+  const [ptsMod,       setPtsMod]       = useState(!!federacion?.puntos_mod_habilitado);
+  const [cesiones,     setCesiones]     = useState(federacion?.cesiones_habilitadas ?? true);
+  const [duplicados,   setDuplicados]   = useState(!!federacion?.duplicados_habilitado);
+  const [duplValorMin, setDuplValorMin] = useState(federacion?.duplicados_valor_min ?? 0);
+  const [duplMax,      setDuplMax]      = useState(federacion?.duplicados_max ?? 2);
+  const [limpiando,    setLimpiando]    = useState(false);
+  const [horaCierre,   setHoraCierre]   = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
+  const [pctVenta,     setPctVenta]     = useState(federacion?.pct_venta_mercado ?? 100);
+  const [msg, setMsg]                   = useState('');
 
   const cambiar = async (campo, valor, setEstado) => {
     if (!sb || !federacion) return;
@@ -4125,7 +4198,46 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
   };
 
 
-  const Opcion = ({ label, desc, activo, onChange }) => (
+  const limpiarYDesactivar = async () => {
+    if (!sb || !federacion) return;
+    const ok = window.confirm(
+      'Al desactivar los jugadores duplicados se realizará una limpieza automática:\n\n' +
+      '· Se eliminará de cada plantilla toda copia extra del mismo jugador, conservando la primera en ficharse.\n' +
+      '· El precio de compra se devolverá al presupuesto de cada equipo afectado.\n\n' +
+      'Esta acción no se puede deshacer. ¿Continuar?'
+    );
+    if (!ok) return;
+    setLimpiando(true);
+    setMsg('Limpiando duplicados…');
+    const { data, error } = await sb.rpc('limpiar_duplicados_federacion', { p_federacion_id: federacion.id });
+    setLimpiando(false);
+    if (error) {
+      setMsg('');
+      alert('Error al limpiar duplicados: ' + error.message);
+      return;
+    }
+    const { afectados, reembolsado } = data || {};
+    await cambiar('duplicados_habilitado', false, setDuplicados);
+    if (afectados > 0) {
+      setMsg(`Limpieza completada: ${afectados} jugador${afectados !== 1 ? 'es' : ''} saneado${afectados !== 1 ? 's' : ''}, ${fmt(reembolsado || 0)} devueltos.`);
+      setTimeout(() => setMsg(''), 6000);
+    }
+  };
+
+  const guardarDuplicadosCfg = async () => {
+    if (!sb || !federacion) return;
+    const vm = Math.max(0, Number(duplValorMin) || 0);
+    const mx = Math.max(2, Number(duplMax) || 2);
+    setDuplValorMin(vm); setDuplMax(mx);
+    const { error } = await sb.from('federaciones')
+      .update({ duplicados_valor_min: vm, duplicados_max: mx }).eq('id', federacion.id);
+    if (error) { alert('Error al guardar: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, duplicados_valor_min: vm, duplicados_max: mx });
+    setMsg('Guardado');
+    setTimeout(() => setMsg(''), 2500);
+  };
+
+  const Opcion = ({ label, desc, activo, onChange, disabled }) => (
     <div style={{display:'flex', alignItems:'flex-start', gap:'1rem',
                  padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
       <div style={{flex:1}}>
@@ -4137,7 +4249,8 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
                       color: activo ? 'var(--verde)' : 'var(--texto2)'}}>
           {activo ? 'Activado' : 'Desactivado'}
         </span>
-        <button className={activo ? 'btn-cancel' : 'btn-ok'} onClick={() => onChange(!activo)}>
+        <button className={activo ? 'btn-cancel' : 'btn-ok'}
+                onClick={() => onChange(!activo)} disabled={!!disabled}>
           {activo ? 'Desactivar' : 'Activar'}
         </button>
       </div>
@@ -4174,6 +4287,35 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
         activo={cesiones}
         onChange={v => cambiar('cesiones_habilitadas', v, setCesiones)}
       />
+      <Opcion
+        label="Jugadores duplicados"
+        desc="Permite que un mismo jugador (nunca porteros) esté fichado por varios equipos simultáneamente, hasta el número máximo de copias. Si el valor mínimo es 0, aplica a todos los jugadores no-POR."
+        activo={duplicados}
+        onChange={v => {
+          if (!v) { limpiarYDesactivar(); return; }
+          cambiar('duplicados_habilitado', true, setDuplicados);
+        }}
+        disabled={limpiando}
+      />
+      {duplicados && (
+        <div style={{display:'flex', gap:'1.5rem', padding:'.5rem 0 1rem', flexWrap:'wrap', alignItems:'flex-end', borderBottom:'1px solid var(--borde)'}}>
+          <label style={{display:'flex', flexDirection:'column', gap:'.3rem', fontSize:'.9rem'}}>
+            <span style={{fontWeight:700}}>Valor mínimo (M€) para duplicar <span style={{fontWeight:400, color:'var(--texto2)'}}>(0 = todos)</span></span>
+            <input type="number" min={0} step={100000} value={duplValorMin}
+                   onChange={e => setDuplValorMin(e.target.value)}
+                   style={{width:150, padding:'.4rem .6rem', borderRadius:8,
+                           border:'1.5px solid var(--borde)', fontSize:'.9rem', textAlign:'right'}} />
+          </label>
+          <label style={{display:'flex', flexDirection:'column', gap:'.3rem', fontSize:'.9rem'}}>
+            <span style={{fontWeight:700}}>Máx. equipos por jugador</span>
+            <input type="number" min={2} max={20} value={duplMax}
+                   onChange={e => setDuplMax(e.target.value)}
+                   style={{width:80, padding:'.4rem .6rem', borderRadius:8,
+                           border:'1.5px solid var(--borde)', fontSize:'.9rem', textAlign:'right'}} />
+          </label>
+          <button className="btn-ok" onClick={guardarDuplicadosCfg}>Guardar</button>
+        </div>
+      )}
       <div style={{display:'flex', alignItems:'center', gap:'1rem',
                    padding:'1rem 0', flexWrap:'wrap'}}>
         <div style={{flex:1}}>

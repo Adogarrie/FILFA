@@ -4226,15 +4226,45 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
 
   const guardarDuplicadosCfg = async () => {
     if (!sb || !federacion) return;
-    const vm = Math.max(0, Number(duplValorMin) || 0);
-    const mx = Math.max(2, Number(duplMax) || 2);
+    const vm  = Math.max(0, Number(duplValorMin) || 0);
+    const mx  = Math.max(2, Number(duplMax) || 2);
+    const oldVm = federacion.duplicados_valor_min ?? 0;
+    const subeUmbral = vm > oldVm;
+
+    if (subeUmbral) {
+      const ok = window.confirm(
+        `Al subir el umbral a ${fmt(vm)}, los jugadores con valor inferior que estén duplicados perderán sus copias extra.\n\n` +
+        'Solo se conservará la primera copia fichada. El precio de compra se devolverá al presupuesto de cada equipo afectado.\n\n' +
+        '¿Continuar?'
+      );
+      if (!ok) return;
+    }
+
     setDuplValorMin(vm); setDuplMax(mx);
     const { error } = await sb.from('federaciones')
       .update({ duplicados_valor_min: vm, duplicados_max: mx }).eq('id', federacion.id);
     if (error) { alert('Error al guardar: ' + error.message); return; }
     onFederacionUpdate({ ...federacion, duplicados_valor_min: vm, duplicados_max: mx });
-    setMsg('Guardado');
-    setTimeout(() => setMsg(''), 2500);
+
+    if (subeUmbral) {
+      setMsg('Limpiando duplicados por debajo del nuevo umbral…');
+      const { data, error: errRpc } = await sb.rpc('limpiar_duplicados_bajo_umbral', {
+        p_federacion_id:   federacion.id,
+        p_nuevo_valor_min: vm,
+      });
+      if (errRpc) {
+        alert('Configuración guardada, pero error al limpiar duplicados: ' + errRpc.message);
+        setMsg(''); return;
+      }
+      const { afectados, reembolsado } = data || {};
+      setMsg(afectados > 0
+        ? `Guardado. ${afectados} jugador${afectados !== 1 ? 'es' : ''} saneado${afectados !== 1 ? 's' : ''}, ${fmt(reembolsado || 0)} devueltos.`
+        : 'Guardado. No había duplicados por debajo del nuevo umbral.'
+      );
+    } else {
+      setMsg('Guardado');
+    }
+    setTimeout(() => setMsg(''), 5000);
   };
 
   const Opcion = ({ label, desc, activo, onChange, disabled }) => (
@@ -5489,10 +5519,13 @@ function Cesiones({ federacion, miParticipanteId }) {
     setCargandoMercado(true);
     const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacionId);
     const partIds = (parts || []).map(p => p.id);
-    let ocupados = new Set();
+    const ocupados = new Set();
     if (partIds.length > 0) {
-      const { data: pl } = await sb.from('plantillas').select('jugador_id').in('participante_id', partIds);
-      ocupados = new Set((pl || []).map(p => p.jugador_id));
+      const [{ data: pl }, { data: pend }] = await Promise.all([
+        sb.from('plantillas').select('jugador_id').in('participante_id', partIds),
+        sb.from('fichajes_pendientes').select('jugador_id').in('participante_id', partIds),
+      ]);
+      for (const p of [...(pl || []), ...(pend || [])]) ocupados.add(p.jugador_id);
     }
     const { data: jugs } = await sb.from('jugadores')
       .select('id, nombre, equipo, posicion, valor_mercado')

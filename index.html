@@ -7126,94 +7126,6 @@ function PosHistorialTable({ rows }) {
   );
 }
 
-function PuntosPorJornadaTable({ teams, jugadas }) {
-  if (!teams.length || !jugadas.length)
-    return <p style={{color:'var(--texto2)'}}>Aún no hay resultados introducidos.</p>;
-  return (
-    <div style={{overflowX:'auto'}}>
-      <table style={{minWidth: 220 + jugadas.length * 88}}>
-        <thead>
-          <tr>
-            <th style={{minWidth:140}}>Equipo</th>
-            {jugadas.map(j => (
-              <th key={j} style={{textAlign:'center', whiteSpace:'nowrap',
-                                  fontSize:'.78rem', minWidth:80}}>J{j}</th>
-            ))}
-            <th style={{textAlign:'center', borderLeft:'2px solid var(--borde)',
-                        whiteSpace:'nowrap', minWidth:80}}>Total</th>
-          </tr>
-          <tr>
-            <th></th>
-            {jugadas.map(j => (
-              <th key={j} style={{textAlign:'center', fontWeight:400, fontSize:'.72rem',
-                                  paddingTop:0, color:'var(--texto2)'}}>
-                <span style={{color:'var(--verde)'}}>A</span>
-                <span style={{margin:'0 2px', opacity:.5}}>·</span>
-                <span style={{color:'#dc3545'}}>C</span>
-              </th>
-            ))}
-            <th style={{textAlign:'center', fontWeight:400, fontSize:'.72rem',
-                        paddingTop:0, color:'var(--texto2)',
-                        borderLeft:'2px solid var(--borde)'}}>
-              <span style={{color:'var(--verde)'}}>A</span>
-              <span style={{margin:'0 2px', opacity:.5}}>·</span>
-              <span style={{color:'#dc3545'}}>C</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {teams.map((t, i) => {
-            const totalPf = jugadas.reduce((s, j) => s + (t.jornadas[j]?.pf ?? 0), 0);
-            const totalPc = jugadas.reduce((s, j) => s + (t.jornadas[j]?.pc ?? 0), 0);
-            return (
-              <tr key={t.id} style={{background: i === 0 ? 'rgba(26,127,55,.04)' : undefined}}>
-                <td style={{fontWeight:600, whiteSpace:'nowrap'}}>
-                  <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                    {t.escudo_url && <img src={t.escudo_url} alt=""
-                                         style={{width:16, height:16, objectFit:'contain',
-                                                 borderRadius:2, flexShrink:0}} />}
-                    {t.nombre}
-                  </span>
-                </td>
-                {jugadas.map(j => {
-                  const cell = t.jornadas[j];
-                  if (!cell) return (
-                    <td key={j} style={{textAlign:'center', color:'var(--texto2)',
-                                        fontSize:'.82rem'}}>—</td>
-                  );
-                  const gana   = cell.pf > cell.pc;
-                  const pierde = cell.pf < cell.pc;
-                  return (
-                    <td key={j} style={{textAlign:'center', fontSize:'.85rem',
-                                        whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums',
-                                        background: gana   ? 'rgba(26,127,55,.07)'
-                                                  : pierde ? 'rgba(220,53,69,.06)'
-                                                  : undefined}}>
-                      <span style={{fontWeight:700,
-                                    color: gana ? 'var(--verde)' : pierde ? '#dc3545' : 'var(--texto)'}}>
-                        {cell.pf}
-                      </span>
-                      <span style={{color:'var(--texto2)', margin:'0 3px', opacity:.6}}>·</span>
-                      <span style={{color:'var(--texto2)'}}>{cell.pc}</span>
-                    </td>
-                  );
-                })}
-                <td style={{textAlign:'center', borderLeft:'2px solid var(--borde)',
-                            fontWeight:700, fontSize:'.85rem', whiteSpace:'nowrap',
-                            fontVariantNumeric:'tabular-nums'}}>
-                  <span style={{color:'var(--verde)'}}>{totalPf}</span>
-                  <span style={{color:'var(--texto2)', margin:'0 3px', opacity:.6}}>·</span>
-                  <span style={{color:'#dc3545'}}>{totalPc}</span>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes }) {
   const [tab,              setTab]             = useState('calendario');
@@ -7442,25 +7354,6 @@ function LigaH2H({ federacion, participantes }) {
     return Object.values(cnt).sort((a, b) => b.j1 - a.j1 || b.jpodio - a.jpodio);
   };
 
-  const computePuntosPorJornada = (divId) => {
-    const equips  = divId ? participantes.filter(p => p.division_id === divId) : participantes;
-    const ms      = divId ? partidos.filter(m => m.division_id === divId) : partidos;
-    const jugadas = [...new Set(
-      ms.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)
-    )].sort((a, b) => a - b);
-    const clasifOrder = computeClasif(divId).map(r => r.id);
-    const data = {};
-    equips.forEach(p => { data[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url, jornadas: {} }; });
-    ms.forEach(m => {
-      if (m.pts_local === null || m.pts_visitante === null) return;
-      if (!data[m.local_id] || !data[m.visitante_id]) return;
-      data[m.local_id].jornadas[m.jornada]     = { pf: Number(m.pts_local),     pc: Number(m.pts_visitante) };
-      data[m.visitante_id].jornadas[m.jornada] = { pf: Number(m.pts_visitante), pc: Number(m.pts_local) };
-    });
-    const teams = clasifOrder.map(id => data[id]).filter(Boolean);
-    return { teams, jugadas };
-  };
-
   const PartidoFila = ({ m }) => {
     const L = nomMap[m.local_id] || {};
     const V = nomMap[m.visitante_id] || {};
@@ -7609,7 +7502,6 @@ function LigaH2H({ federacion, participantes }) {
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
               {[['general','General'],['local','Local'],['visitante','Visitante'],
                 ...((federacion?.h2h_pts_local_v1 === 0 || federacion?.h2h_pts_local_v2 === 0) ? [['neutro','Neutro']] : []),
-                ['puntos','Pts por jornada'],
                 ['historial','Por jornada']].map(([k,l]) => (
                 <button key={k} onClick={() => setSubTabClasif(k)}
                         style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
@@ -7623,24 +7515,7 @@ function LigaH2H({ federacion, participantes }) {
             </div>
           </div>
 
-          {subTabClasif === 'puntos'
-            ? (hasDivs
-                ? divIds.map(divId => {
-                    const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                    const { teams, jugadas } = computePuntosPorJornada(divId);
-                    return (
-                      <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                        <h2 style={{marginBottom:'.75rem'}}>{nombre}</h2>
-                        <PuntosPorJornadaTable teams={teams} jugadas={jugadas} />
-                      </div>
-                    );
-                  })
-                : (() => {
-                    const { teams, jugadas } = computePuntosPorJornada(null);
-                    return <div className="card"><PuntosPorJornadaTable teams={teams} jugadas={jugadas} /></div>;
-                  })()
-              )
-          : subTabClasif === 'historial'
+          {subTabClasif === 'historial'
             ? (() => {
                 const jornadasJugadas = [...new Set(
                   partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)

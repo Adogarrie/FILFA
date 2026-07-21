@@ -790,7 +790,7 @@ function CountdownCierre({ horaCierre, habilitado }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion, miParticipanteId, onBadgeChange, ofertasBadge }) {
+function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaje, federacion, miParticipanteId, onBadgeChange, ofertasBadge }) {
   const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
   const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
@@ -1434,7 +1434,7 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                           onClick={() => activarFichaje(f.id, plazasLibres > 0 ? null : sel)}>
                     Incorporar
                   </button>
-                  {isAdmin && (
+                  {(isAdmin || isModerador) && (
                     <button onClick={() => anularFichaje(f.id)}
                             style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid #dc3545',
                                     background:'#fff', color:'#dc3545', cursor:'pointer',
@@ -2234,7 +2234,7 @@ function CalendarioFantasy({ participantes, federacion }) {
 
 
 // ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
-function AdminPtsJugadores({ participantes, federacion }) {
+function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const [jornada, setJornada] = useState(1);
   const [jugadores, setJugadores] = useState([]);
   const [ptsJug, setPtsJug]   = useState({});
@@ -2327,7 +2327,7 @@ function AdminPtsJugadores({ participantes, federacion }) {
     }
 
     setGuardando(false);
-    publicar(federacion?.id, 'puntos', `Puntos de jornada ${jornada} introducidos por el administrador`);
+    publicar(federacion?.id, 'puntos', `Puntos de jornada ${jornada} introducidos`, actorNombre);
     setMsg(`J${jornada} guardada y totales de equipo actualizados.`);
     setTimeout(() => setMsg(''), 4000);
   };
@@ -2404,7 +2404,7 @@ function AdminPtsJugadores({ participantes, federacion }) {
 }
 
 // ── EQUIPOS ────────────────────────────────────────────────────
-function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornadaActual, isAdmin, federacion, onParticipantesChange, onOfertaEnviada }) {
+function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornadaActual, isAdmin, isModerador, federacion, onParticipantesChange, onOfertaEnviada }) {
   const [equipoId, setEquipoId]       = useState('');
   const [jugadores, setJugadores]     = useState(null);
   const [presupuesto, setPresupuesto] = useState(null);
@@ -2499,9 +2499,9 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     if (error) { setEditMsg('Error: ' + error.message); return; }
     onParticipantesChange && onParticipantesChange();
     if (newEnt && newEnt !== oldEnt)
-      publicar(federacion?.id, 'admin', `${newNom || oldNom} nombra nuevo entrenador: ${newEnt}`);
+      publicar(federacion?.id, 'admin', `${newNom || oldNom} nombra nuevo entrenador: ${newEnt}`, actorNombre);
     if (newNom && newNom !== oldNom)
-      publicar(federacion?.id, 'admin', `El equipo "${oldNom}" pasa a llamarse "${newNom}"`);
+      publicar(federacion?.id, 'admin', `El equipo "${oldNom}" pasa a llamarse "${newNom}"`, actorNombre);
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
   };
@@ -2597,7 +2597,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                 <div style={{fontSize:'1rem', fontWeight:600}}>{equipo.entrenador}</div>
               </div>
             )}
-            {(isAdmin || equipoId === miParticipanteId) && (
+            {(isAdmin || isModerador || equipoId === miParticipanteId) && (
               <button onClick={abrirEditar}
                       style={{marginLeft:'auto', padding:'.4rem .9rem', fontSize:'.82rem',
                               borderRadius:8, border:'1.5px solid var(--borde)',
@@ -2828,7 +2828,7 @@ async function publicar(federacionId, tipo, texto, actorNombre) {
 }
 
 // ── INFORMACIÓN DE LA FEDERACIÓN ──────────────────────────────
-function FederacionInfo({ federacionId, isAdmin }) {
+function FederacionInfo({ federacionId, isAdmin, isModerador }) {
   const [bloques, setBloques]     = useState(null);
   const [editando, setEditando]   = useState(false);
   const [formModal, setFormModal] = useState(null);
@@ -2964,7 +2964,7 @@ function FederacionInfo({ federacionId, isAdmin }) {
 
   return (
     <div>
-      {isAdmin && (
+      {(isAdmin || isModerador) && (
         <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap',
                      marginBottom:'1rem', alignItems:'center'}}>
           <button onClick={() => setEditando(e => !e)}
@@ -2991,7 +2991,7 @@ function FederacionInfo({ federacionId, isAdmin }) {
         ? <Spinner />
         : bloques.length === 0
           ? <div className="card"><div className="empty">
-              {isAdmin
+              {(isAdmin || isModerador)
                 ? 'Aún no hay contenido. Activa el modo edición para añadir bloques.'
                 : 'El administrador todavía no ha publicado información.'}
             </div></div>
@@ -3083,7 +3083,7 @@ function FederacionInfo({ federacionId, isAdmin }) {
   );
 }
 
-function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
+function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange }) {
   const [tab, setTab]          = useState('anuncios');
   const [anuncios, setAnuncios] = useState(null);
   const [pagina, setPagina]    = useState(0);
@@ -3102,6 +3102,7 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
   const [textoUsuario, setTextoUsuario]     = useState('');
   const [enviandoUsuario, setEnviandoUsuario] = useState(false);
   const [msgUsuario, setMsgUsuario]         = useState('');
+  const [tipoMsg, setTipoMsg]               = useState('federacion'); // 'federacion' | 'club'
 
   const cargar = async () => {
     if (!sb || !federacionId) return;
@@ -3120,8 +3121,13 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
   const enviar = async () => {
     if (!texto.trim()) return;
     setEnviando(true);
-    await publicar(federacionId, 'mensaje_admin', texto.trim());
+    if (tipoMsg === 'club') {
+      await publicar(federacionId, 'mensaje_club', texto.trim(), miNombre || null);
+    } else {
+      await publicar(federacionId, 'mensaje_admin', texto.trim());
+    }
     setTexto('');
+    setTipoMsg('federacion');
     setEnviando(false);
     setMsgOk('Mensaje publicado');
     setTimeout(() => setMsgOk(''), 2500);
@@ -3134,7 +3140,7 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
   };
 
   const cargarPendientes = async () => {
-    if (!sb || !federacionId || !isAdmin) return;
+    if (!sb || !federacionId || !(isAdmin || isModerador)) return;
     const { data } = await sb.from('anuncios')
       .select('id, tipo, texto, actor_nombre, created_at')
       .eq('federacion_id', federacionId)
@@ -3176,12 +3182,12 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
     setTimeout(() => setMsgUsuario(''), 6000);
   };
 
-  useEffect(() => { if (isAdmin) cargarPendientes(); }, [federacionId, isAdmin]);
+  useEffect(() => { if (isAdmin || isModerador) cargarPendientes(); }, [federacionId, isAdmin, isModerador]);
 
   const ICONOS = {
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
-    admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬',
+    admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
   };
 
   const fmtFecha = ts => {
@@ -3200,14 +3206,34 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
       </div>
 
       {tab === 'info' && (
-        <FederacionInfo federacionId={federacionId} isAdmin={isAdmin} />
+        <FederacionInfo federacionId={federacionId} isAdmin={isAdmin} isModerador={isModerador} />
       )}
 
       {tab === 'anuncios' && <>
       {/* ── Composición admin ── */}
-      {isAdmin && (
+      {(isAdmin || isModerador) && (
         <div className="card" style={{marginBottom:'.75rem'}}>
-          <h2 style={{margin:'0 0 .75rem'}}>Publicar mensaje</h2>
+          <h2 style={{margin:'0 0 .65rem'}}>Publicar mensaje</h2>
+          <div style={{display:'flex', gap:'.5rem', marginBottom:'.65rem'}}>
+            <button onClick={() => setTipoMsg('federacion')}
+                    style={{padding:'.28rem .8rem', borderRadius:7, fontSize:'.82rem', fontWeight:600,
+                            cursor:'pointer',
+                            background: tipoMsg === 'federacion' ? 'var(--verde)' : 'transparent',
+                            color: tipoMsg === 'federacion' ? '#fff' : 'var(--texto2)',
+                            border: '1.5px solid ' + (tipoMsg === 'federacion' ? 'var(--verde)' : 'var(--borde)')}}>
+              📣 Como federación
+            </button>
+            {miNombre && (
+              <button onClick={() => setTipoMsg('club')}
+                      style={{padding:'.28rem .8rem', borderRadius:7, fontSize:'.82rem', fontWeight:600,
+                              cursor:'pointer',
+                              background: tipoMsg === 'club' ? '#0d6efd' : 'transparent',
+                              color: tipoMsg === 'club' ? '#fff' : 'var(--texto2)',
+                              border: '1.5px solid ' + (tipoMsg === 'club' ? '#0d6efd' : 'var(--borde)')}}>
+                🏟️ Como {miNombre}
+              </button>
+            )}
+          </div>
           <textarea
             value={texto}
             onChange={e => setTexto(e.target.value)}
@@ -3230,8 +3256,8 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
         </div>
       )}
 
-      {/* ── Pendientes de aprobación (solo admin) ── */}
-      {isAdmin && pendientes.length > 0 && (
+      {/* ── Pendientes de aprobación (admin y moderador) ── */}
+      {(isAdmin || isModerador) && pendientes.length > 0 && (
         <div className="card" style={{marginBottom:'.75rem',
                                       border:'1.5px solid #f6ad55'}}>
           <h2 style={{margin:'0 0 .75rem', color:'#b7791f'}}>
@@ -3297,15 +3323,17 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
                                           background: a.tipo === 'mensaje_admin'   ? '#eaf4ea'
                                                     : a.tipo === 'reinicio'        ? 'rgba(220,53,69,.06)'
                                                     : a.tipo === 'mensaje_usuario' ? 'rgba(99,179,237,.07)'
+                                                    : a.tipo === 'mensaje_club'    ? 'rgba(13,110,253,.06)'
                                                     : 'var(--gris)',
                                           border: a.tipo === 'mensaje_admin'   ? '1.5px solid var(--verde)'
                                                 : a.tipo === 'reinicio'        ? '1.5px solid #dc3545'
                                                 : a.tipo === 'mensaje_usuario' ? '1.5px solid rgba(99,179,237,.5)'
+                                                : a.tipo === 'mensaje_club'    ? '1.5px solid rgba(13,110,253,.4)'
                                                 : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
                     <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
                     <div style={{flex:1}}>
-                      <div style={{fontWeight: a.tipo === 'mensaje_admin' || a.tipo === 'reinicio' ? 600 : 500,
+                      <div style={{fontWeight: a.tipo === 'mensaje_admin' || a.tipo === 'reinicio' || a.tipo === 'mensaje_club' ? 600 : 500,
                                    whiteSpace:'pre-wrap'}}>{a.texto}</div>
                       {a.actor_nombre && (
                         <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
@@ -3341,8 +3369,8 @@ function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
         }
       </div>
 
-      {/* ── Enviar mensaje al tablón (solo usuarios, no admin) ── */}
-      {!isAdmin && (
+      {/* ── Enviar mensaje al tablón (solo usuarios, no admin/moderador) ── */}
+      {!isAdmin && !isModerador && (
         <div className="card" style={{marginTop:'.75rem'}}>
           <h2 style={{margin:'0 0 .4rem'}}>Enviar mensaje al tablón</h2>
           <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
@@ -4089,7 +4117,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
 }
 
 // ── ADMIN — PRESUPUESTOS ───────────────────────────────────────
-function AdminPresupuestos({ participantes }) {
+function AdminPresupuestos({ participantes, federacion, actorNombre }) {
   const [valores, setValores]   = useState({});
   const [guardado, setGuardado] = useState(null);
 
@@ -4108,6 +4136,8 @@ function AdminPresupuestos({ participantes }) {
     if (isNaN(val)) return;
     const { error } = await sb.from('participantes').update({ presupuesto: val }).eq('id', pid);
     if (error) { alert('Error: ' + error.message); return; }
+    const equipo = participantes.find(p => p.id === pid)?.nombre;
+    publicar(federacion?.id, 'admin', `Presupuesto de ${equipo} modificado a ${fmt(val)}`, actorNombre);
     setGuardado(pid);
     setTimeout(() => setGuardado(null), 2000);
   };
@@ -4156,7 +4186,7 @@ function AdminPresupuestos({ participantes }) {
 }
 
 // ── ADMIN — FICHAJES PENDIENTES ────────────────────────────────
-function AdminFichajesPendientes({ participantes, federacion }) {
+function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
   const [pendientes, setPendientes]   = useState(null);
   const [plantillasMap, setPlantillasMap] = useState({}); // participante_id → [{jugador_id, nombre, posicion, equipo}]
   const [liberarSel, setLiberarSel]   = useState({});     // pendiente_id → jugador_id a liberar
@@ -4245,6 +4275,7 @@ function AdminFichajesPendientes({ participantes, federacion }) {
       setProcesando(null);
       if (error) { alert('Error: ' + error.message); return; }
     }
+    publicar(federacion?.id, 'admin', `Fichaje de ${nom} para ${pend.participantes?.nombre} anulado`, actorNombre);
     cargar();
   };
 
@@ -4348,7 +4379,7 @@ function AdminFichajesPendientes({ participantes, federacion }) {
 }
 
 // ── ADMIN — PUJAS ──────────────────────────────────────────────
-function AdminPujas({ participantes, federacion }) {
+function AdminPujas({ participantes, federacion, actorNombre }) {
   const [pujas, setPujas]           = useState(null);
   const [resolviendo, setResolviendo] = useState(null);
   const [resueltos, setResueltos]   = useState(new Set()); // jugador_ids ya adjudicados esta sesión
@@ -4434,7 +4465,7 @@ function AdminPujas({ participantes, federacion }) {
       ? `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)} (pendiente de plaza).`
       : `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}.`;
     const texto = resto ? `${lineaPrincipal}\nResto de pujas:\n${resto}` : lineaPrincipal;
-    publicar(federacion?.id, 'fichaje', texto);
+    publicar(federacion?.id, 'fichaje', texto, actorNombre);
     setResueltos(prev => new Set([...prev, jugadorId]));
     setResolviendo(null);
     cargar();
@@ -4566,7 +4597,7 @@ function AdminPujas({ participantes, federacion }) {
 }
 
 // ── ADMIN — CIERRES DE JORNADA ─────────────────────────────────
-function AdminCierres({ federacion }) {
+function AdminCierres({ federacion, actorNombre }) {
   const [jornada, setJornada] = useState(federacion?.jornada_actual || 1);
   const [cierre, setCierre]   = useState('');
   const [msg, setMsg]         = useState('');
@@ -4586,11 +4617,13 @@ function AdminCierres({ federacion }) {
     if (!cierre) {
       await sb.from('jornadas_cierre').delete()
         .eq('federacion_id', fedId).eq('jornada', jornada);
+      publicar(fedId, 'admin', `Cierre de alineaciones de J${jornada} eliminado`, actorNombre);
       setMsg('Cierre eliminado');
     } else {
       await sb.from('jornadas_cierre')
         .upsert({ federacion_id: fedId, jornada, cierre: new Date(cierre).toISOString() },
                 { onConflict: 'federacion_id,jornada' });
+      publicar(fedId, 'admin', `Cierre de alineaciones de J${jornada} fijado para el ${new Date(cierre).toLocaleString('es-ES', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`, actorNombre);
       setMsg('Cierre guardado');
     }
     setTimeout(() => setMsg(''), 3000);
@@ -4632,7 +4665,7 @@ function AdminCierres({ federacion }) {
 }
 
 // ── ADMIN — MERCADO (ventas + sorteo) ─────────────────────────
-function AdminMercado({ federacion, onFederacionUpdate }) {
+function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
   const [ventas,       setVentas]       = useState(!!federacion?.ventas_habilitadas);
   const [sorteo,       setSorteo]       = useState(!!federacion?.sorteo_habilitado);
   const [ptsMod,       setPtsMod]       = useState(!!federacion?.puntos_mod_habilitado);
@@ -4645,6 +4678,14 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
   const [pctVenta,     setPctVenta]     = useState(federacion?.pct_venta_mercado ?? 100);
   const [msg, setMsg]                   = useState('');
 
+  const CAMPO_LOG = {
+    ventas_habilitadas:      v => `Ventas en el mercado ${v ? 'habilitadas' : 'deshabilitadas'}`,
+    sorteo_habilitado:       v => `Sorteo del mercado ${v ? 'habilitado' : 'deshabilitado'}`,
+    puntos_mod_habilitado:   v => `Puntos por moderador ${v ? 'habilitado' : 'deshabilitado'}`,
+    cesiones_habilitadas:    v => `Cesiones ${v ? 'habilitadas' : 'deshabilitadas'}`,
+    duplicados_habilitado:   v => `Jugadores duplicados ${v ? 'habilitados' : 'deshabilitados'}`,
+  };
+
   const cambiar = async (campo, valor, setEstado) => {
     if (!sb || !federacion) return;
     const { error } = await sb.from('federaciones')
@@ -4652,6 +4693,7 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
     if (error) { alert('Error al guardar: ' + error.message); return; }
     setEstado(valor);
     onFederacionUpdate({ ...federacion, [campo]: valor });
+    if (CAMPO_LOG[campo]) publicar(federacion.id, 'admin', CAMPO_LOG[campo](valor), actorNombre);
     setMsg('Guardado');
     setTimeout(() => setMsg(''), 2500);
   };
@@ -4663,6 +4705,7 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
       .update({ hora_cierre_pujas: val }).eq('id', federacion.id);
     if (error) { alert('Error al guardar: ' + error.message); return; }
     onFederacionUpdate({ ...federacion, hora_cierre_pujas: val });
+    publicar(federacion.id, 'admin', val ? `Hora de cierre automático de pujas fijada a las ${val}` : 'Hora de cierre automático de pujas desactivada', actorNombre);
     setMsg('Guardado');
     setTimeout(() => setMsg(''), 2500);
   };
@@ -4872,7 +4915,7 @@ function AdminMercado({ federacion, onFederacionUpdate }) {
 }
 
 // ── ADMIN — MI FEDERACIÓN ──────────────────────────────────────
-function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], onParticipantesChange }) {
+function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], onParticipantesChange, isModerador, actorNombre }) {
   const [nombre, setNombre]       = useState(federacion?.nombre || '');
   const [presup, setPresup]       = useState(String(federacion?.presupuesto_inicial ?? 100000000));
   const [jornada, setJornada]     = useState(String(federacion?.jornada_actual ?? 1));
@@ -4905,6 +4948,8 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     const { error } = await sb.from('moderadores')
       .insert({ federacion_id: federacion.id, participante_id: selMod });
     if (error) { setMsgMod('Error: ' + error.message); return; }
+    const nomMod = participantes.find(p => p.id === selMod)?.nombre || selMod;
+    publicar(federacion.id, 'moderador', `${nomMod} ha sido nombrado moderador de la federación`, actorNombre);
     setSelMod('');
     setMsgMod('Moderador añadido');
     setTimeout(() => setMsgMod(''), 2500);
@@ -4912,7 +4957,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   };
 
   const quitarModerador = async (modId) => {
+    const modPid = mods.find(m => m.id === modId)?.participante_id;
+    const nomMod = participantes.find(p => p.id === modPid)?.nombre;
     await sb.from('moderadores').delete().eq('id', modId);
+    if (nomMod) publicar(federacion.id, 'moderador', `${nomMod} ha dejado de ser moderador de la federación`, actorNombre);
     cargarMods();
   };
 
@@ -4943,16 +4991,20 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
 
   const guardar = async () => {
     if (!sb || !federacion) return;
+    const nuevoNombre = nombre.trim() || federacion.nombre;
+    const nuevoPresup = parseFloat(presup) || federacion.presupuesto_inicial;
+    const nuevaJornada = parseInt(jornada) || federacion.jornada_actual;
     const { error, data } = await sb.from('federaciones')
-      .update({
-        nombre:              nombre.trim() || federacion.nombre,
-        presupuesto_inicial: parseFloat(presup) || federacion.presupuesto_inicial,
-        jornada_actual:      parseInt(jornada)  || federacion.jornada_actual,
-      })
+      .update({ nombre: nuevoNombre, presupuesto_inicial: nuevoPresup, jornada_actual: nuevaJornada })
       .eq('id', federacion.id)
       .select().single();
     if (error) { alert('Error: ' + error.message); return; }
     onFederacionUpdate(data);
+    const cambios = [];
+    if (nuevoNombre !== federacion.nombre) cambios.push(`nombre → "${nuevoNombre}"`);
+    if (nuevoPresup !== federacion.presupuesto_inicial) cambios.push(`presupuesto inicial → ${fmt(nuevoPresup)}`);
+    if (nuevaJornada !== federacion.jornada_actual) cambios.push(`jornada actual → J${nuevaJornada}`);
+    if (cambios.length) publicar(federacion.id, 'admin', `Configuración de federación actualizada: ${cambios.join(', ')}`, actorNombre);
     setMsg('Guardado correctamente');
     setTimeout(() => setMsg(''), 3000);
   };
@@ -5157,7 +5209,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             entrenador:    nuevoEq.entrenador.trim() || null,
           });
           if (error) { setMsgEq('Error: ' + error.message); return; }
-          publicar(federacion.id, 'admin', `Nuevo equipo creado: ${nuevoEq.nombre.trim()}`);
+          publicar(federacion.id, 'admin', `Nuevo equipo creado: ${nuevoEq.nombre.trim()}`, actorNombre);
           setNuevoEq({ nombre:'', estadio:'', entrenador:'' });
           setMsgEq('Equipo creado');
           setTimeout(() => setMsgEq(''), 2500);
@@ -5225,6 +5277,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     </div>
 
     {/* ── REINICIO DE TEMPORADA ── */}
+    {!isModerador && (
     <div className="card" style={{borderColor:'#dc3545', borderWidth:2}}>
       <h2 style={{color:'#dc3545', marginBottom:'.5rem'}}>REINICIO DE TEMPORADA</h2>
       <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem'}}>
@@ -5250,9 +5303,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         </button>
       </div>
     </div>
+    )}
 
     {/* ── Modal de confirmación ── */}
-    {resetModal && (
+    {!isModerador && resetModal && (
       <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.55)',
                    display:'flex', alignItems:'center', justifyContent:'center',
                    zIndex:1000, padding:'1rem'}}>
@@ -5323,7 +5377,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
 
 // ── ADMIN — PANEL PRINCIPAL ────────────────────────────────────
 // ── ADMIN EQUIPOS — editar plantilla, pts y penalizaciones ─────
-function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
+function AdminEquipos({ participantes, federacion, onParticipantesChange, actorNombre }) {
   const [selId, setSelId]         = useState(participantes[0]?.id || '');
   const [subtab, setSubtab]       = useState('plantilla');
   const [plantilla, setPlantilla] = useState(null);
@@ -5392,7 +5446,8 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
     publicar(
       federacion?.id,
       'venta',
-      `${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)} (acción del administrador)`
+      `${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)}`,
+      actorNombre
     );
     onParticipantesChange?.();
     cargar();
@@ -5423,14 +5478,14 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
       await sb.from('participantes').update({ presupuesto: nuevo }).eq('id', selId);
       onParticipantesChange?.();
       cargar();
-      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cant)}${penMotivo ? ` (${penMotivo})` : ''}`);
+      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cant)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
       flash(`Penalización de ${fmt(cant)} aplicada al presupuesto`);
     } else {
       const jornadaActual = clas.length > 0 ? Math.max(...clas.map(r => r.jornada)) : 1;
       const actual = clas.find(r => r.jornada === jornadaActual)?.puntos_jornada || 0;
       await sb.from('clasificacion').upsert({ participante_id: selId, jornada: jornadaActual, puntos_jornada: actual - cant }, { onConflict: 'participante_id,jornada' });
       cargar();
-      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de puntos: -${cant} pts${penMotivo ? ` (${penMotivo})` : ''}`);
+      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de puntos: -${cant} pts${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
       flash(`Penalización de ${cant} pts aplicada en jornada ${jornadaActual}`);
     }
     setPenCantidad(''); setPenMotivo('');
@@ -5998,7 +6053,7 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
 }
 
 // ── ADMIN JUGADORES — añadir / borrar jugadores ────────────────
-function AdminJugadores({ participantes, federacion }) {
+function AdminJugadores({ participantes, federacion, actorNombre }) {
   const POSICIONES = ['POR', 'DEF', 'MED', 'DEL'];
 
   // ── Equipos reales conocidos (del mapa de escudos + los de la BD)
@@ -6032,6 +6087,8 @@ function AdminJugadores({ participantes, federacion }) {
     const nuevoEstado = !j.lesionado;
     const { error } = await sb.from('jugadores').update({ lesionado: nuevoEstado }).eq('id', j.id);
     if (error) { alert('Error: ' + error.message); return; }
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    publicar(federacion?.id, 'admin', `${nomJug} marcado como ${nuevoEstado ? 'lesionado' : 'disponible'}`, actorNombre);
     setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, lesionado: nuevoEstado } : p));
   };
 
@@ -6071,7 +6128,9 @@ function AdminJugadores({ participantes, federacion }) {
       }
     }
 
-    setMsg(`✓ ${form.posicion === 'POR' ? 'Portería de ' + form.equipo.trim() : form.nombre.trim()} añadido${form.destino === 'equipo' ? ' a la plantilla' : ' al mercado'}.`);
+    const nomJug = form.posicion === 'POR' ? `Portería de ${form.equipo.trim()}` : form.nombre.trim();
+    publicar(federacion?.id, 'admin', `Jugador añadido: ${nomJug} (${form.equipo.trim()}, ${form.posicion})${form.destino === 'equipo' ? ` → ${participantes.find(p => p.id === form.participante_id)?.nombre}` : ' → Mercado libre'}`, actorNombre);
+    setMsg(`✓ ${nomJug} añadido${form.destino === 'equipo' ? ' a la plantilla' : ' al mercado'}.`);
     setForm(vacioForm);
     setGuardando(false);
     cargarJugadores();
@@ -6080,9 +6139,11 @@ function AdminJugadores({ participantes, federacion }) {
   const borrar = async (j) => {
     if (!confirm(`¿Eliminar a "${j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.`)) return;
     setBorrando(j.id);
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
     const { error } = await sb.from('jugadores').delete().eq('id', j.id);
     setBorrando(null);
     if (error) { alert('Error: ' + error.message); return; }
+    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo})`, actorNombre);
     cargarJugadores();
   };
 
@@ -6396,7 +6457,7 @@ function Cesiones({ federacion, miParticipanteId }) {
 }
 
 // ── ADMIN — CESIONES ───────────────────────────────────────────
-function AdminCesiones({ federacion, participantes }) {
+function AdminCesiones({ federacion, participantes, actorNombre }) {
   const federacionId = federacion?.id;
   const [cesiones, setCesiones] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -6415,8 +6476,15 @@ function AdminCesiones({ federacion, participantes }) {
   };
 
   const cambiarEstado = async (id, nuevoEstado) => {
+    const cesion = cesiones.find(c => c.id === id);
     const { error } = await sb.from('cesiones').update({ estado: nuevoEstado }).eq('id', id);
     if (error) { alert('Error: ' + error.message); return; }
+    if (cesion) {
+      const nomJug = nombreJugador(cesion.jugadores?.nombre, cesion.jugadores?.posicion, cesion.jugadores?.equipo);
+      const nomEq  = cesion.participante?.nombre;
+      const accion = nuevoEstado === 'aprobada' ? 'aprobada' : nuevoEstado === 'rechazada' ? 'rechazada' : 'revertida a pendiente';
+      publicar(federacion?.id, 'admin', `Cesión de ${nomJug} para ${nomEq} (J${cesion.jornada}): ${accion}`, actorNombre);
+    }
     cargar();
   };
 
@@ -6563,7 +6631,7 @@ function calcularSustitucionesAuto(alisData, noJugoSet, jugadoresMap) {
 }
 
 // ── ADMIN: JUGADORES QUE NO JUGARON + SUSTITUCIONES AUTOMÁTICAS ──
-function AdminNoJugo({ federacion, participantes }) {
+function AdminNoJugo({ federacion, participantes, actorNombre }) {
   const federacionId = federacion?.id;
   const [jornada, setJornada]         = useState(1);
   const [alisData, setAlisData]       = useState([]);
@@ -6673,6 +6741,13 @@ function AdminNoJugo({ federacion, participantes }) {
     }
 
     setGuardando(false);
+    const nomNJ = [...noJugo].map(jid => jugMap[jid]).filter(Boolean)
+      .map(j => j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre);
+    publicar(federacion?.id, 'admin',
+      noJugo.size > 0
+        ? `No jugaron J${jornada}: ${nomNJ.join(', ')}`
+        : `No jugaron J${jornada}: lista limpiada`,
+      actorNombre);
     setMsg('Guardado. Sustituciones calculadas y clasificación actualizada.');
     setTimeout(() => setMsg(''), 5000);
   };
@@ -6887,29 +6962,23 @@ function AdminNoJugo({ federacion, participantes }) {
   );
 }
 
-function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador }) {
+function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador, actorNombre }) {
   // [key, label, soloAdmin]
   const TABS_DEF = [
-    ['federacion',   'Mi Federación', true],
-    ['equipos',      'Equipos',       true],
-    ['ptsjug',       'Pts Jugadores', false],
-    ['presupuestos', 'Presupuestos',  false],
-    ['pujas',        'Pujas',         false],
-    ['fichajespend', 'Fich. Pend.',   false],
-    ['cierres',      'Cierres',       false],
-    ['mercado',      'Mercado',       true],
-    ['jugadores',    'Jugadores',     true],
-    ['h2h',          'Liga H2H',      true],
-    ['cesiones',     'Cesiones',      true],
-    ['nojugo',       'No Jugaron',    true],
+    ['federacion',   'Mi Federación'],
+    ['equipos',      'Equipos'],
+    ['ptsjug',       'Pts Jugadores'],
+    ['presupuestos', 'Presupuestos'],
+    ['pujas',        'Pujas'],
+    ['fichajespend', 'Fich. Pend.'],
+    ['cierres',      'Cierres'],
+    ['mercado',      'Mercado'],
+    ['jugadores',    'Jugadores'],
+    ['h2h',          'Liga H2H'],
+    ['cesiones',     'Cesiones'],
+    ['nojugo',       'No Jugaron'],
   ];
-  // Moderadores solo ven tabs con soloAdmin=false, SALVO que la federacion tenga puntos_mod_habilitado
-  const ptsMod = federacion?.puntos_mod_habilitado;
-  const tabs = TABS_DEF.filter(([k,, soloAdmin]) => {
-    if (!isModerador) return true;
-    if (k === 'ptsjug') return ptsMod;
-    return !soloAdmin;
-  });
+  const tabs = TABS_DEF;
   const primera = tabs[0]?.[0] || 'federacion';
   const [subtab, setSubtab] = useState(primera);
 
@@ -6930,18 +6999,18 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
           <button key={k} className={`tab ${subtab===k?'active':''}`} onClick={() => setSubtab(k)}>{l}</button>
         ))}
       </div>
-      {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} />}
-      {subtab === 'equipos'       && <AdminEquipos participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} />}
-      {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} federacion={federacion} />}
-      {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} />}
-      {subtab === 'pujas'         && <AdminPujas participantes={participantes} federacion={federacion} />}
-      {subtab === 'fichajespend'  && <AdminFichajesPendientes participantes={participantes} federacion={federacion} />}
-      {subtab === 'cierres'       && <AdminCierres federacion={federacion} />}
-      {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} />}
-      {subtab === 'jugadores'    && <AdminJugadores participantes={participantes} federacion={federacion} />}
-      {subtab === 'h2h'          && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} />}
-      {subtab === 'cesiones'     && <AdminCesiones federacion={federacion} participantes={participantes} />}
-      {subtab === 'nojugo'      && <AdminNoJugo federacion={federacion} participantes={participantes} />}
+      {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} isModerador={isModerador} actorNombre={actorNombre} />}
+      {subtab === 'equipos'       && <AdminEquipos participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} actorNombre={actorNombre} />}
+      {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'pujas'         && <AdminPujas participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'fichajespend'  && <AdminFichajesPendientes participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'cierres'       && <AdminCierres federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
+      {subtab === 'jugadores'    && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'h2h'          && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
+      {subtab === 'cesiones'     && <AdminCesiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
+      {subtab === 'nojugo'      && <AdminNoJugo federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
     </div>
   );
 }
@@ -7337,7 +7406,7 @@ function App() {
         {/* Mercado se mantiene montado para no relanzar queries al volver */}
         <div style={{display: vista === 'Mercado' ? '' : 'none'}}>
           <Mercado participanteId={participanteId} participantes={participantes}
-                   isAdmin={isAdmin} onFichaje={() => {}} federacion={federacion}
+                   isAdmin={isAdmin} isModerador={isModerador} onFichaje={() => {}} federacion={federacion}
                    miParticipanteId={session?.participante_id}
                    onBadgeChange={refrescarBadge} ofertasBadge={ofertasBadge} />
         </div>
@@ -7350,7 +7419,7 @@ function App() {
           <Equipos participantes={participantes} miParticipanteId={participanteId}
                    sesionParticipanteId={session?.participante_id}
                    jornadaActual={federacion?.jornada_actual || 1}
-                   isAdmin={isAdmin}
+                   isAdmin={isAdmin} isModerador={isModerador}
                    federacion={federacion}
                    onParticipantesChange={recargarParticipantes}
                    onOfertaEnviada={refrescarBadge} />
@@ -7362,7 +7431,7 @@ function App() {
           <Ayuda isAdmin={isAdmin} />
         )}
         {vista === 'Tablón' && (
-          <Tablon federacionId={federacion?.id} isAdmin={isAdmin}
+          <Tablon federacionId={federacion?.id} isAdmin={isAdmin} isModerador={isModerador}
                   miNombre={participantes.find(p => p.id === session?.participante_id)?.nombre}
                   onBadgeChange={refrescarTablonBadge} />
         )}
@@ -7372,7 +7441,8 @@ function App() {
                         federacion={federacion}
                         onFederacionUpdate={setFederacion}
                         onParticipantesChange={recargarParticipantes}
-                        isModerador={isModerador} />
+                        isModerador={isModerador}
+                        actorNombre={participantes.find(p => p.id === session?.participante_id)?.nombre || (isAdmin ? 'Admin' : 'Moderador')} />
           </ErrorBoundary>
         )}
       </main>
@@ -7940,7 +8010,7 @@ function getVueltaInfo(jornada, jornadasBase, ptsV1, ptsV2, vueltasExtra) {
     : { vuelta: 2, ptsLocal: ptsV2 ?? 5 };
 }
 
-function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
+function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerador, actorNombre }) {
   const [h2hOn,      setH2hOn]      = useState(!!federacion?.h2h_habilitado);
   const [partidos,   setPartidos]   = useState([]);
   const [resultados, setResultados] = useState({});
@@ -8120,6 +8190,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     }));
     setCalculando(null);
     await cargar();
+    publicar(federacion?.id, 'admin', `H2H J${j_h2h} calculada automáticamente desde jornada fantasy ${jornada_fantasy}`, actorNombre);
     setMsg(`J${j_h2h} calculada desde jornada fantasy ${jornada_fantasy}`);
     setTimeout(() => setMsg(''), 3000);
   };
@@ -8290,6 +8361,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
       return sb.from('h2h_partidos').update({ pts_local: gl, pts_visitante: gv }).eq('id', m.id);
     }));
     setGuardando(false);
+    publicar(federacion?.id, 'admin', 'Resultados de Liga H2H guardados', actorNombre);
     setMsg('Resultados guardados');
     setTimeout(() => setMsg(''), 2500);
     cargar();
@@ -8545,7 +8617,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
         </div>
 
         {/* ── Opciones de generación ── */}
-        {!modoSorteo && (
+        {!isModerador && !modoSorteo && (
           <div style={{padding:'1rem 0'}}>
             <div style={{fontWeight:700, marginBottom:'.3rem'}}>Generar calendario</div>
             <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
@@ -8566,7 +8638,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
         )}
 
         {/* ── Panel de sorteo físico ── */}
-        {modoSorteo && (
+        {!isModerador && modoSorteo && (
           <div style={{padding:'1rem 0'}}>
             <div style={{fontWeight:700, fontSize:'1rem', marginBottom:'.3rem'}}>🎲 Sorteo físico</div>
             <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.6rem'}}>

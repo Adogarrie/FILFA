@@ -4729,6 +4729,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [selMod, setSelMod]   = useState('');
   const [msgMod, setMsgMod]   = useState('');
 
+  const [resetModal,        setResetModal]        = useState(false);
+  const [resetConfirmNombre, setResetConfirmNombre] = useState('');
+  const [reseteando,        setReseteando]        = useState(false);
+
   const cargarMods = async () => {
     if (!federacion) return;
     const { data } = await sb.from('moderadores').select('id, participante_id')
@@ -4757,6 +4761,19 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const modPids  = new Set(mods.map(m => m.participante_id));
   // Candidatos: equipos de la federación que tienen usuario, no son admin, y no son ya moderadores
   const candidatos = participantes.filter(p => p.user_id && p.user_id !== federacion?.admin_user_id && !modPids.has(p.id));
+
+  const reiniciarFederacion = async () => {
+    if (resetConfirmNombre !== federacion?.nombre || reseteando) return;
+    setReseteando(true);
+    const { error } = await sb.rpc('reiniciar_federacion', { p_federacion_id: federacion.id });
+    setReseteando(false);
+    if (error) { alert('Error: ' + error.message); return; }
+    setResetModal(false);
+    setResetConfirmNombre('');
+    setJornada('1');
+    onFederacionUpdate({ ...federacion, jornada_actual: 1 });
+    alert('Temporada reiniciada. Los presupuestos han sido restaurados y la jornada reseteada a 1.');
+  };
 
   const copiar = () => {
     navigator.clipboard.writeText(federacion?.codigo || '').then(() => {
@@ -5047,6 +5064,100 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         </p>
       )}
     </div>
+
+    {/* ── Zona de peligro ── */}
+    <div className="card" style={{borderColor:'#dc3545', borderWidth:2}}>
+      <h2 style={{color:'#dc3545', marginBottom:'.5rem'}}>Zona de peligro</h2>
+      <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+        Las siguientes acciones son irreversibles. Úsalas con extremo cuidado.
+      </p>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between',
+                   flexWrap:'wrap', gap:'.75rem', padding:'.85rem 1rem',
+                   border:'1.5px solid #dc3545', borderRadius:8,
+                   background:'rgba(220,53,69,.04)'}}>
+        <div style={{flex:1, minWidth:200}}>
+          <div style={{fontWeight:700, marginBottom:'.25rem'}}>Reiniciar temporada</div>
+          <div style={{fontSize:'.82rem', color:'var(--texto2)', lineHeight:1.5}}>
+            Borra plantillas, alineaciones, clasificaciones, ofertas, pujas, cesiones y H2H.
+            Conserva los equipos y resetea presupuestos a {fmt(federacion?.presupuesto_inicial ?? 0)}.
+          </div>
+        </div>
+        <button onClick={() => setResetModal(true)}
+                style={{padding:'.45rem 1.1rem', borderRadius:8,
+                        border:'2px solid #dc3545', background:'none',
+                        color:'#dc3545', fontWeight:700, cursor:'pointer',
+                        fontSize:'.88rem', whiteSpace:'nowrap'}}>
+          Reiniciar temporada
+        </button>
+      </div>
+    </div>
+
+    {/* ── Modal de confirmación ── */}
+    {resetModal && (
+      <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.55)',
+                   display:'flex', alignItems:'center', justifyContent:'center',
+                   zIndex:1000, padding:'1rem'}}>
+        <div className="card" style={{maxWidth:480, width:'100%', border:'2px solid #dc3545'}}>
+          <h2 style={{color:'#dc3545', marginBottom:'.75rem'}}>Reiniciar temporada</h2>
+          <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Esta acción es <strong>irreversible</strong>. Se eliminarán permanentemente:
+          </p>
+          <ul style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem',
+                      paddingLeft:'1.25rem', lineHeight:1.8}}>
+            <li>Plantillas de todos los equipos</li>
+            <li>Alineaciones y sustituciones automáticas</li>
+            <li>Clasificaciones y puntos fantasy</li>
+            <li>Ofertas entre equipos, pujas y fichajes pendientes</li>
+            <li>Cesiones</li>
+            <li>Calendario y resultados H2H</li>
+            <li>Cierres de jornada</li>
+          </ul>
+          <p style={{fontSize:'.84rem', marginBottom:'1rem'}}>
+            Los equipos se conservan con presupuesto reseteado a{' '}
+            <strong>{fmt(federacion?.presupuesto_inicial ?? 0)}</strong>{' '}
+            y la jornada vuelve a 1.
+          </p>
+          <p style={{fontSize:'.84rem', fontWeight:700, marginBottom:'.35rem'}}>
+            Escribe el nombre exacto de la federación para confirmar:
+          </p>
+          <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
+            <code style={{background:'var(--gris)', padding:'2px 8px',
+                          borderRadius:4, fontFamily:'monospace'}}>
+              {federacion?.nombre}
+            </code>
+          </p>
+          <input
+            type="text"
+            value={resetConfirmNombre}
+            onChange={e => setResetConfirmNombre(e.target.value)}
+            placeholder="Nombre de la federación…"
+            style={{width:'100%', padding:'.5rem .75rem', marginBottom:'1.1rem',
+                    border:'1.5px solid ' + (resetConfirmNombre === federacion?.nombre ? '#dc3545' : 'var(--borde)'),
+                    borderRadius:8, fontSize:'.9rem', boxSizing:'border-box',
+                    background:'var(--fondo)', color:'var(--texto)'}}
+          />
+          <div style={{display:'flex', gap:'.75rem', justifyContent:'flex-end'}}>
+            <button
+              onClick={() => { setResetModal(false); setResetConfirmNombre(''); }}
+              style={{padding:'.45rem 1rem', borderRadius:8,
+                      border:'1.5px solid var(--borde)', background:'none',
+                      cursor:'pointer', fontWeight:600, fontSize:'.88rem'}}>
+              Cancelar
+            </button>
+            <button
+              onClick={reiniciarFederacion}
+              disabled={resetConfirmNombre !== federacion?.nombre || reseteando}
+              style={{padding:'.45rem 1.2rem', borderRadius:8, border:'none',
+                      background: resetConfirmNombre === federacion?.nombre ? '#dc3545' : 'var(--borde)',
+                      color: resetConfirmNombre === federacion?.nombre ? '#fff' : 'var(--texto2)',
+                      fontWeight:700, cursor: resetConfirmNombre === federacion?.nombre ? 'pointer' : 'default',
+                      fontSize:'.88rem', transition:'background .15s'}}>
+              {reseteando ? 'Reiniciando…' : 'Confirmar reinicio'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }

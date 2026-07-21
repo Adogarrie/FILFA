@@ -1032,6 +1032,24 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
     cargar();
   };
 
+  const recargarMisPujas = async () => {
+    if (!sb) return;
+    const partIds = participantes.map(p => p.id);
+    if (!partIds.length) return;
+    const { data: allPujas } = await sb.from('pujas')
+      .select('id, participante_id, jugador_id, cantidad')
+      .eq('resuelta', false)
+      .in('participante_id', partIds);
+    const mp = {}, cp = {};
+    for (const p of (allPujas || [])) {
+      cp[p.jugador_id] = (cp[p.jugador_id] || 0) + 1;
+      if (p.participante_id === participanteId)
+        mp[p.jugador_id] = { id: p.id, cantidad: p.cantidad };
+    }
+    setMisPujas(mp);
+    setConteosPujas(cp);
+  };
+
   // ── Fichar directo (solo admin) ────────────────────────────────
   const confirmarFichaje = async () => {
     if (!sb || !participanteId || !modal) { setModal(null); return; }
@@ -1730,7 +1748,8 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
                  participantes={participantes}
                  federacion={federacion}
                  isAdmin={isAdmin}
-                 onBadgeChange={onBadgeChange} />
+                 onBadgeChange={onBadgeChange}
+                 onPujaChange={recargarMisPujas} />
       )}
     </div>
   );
@@ -5039,20 +5058,23 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange }) {
 }
 
 // ── OFERTAS ENTRE EQUIPOS ──────────────────────────────────────
-function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadgeChange }) {
+function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadgeChange, onPujaChange }) {
   const [subtab, setSubtab]         = useState('recibidas');
   const [recibidas, setRecibidas]   = useState(null);
   const [enviadas, setEnviadas]     = useState(null);
+  const [misPujas, setMisPujas]     = useState(null);
   const [rechazModal, setRechazModal] = useState(null);
   const [msgRechazo, setMsgRechazo] = useState('');
   const [editModal, setEditModal]   = useState(null);
   const [editCant, setEditCant]     = useState('');
+  const [editPuja, setEditPuja]     = useState(null);
+  const [editPujaCant, setEditPujaCant] = useState('');
   const [procesando, setProcesando] = useState(null);
   const [msg, setMsg]               = useState('');
 
   const cargar = async () => {
     if (!sb || !miParticipanteId) return;
-    const [{ data: rec }, { data: env }] = await Promise.all([
+    const [{ data: rec }, { data: env }, { data: pujas }] = await Promise.all([
       sb.from('ofertas_jugadores')
         .select('id, cantidad, estado, mensaje, leida, created_at, jugadores(id,nombre,equipo,posicion,valor_mercado), ofertante:ofertante_id(id,nombre,presupuesto)')
         .eq('propietario_id', miParticipanteId)
@@ -5061,9 +5083,15 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
         .select('id, cantidad, estado, mensaje, leida, created_at, jugadores(id,nombre,equipo,posicion,valor_mercado), propietario:propietario_id(id,nombre)')
         .eq('ofertante_id', miParticipanteId)
         .order('created_at', { ascending: false }),
+      sb.from('pujas')
+        .select('id, jugador_id, cantidad, created_at, jugadores(id,nombre,equipo,posicion,valor_mercado)')
+        .eq('participante_id', miParticipanteId)
+        .eq('resuelta', false)
+        .order('created_at', { ascending: false }),
     ]);
     setRecibidas(rec || []);
     setEnviadas(env || []);
+    setMisPujas(pujas || []);
     // Marcar recibidas pendientes como leídas
     const sinLeer = (rec || []).filter(o => !o.leida && o.estado === 'pendiente').map(o => o.id);
     if (sinLeer.length > 0) {
@@ -5123,6 +5151,24 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
     if (!window.confirm('¿Retirar esta oferta?')) return;
     await sb.from('ofertas_jugadores').delete().eq('id', id);
     cargar();
+  };
+
+  const cancelarPuja = async (pujaId) => {
+    if (!window.confirm('¿Retirar esta puja?')) return;
+    await sb.from('pujas').delete().eq('id', pujaId);
+    cargar();
+    onPujaChange && onPujaChange();
+  };
+
+  const guardarEditPuja = async () => {
+    if (!editPuja) return;
+    const cant = Number(editPujaCant);
+    const minimo = editPuja.jugadores?.valor_mercado || 0;
+    if (!cant || cant < minimo) { setMsg(`La puja mínima es ${fmt(minimo)}.`); return; }
+    await sb.from('pujas').update({ cantidad: cant }).eq('id', editPuja.id);
+    setEditPuja(null);
+    cargar();
+    onPujaChange && onPujaChange();
   };
 
   const fmtFecha = ts => new Date(ts).toLocaleDateString('es-ES', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
@@ -5210,6 +5256,9 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
           Recibidas {pendientes.length > 0 && <span style={{background:'#dc3545',color:'#fff',borderRadius:'50%',padding:'0 5px',fontSize:'.75rem',marginLeft:4}}>{pendientes.length}</span>}
         </button>
         <button className={`tab ${subtab==='enviadas'?'active':''}`} onClick={() => setSubtab('enviadas')}>Enviadas</button>
+        <button className={`tab ${subtab==='pujas'?'active':''}`} onClick={() => setSubtab('pujas')}>
+          Pujas del mercado {misPujas?.length > 0 && <span style={{background:'var(--verde)',color:'#fff',borderRadius:'50%',padding:'0 5px',fontSize:'.75rem',marginLeft:4}}>{misPujas.length}</span>}
+        </button>
       </div>
 
       {msg && <div style={{background:'#f8d7da', color:'#58151c', padding:'.6rem 1rem', borderRadius:8, marginBottom:'.75rem', fontSize:'.88rem'}}>{msg}</div>}
@@ -5248,6 +5297,100 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
                 {enviadas.map(o => renderOferta(o, false))}
               </div>
           }
+        </div>
+      )}
+
+      {subtab === 'pujas' && (
+        <div className="card">
+          <h2 style={{marginBottom:'.75rem'}}>Mis pujas activas</h2>
+          {misPujas === null ? <Spinner /> : misPujas.length === 0
+            ? <div className="empty">No tienes pujas activas en el mercado.</div>
+            : <div style={{display:'flex', flexDirection:'column', gap:'.6rem'}}>
+                {misPujas.map(p => {
+                  const jug = p.jugadores || {};
+                  const nom = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
+                  return (
+                    <div key={p.id} style={{padding:'.8rem 1rem', borderRadius:10,
+                                            background:'var(--gris)', display:'flex',
+                                            flexDirection:'column', gap:'.5rem'}}>
+                      <div style={{display:'flex', justifyContent:'space-between',
+                                   alignItems:'flex-start', flexWrap:'wrap', gap:'.5rem'}}>
+                        <div>
+                          <div style={{fontWeight:700, fontSize:'.95rem', display:'flex',
+                                       alignItems:'center', gap:6}}>
+                            <Escudo equipo={jug.equipo} size={ESCUDO_SIZE}/>
+                            {nom}
+                            <span className={`badge ${jug.posicion}`} style={{marginLeft:4}}>{jug.posicion}</span>
+                          </div>
+                          <div style={{fontSize:'.82rem', color:'var(--texto2)', marginTop:'.2rem'}}>
+                            Valor de mercado: {fmt(jug.valor_mercado || 0)}
+                            {' · '}{fmtFecha(p.created_at)}
+                          </div>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontWeight:800, fontSize:'1.1rem'}}>{fmt(p.cantidad)}</div>
+                          <div style={{fontSize:'.75rem', color: p.cantidad > (jug.valor_mercado||0) ? '#198754' : 'var(--texto2)'}}>
+                            {p.cantidad > (jug.valor_mercado||0)
+                              ? `+${fmt(p.cantidad - (jug.valor_mercado||0))} sobre valor`
+                              : 'Al valor de mercado'}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{display:'flex', gap:'.6rem', flexWrap:'wrap'}}>
+                        <button onClick={() => { setEditPuja(p); setEditPujaCant(String(p.cantidad)); setMsg(''); }}
+                                style={{background:'#0d6efd', color:'#fff', border:'none',
+                                        padding:'.35rem .9rem', borderRadius:7,
+                                        cursor:'pointer', fontWeight:600, fontSize:'.85rem'}}>
+                          Editar puja
+                        </button>
+                        <button onClick={() => cancelarPuja(p.id)}
+                                style={{background:'#6c757d', color:'#fff', border:'none',
+                                        padding:'.35rem .9rem', borderRadius:7,
+                                        cursor:'pointer', fontWeight:600, fontSize:'.85rem'}}>
+                          Retirar puja
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+          }
+        </div>
+      )}
+
+      {/* ── Modal editar puja ── */}
+      {editPuja && (
+        <div className="overlay" onClick={() => setEditPuja(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Editar puja</h3>
+            <p style={{fontSize:'.88rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+              Modifica tu puja por <strong>
+                {editPuja.jugadores?.posicion === 'POR'
+                  ? `Portería ${editPuja.jugadores?.equipo}`
+                  : editPuja.jugadores?.nombre || 'el jugador'}
+              </strong>.
+              Mínimo: <strong>{fmt(editPuja.jugadores?.valor_mercado || 0)}</strong>.
+            </p>
+            <div className="campo">
+              <label>Nueva puja (€)</label>
+              <input type="number" value={editPujaCant}
+                     onChange={e => setEditPujaCant(e.target.value)}
+                     min={editPuja.jugadores?.valor_mercado || 0} step="100000" autoFocus
+                     style={{width:'100%', padding:'.5rem .7rem', borderRadius:8,
+                             border:'1.5px solid var(--borde)', fontSize:'.9rem',
+                             boxSizing:'border-box'}} />
+            </div>
+            {msg && <div style={{color:'#dc3545', fontSize:'.85rem', marginTop:'.3rem'}}>{msg}</div>}
+            <div style={{display:'flex', gap:'.75rem', marginTop:'.75rem'}}>
+              <button className="btn-cancel" onClick={() => setEditPuja(null)}>Cancelar</button>
+              <button onClick={guardarEditPuja}
+                      style={{background:'#0d6efd', color:'#fff', border:'none',
+                              padding:'.45rem 1.1rem', borderRadius:8,
+                              cursor:'pointer', fontWeight:700, fontSize:'.9rem'}}>
+                Guardar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

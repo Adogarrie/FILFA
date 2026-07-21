@@ -3115,7 +3115,7 @@ function Tablon({ federacionId, isAdmin }) {
   const ICONOS = {
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
-    admin: '⚙️', mensaje_admin: '📣',
+    admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄',
   };
 
   const fmtFecha = ts => {
@@ -3181,12 +3181,16 @@ function Tablon({ federacionId, isAdmin }) {
                 {anuncios.map(a => (
                   <div key={a.id} style={{display:'flex', gap:'.75rem', alignItems:'flex-start',
                                           padding:'.65rem .9rem',
-                                          background: a.tipo === 'mensaje_admin' ? '#eaf4ea' : 'var(--gris)',
-                                          border: a.tipo === 'mensaje_admin' ? '1.5px solid var(--verde)' : 'none',
+                                          background: a.tipo === 'mensaje_admin' ? '#eaf4ea'
+                                                    : a.tipo === 'reinicio'      ? 'rgba(220,53,69,.06)'
+                                                    : 'var(--gris)',
+                                          border: a.tipo === 'mensaje_admin' ? '1.5px solid var(--verde)'
+                                                : a.tipo === 'reinicio'      ? '1.5px solid #dc3545'
+                                                : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
                     <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
                     <div style={{flex:1}}>
-                      <div style={{fontWeight: a.tipo === 'mensaje_admin' ? 600 : 500,
+                      <div style={{fontWeight: a.tipo === 'mensaje_admin' || a.tipo === 'reinicio' ? 600 : 500,
                                    whiteSpace:'pre-wrap'}}>{a.texto}</div>
                       {a.actor_nombre && (
                         <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>por {a.actor_nombre}</div>
@@ -4772,6 +4776,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     setResetConfirmNombre('');
     setJornada('1');
     onFederacionUpdate({ ...federacion, jornada_actual: 1 });
+    await publicar(federacion.id, 'reinicio', 'La temporada ha sido reiniciada. Plantillas, clasificaciones y H2H han sido borrados. ¡Comienza una nueva temporada!');
     alert('Temporada reiniciada. Los presupuestos han sido restaurados y la jornada reseteada a 1.');
   };
 
@@ -5065,9 +5070,9 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       )}
     </div>
 
-    {/* ── Zona de peligro ── */}
+    {/* ── REINICIO DE TEMPORADA ── */}
     <div className="card" style={{borderColor:'#dc3545', borderWidth:2}}>
-      <h2 style={{color:'#dc3545', marginBottom:'.5rem'}}>Zona de peligro</h2>
+      <h2 style={{color:'#dc3545', marginBottom:'.5rem'}}>REINICIO DE TEMPORADA</h2>
       <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem'}}>
         Las siguientes acciones son irreversibles. Úsalas con extremo cuidado.
       </p>

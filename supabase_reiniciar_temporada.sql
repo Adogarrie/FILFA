@@ -41,8 +41,7 @@ begin
     );
 
   delete from cesiones
-    where cedente_id in (select id from participantes where federacion_id = p_federacion_id)
-       or cedido_id  in (select id from participantes where federacion_id = p_federacion_id);
+    where federacion_id = p_federacion_id;
 
   delete from ofertas_jugadores
     where ofertante_id   in (select id from participantes where federacion_id = p_federacion_id)

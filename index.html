@@ -336,6 +336,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [liberarSel, setLiberarSel]         = useState({});   // pendiente_id → jugador_id
   const [procesandoPend, setProcesandoPend] = useState(null);
   const [escudoUrl, setEscudoUrl]           = useState(null);
+  const [subtabPlantilla, setSubtabPlantilla] = useState('plantilla');
 
   const cargar = async () => {
     if (!participanteId || !sb) { setJugadores([]); return; }
@@ -498,6 +499,16 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
 
   return (
     <div>
+      <div className="tabs" style={{marginBottom:'1rem'}}>
+        <button className={`tab ${subtabPlantilla==='plantilla'?'active':''}`}
+                onClick={() => setSubtabPlantilla('plantilla')}>Plantilla</button>
+        <button className={`tab ${subtabPlantilla==='cesiones'?'active':''}`}
+                onClick={() => setSubtabPlantilla('cesiones')}>Cesiones</button>
+      </div>
+      {subtabPlantilla === 'cesiones' && (
+        <Cesiones federacion={federacion} miParticipanteId={participanteId} />
+      )}
+      {subtabPlantilla === 'plantilla' && <>
       <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'center'}}>
         {escudoUrl && (
           <img src={escudoUrl} alt="Escudo"
@@ -736,6 +747,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
           })}
         </div>
       )}
+      </>}
     </div>
   );
 }
@@ -778,7 +790,7 @@ function CountdownCierre({ horaCierre, habilitado }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion, miParticipanteId }) {
+function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion, miParticipanteId, onBadgeChange, ofertasBadge }) {
   const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
   const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
@@ -1323,17 +1335,32 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
 
   return (
     <div>
-      {/* ── Subtabs: Jugadores / Liberar jugadores ── */}
-      {misFichajes.length > 0 && (
-        <div className="tabs" style={{marginBottom:'1rem'}}>
-          <button className={`tab ${subtabMercado==='jugadores'?'active':''}`}
-                  onClick={() => setSubtabMercado('jugadores')}>Jugadores</button>
+      {/* ── Subtabs: Jugadores / Liberar / Ofertas ── */}
+      <div className="tabs" style={{marginBottom:'1rem'}}>
+        <button className={`tab ${subtabMercado==='jugadores'?'active':''}`}
+                onClick={() => setSubtabMercado('jugadores')}>Jugadores</button>
+        {misFichajes.length > 0 && (
           <button className={`tab ${subtabMercado==='pendientes'?'active':''}`}
                   onClick={() => setSubtabMercado('pendientes')}>
             Liberar jugadores ({misFichajes.length})
           </button>
-        </div>
-      )}
+        )}
+        <button className={`tab ${subtabMercado==='ofertas'?'active':''}`}
+                onClick={() => setSubtabMercado('ofertas')}
+                style={{position:'relative'}}>
+          Ofertas
+          {ofertasBadge > 0 && (
+            <span style={{position:'absolute', top:2, right:2,
+                          background:'#e53e3e', color:'#fff',
+                          borderRadius:'50%', width:16, height:16,
+                          fontSize:10, fontWeight:700,
+                          display:'flex', alignItems:'center', justifyContent:'center',
+                          lineHeight:1, pointerEvents:'none'}}>
+              {ofertasBadge > 9 ? '9+' : ofertasBadge}
+            </span>
+          )}
+        </button>
+      </div>
 
       {/* ── Sección: Liberar jugadores ── */}
       {subtabMercado === 'pendientes' && misFichajes.length > 0 && (
@@ -1696,6 +1723,14 @@ function Mercado({ participanteId, participantes, isAdmin, onFichaje, federacion
             </div>
           </div>
         </div>
+      )}
+
+      {subtabMercado === 'ofertas' && (
+        <Ofertas miParticipanteId={miParticipanteId}
+                 participantes={participantes}
+                 federacion={federacion}
+                 isAdmin={isAdmin}
+                 onBadgeChange={onBadgeChange} />
       )}
     </div>
   );
@@ -6345,6 +6380,27 @@ function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccion
   );
 }
 
+// ── COMPETICIONES ───────────────────────────────────────────────
+function Competiciones({ federacion, participantes }) {
+  const [tab, setTab] = useState('calendario');
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:'1rem'}}>
+        <button className={`tab ${tab==='calendario'?'active':''}`}
+                onClick={() => setTab('calendario')}>Calendario</button>
+        <button className={`tab ${tab==='h2h'?'active':''}`}
+                onClick={() => setTab('h2h')}>Liga H2H</button>
+      </div>
+      {tab === 'calendario' && (
+        <CalendarioFantasy participantes={participantes} federacion={federacion} />
+      )}
+      {tab === 'h2h' && (
+        <LigaH2H federacion={federacion} participantes={participantes} />
+      )}
+    </div>
+  );
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────
 
 function App() {
@@ -6498,7 +6554,7 @@ function App() {
 
   const isAdmin     = federacion?.admin_user_id === authUser?.id;
   const isModerador = !isAdmin && !!session?.es_moderador;
-  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Ofertas', 'Alineación', 'Mercado', 'Equipos', 'Cesiones', 'Calendario', 'Liga H2H', 'Ayuda',
+  const VISTAS      = ['Tablón', 'Mi Plantilla', 'Alineación', 'Mercado', 'Equipos', 'Competiciones', 'Ayuda',
                        ...(isAdmin || isModerador ? ['Admin'] : [])];
   const participanteActual = participantes.find(p => p.id === participanteId);
 
@@ -6516,7 +6572,7 @@ function App() {
           <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}
                   style={{position:'relative'}}>
             {v}
-            {v === 'Ofertas' && ofertasBadge > 0 && (
+            {v === 'Mercado' && ofertasBadge > 0 && (
               <span style={{
                 position:'absolute', top:2, right:2,
                 background:'#e53e3e', color:'#fff',
@@ -6576,19 +6632,13 @@ function App() {
         <div style={{display: vista === 'Mercado' ? '' : 'none'}}>
           <Mercado participanteId={participanteId} participantes={participantes}
                    isAdmin={isAdmin} onFichaje={() => {}} federacion={federacion}
-                   miParticipanteId={session?.participante_id} />
+                   miParticipanteId={session?.participante_id}
+                   onBadgeChange={refrescarBadge} ofertasBadge={ofertasBadge} />
         </div>
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}
                       jornadaActual={federacion?.jornada_actual || 1}
                       federacionId={federacion?.id} />
-        )}
-        {vista === 'Ofertas' && (
-          <Ofertas miParticipanteId={participanteId}
-                   participantes={participantes}
-                   federacion={federacion}
-                   isAdmin={isAdmin}
-                   onBadgeChange={refrescarBadge} />
         )}
         {vista === 'Equipos' && (
           <Equipos participantes={participantes} miParticipanteId={participanteId}
@@ -6599,15 +6649,8 @@ function App() {
                    onParticipantesChange={recargarParticipantes}
                    onOfertaEnviada={refrescarBadge} />
         )}
-        {vista === 'Cesiones' && (
-          <Cesiones federacion={federacion}
-                    miParticipanteId={session?.participante_id} />
-        )}
-        {vista === 'Calendario' && (
-          <CalendarioFantasy participantes={participantes} federacion={federacion} />
-        )}
-        {vista === 'Liga H2H' && (
-          <LigaH2H federacion={federacion} participantes={participantes} />
+        {vista === 'Competiciones' && (
+          <Competiciones federacion={federacion} participantes={participantes} />
         )}
         {vista === 'Ayuda' && (
           <Ayuda isAdmin={isAdmin} />
@@ -8009,8 +8052,8 @@ function Ayuda({ isAdmin }) {
       titulo: '🤝 Ofertas entre equipos',
       contenido: [
         ['Enviar una oferta', 'Desde Equipos → ficha de otro equipo, pulsa el botón de oferta junto a cualquiera de sus jugadores e introduce el importe. La oferta llega al equipo propietario.'],
-        ['Recibir y gestionar', 'En la pestaña Ofertas verás las ofertas recibidas. Puedes aceptarlas o rechazarlas. Al aceptar, el jugador pasa a fichajes pendientes del comprador y el dinero se transfiere inmediatamente.'],
-        ['Editar o retirar', 'En la pestaña Ofertas → Enviadas puedes editar el importe o retirar una oferta que aún esté pendiente.'],
+        ['Recibir y gestionar', 'En Mercado → Ofertas verás las ofertas recibidas. Puedes aceptarlas o rechazarlas. Al aceptar, el jugador pasa a fichajes pendientes del comprador y el dinero se transfiere inmediatamente.'],
+        ['Editar o retirar', 'En Mercado → Ofertas → Enviadas puedes editar el importe o retirar una oferta que aún esté pendiente.'],
         ['Mercado cerrado', 'El admin puede deshabilitar las ventas. Con el mercado cerrado no se pueden enviar ni aceptar ofertas.'],
       ]
     },
@@ -8019,7 +8062,7 @@ function Ayuda({ isAdmin }) {
       titulo: '🔄 Cesiones',
       contenido: [
         ['¿Qué es una cesión?', 'Permite solicitar el préstamo temporal de un jugador libre del mercado (sin equipo fantasy) para una jornada concreta. Los puntos cuentan al 100 % a tu favor.'],
-        ['Cómo solicitarla', 'Desde la pestaña Cesiones, elige la jornada y el jugador libre que quieres. La solicitud queda pendiente de aprobación del administrador.'],
+        ['Cómo solicitarla', 'Desde Mi Plantilla → Cesiones, elige la jornada y el jugador libre que quieres. La solicitud queda pendiente de aprobación del administrador.'],
         ['Aprobación', 'Solo el admin puede aprobar o rechazar cada solicitud. Recibirás una notificación en el tablón cuando se resuelva.'],
         ['Condición', 'Solo puedes ceder jugadores que no pertenezcan a ningún equipo fantasy en el momento de la solicitud. Si el jugador es fichado antes de que el admin la apruebe, la cesión puede quedar sin efecto.'],
         ['Habilitación', 'El admin puede activar o desactivar las cesiones. Con esta opción desactivada no se pueden enviar nuevas solicitudes, aunque las ya aprobadas siguen siendo válidas.'],

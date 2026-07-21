@@ -7146,7 +7146,7 @@ function LigaH2H({ federacion, participantes }) {
     if (!sb || !federacion?.id || !federacion?.h2h_habilitado) return;
     Promise.all([
       sb.from('h2h_partidos')
-        .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
+        .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
         .eq('federacion_id', federacion.id).order('jornada'),
       sb.from('h2h_vueltas_extra')
         .select('vuelta_num, basada_en, pts_local, jornada_inicio')
@@ -7179,7 +7179,7 @@ function LigaH2H({ federacion, participantes }) {
     const stats = {};
     equips.forEach(p => {
       stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
-                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
     });
     const msBase = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     const ms = jEnd !== null ? msBase.filter(m => m.jornada <= jEnd) : msBase;
@@ -7190,6 +7190,10 @@ function LigaH2H({ federacion, participantes }) {
       const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
       L.pj++; V.pj++;
       L.gf += gl; L.gc += gv; V.gf += gv; V.gc += gl;
+      if (m.fantasy_local != null && m.fantasy_visitante != null) {
+        L.pf += Number(m.fantasy_local); L.pc += Number(m.fantasy_visitante);
+        V.pf += Number(m.fantasy_visitante); V.pc += Number(m.fantasy_local);
+      }
       if (gl > gv)       { L.pg++; L.pts += 3; V.pp++; }
       else if (gl === gv) { L.pe++; L.pts++;    V.pe++; V.pts++; }
       else               { V.pg++; V.pts += 3; L.pp++; }
@@ -7268,7 +7272,7 @@ function LigaH2H({ federacion, participantes }) {
     const stats  = {};
     equips.forEach(p => {
       stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
-                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
     });
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
@@ -7280,6 +7284,10 @@ function LigaH2H({ federacion, participantes }) {
       if (!L || !V) return;
       L.pj++; L.gf += gl; L.gc += gv;
       V.pj++; V.gf += gv; V.gc += gl;
+      if (m.fantasy_local != null && m.fantasy_visitante != null) {
+        L.pf += Number(m.fantasy_local); L.pc += Number(m.fantasy_visitante);
+        V.pf += Number(m.fantasy_visitante); V.pc += Number(m.fantasy_local);
+      }
       if (gl > gv)        { L.pg++; L.pts += 3; V.pp++; }
       else if (gl === gv) { L.pe++; L.pts++;    V.pe++; V.pts++; }
       else                { V.pg++; V.pts += 3; L.pp++; }
@@ -7297,7 +7305,7 @@ function LigaH2H({ federacion, participantes }) {
     const stats    = {};
     equips.forEach(p => {
       stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
-                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+                      pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
     });
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
@@ -7310,6 +7318,11 @@ function LigaH2H({ federacion, participantes }) {
       const tf = side === 'local' ? gl : gv;
       const tc = side === 'local' ? gv : gl;
       T.pj++; T.gf += tf; T.gc += tc;
+      if (m.fantasy_local != null && m.fantasy_visitante != null) {
+        const ffan = side === 'local' ? Number(m.fantasy_local) : Number(m.fantasy_visitante);
+        const cfan = side === 'local' ? Number(m.fantasy_visitante) : Number(m.fantasy_local);
+        T.pf += ffan; T.pc += cfan;
+      }
       if (tf > tc)      { T.pg++; T.pts += 3; }
       else if (tf === tc) { T.pe++; T.pts++; }
       else              { T.pp++; }
@@ -7399,6 +7412,8 @@ function LigaH2H({ federacion, participantes }) {
               <th style={{textAlign:'right'}}>GC</th>
               <th style={{textAlign:'right'}}>DIF</th>
               <th style={{textAlign:'right', color:'var(--verde)'}}>PTS</th>
+              <th style={{textAlign:'right', borderLeft:'2px solid var(--borde)'}}>PF</th>
+              <th style={{textAlign:'right'}}>PC</th>
             </tr>
           </thead>
           <tbody>
@@ -7421,6 +7436,14 @@ function LigaH2H({ federacion, participantes }) {
                   {e.gf-e.gc >= 0 ? '+':''}{e.gf-e.gc}
                 </td>
                 <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
+                <td style={{textAlign:'right', borderLeft:'2px solid var(--borde)',
+                            color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>
+                  {e.pf > 0 ? e.pf : '—'}
+                </td>
+                <td style={{textAlign:'right', color:'var(--texto2)',
+                            fontVariantNumeric:'tabular-nums'}}>
+                  {e.pc > 0 ? e.pc : '—'}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -7665,7 +7688,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
   const cargar = async () => {
     if (!federacion?.id) return;
     const { data } = await sb.from('h2h_partidos')
-      .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
+      .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
       .eq('federacion_id', federacion.id)
       .order('jornada');
     const p = data || [];
@@ -7794,7 +7817,11 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate }) {
     await Promise.all(ms.map(m => {
       const gl = ptsToGoles((ptsMap[m.local_id] ?? 0) + ptsLocal, baremo);
       const gv = ptsToGoles(ptsMap[m.visitante_id] ?? 0, baremo);
-      return sb.from('h2h_partidos').update({ pts_local: gl, pts_visitante: gv }).eq('id', m.id);
+      return sb.from('h2h_partidos').update({
+        pts_local: gl, pts_visitante: gv,
+        fantasy_local: ptsMap[m.local_id] ?? null,
+        fantasy_visitante: ptsMap[m.visitante_id] ?? null,
+      }).eq('id', m.id);
     }));
     setCalculando(null);
     await cargar();

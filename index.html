@@ -2243,10 +2243,21 @@ function AdminPtsJugadores({ participantes, federacion }) {
   const [equipoSel, setEquipoSel] = useState('');
 
   useEffect(() => {
-    if (!sb) return;
-    sb.from('jugadores').select('id, nombre, equipo, posicion').order('equipo').order('posicion')
-      .then(({ data }) => setJugadores(data || []));
-  }, []);
+    if (!sb || !participantes.length) return;
+    (async () => {
+      const partIds = participantes.map(p => p.id);
+      const { data: pl } = await sb.from('plantillas')
+        .select('jugador_id')
+        .in('participante_id', partIds);
+      const ids = [...new Set((pl || []).map(r => r.jugador_id))];
+      if (!ids.length) { setJugadores([]); return; }
+      const { data } = await sb.from('jugadores')
+        .select('id, nombre, equipo, posicion')
+        .in('id', ids)
+        .order('equipo').order('posicion');
+      setJugadores(data || []);
+    })();
+  }, [federacion?.id, participantes.length]);
 
   useEffect(() => {
     if (!sb || jugadores.length === 0) return;

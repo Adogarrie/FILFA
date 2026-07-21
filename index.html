@@ -2816,7 +2816,264 @@ async function publicar(federacionId, tipo, texto, actorNombre) {
   if (error) console.error('[Tablón] Error al publicar:', error.message, { tipo, texto });
 }
 
+// ── INFORMACIÓN DE LA FEDERACIÓN ──────────────────────────────
+function FederacionInfo({ federacionId, isAdmin }) {
+  const [bloques, setBloques]     = useState(null);
+  const [editando, setEditando]   = useState(false);
+  const [formModal, setFormModal] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const cargar = async () => {
+    if (!sb || !federacionId) return;
+    const { data } = await sb.from('federation_info_blocks')
+      .select('*').eq('federacion_id', federacionId)
+      .order('orden', { ascending: true });
+    setBloques(data || []);
+  };
+
+  useEffect(() => { cargar(); }, [federacionId]);
+
+  const guardar = async () => {
+    if (!formModal) return;
+    const { tipo, titulo, contenido, url, id } = formModal;
+    if (tipo === 'texto'  && !contenido?.trim()) return;
+    if (tipo !== 'texto'  && !url?.trim())       return;
+    setGuardando(true);
+    if (id) {
+      await sb.from('federation_info_blocks')
+        .update({ titulo: titulo?.trim() || null,
+                  contenido: contenido?.trim() || null,
+                  url: url?.trim() || null })
+        .eq('id', id);
+    } else {
+      await sb.from('federation_info_blocks').insert({
+        federacion_id: federacionId, tipo,
+        titulo: titulo?.trim() || null,
+        contenido: contenido?.trim() || null,
+        url: url?.trim() || null,
+        orden: (bloques || []).length,
+      });
+    }
+    setFormModal(null);
+    setGuardando(false);
+    cargar();
+  };
+
+  const eliminar = async (id) => {
+    if (!confirm('¿Eliminar este bloque?')) return;
+    await sb.from('federation_info_blocks').delete().eq('id', id);
+    cargar();
+  };
+
+  const mover = async (idx, dir) => {
+    const bs = [...(bloques || [])];
+    const other = idx + dir;
+    if (other < 0 || other >= bs.length) return;
+    const [a, b] = [bs[idx], bs[other]];
+    await Promise.all([
+      sb.from('federation_info_blocks').update({ orden: b.orden }).eq('id', a.id),
+      sb.from('federation_info_blocks').update({ orden: a.orden }).eq('id', b.id),
+    ]);
+    cargar();
+  };
+
+  const btnSm = (extra) => ({
+    padding:'.28rem .65rem', borderRadius:7, background:'#fff',
+    border:'1.5px solid var(--borde)', cursor:'pointer', fontSize:'.8rem',
+    ...extra,
+  });
+
+  const renderBloque = (b, i) => (
+    <div key={b.id} className="card" style={{marginBottom:'.75rem'}}>
+      {editando && (
+        <div style={{display:'flex', gap:'.4rem', justifyContent:'flex-end',
+                     marginBottom:'.65rem', flexWrap:'wrap'}}>
+          <button style={btnSm()} onClick={() => mover(i, -1)}
+                  disabled={i === 0} title="Subir">↑</button>
+          <button style={btnSm()} onClick={() => mover(i, 1)}
+                  disabled={i === (bloques.length - 1)} title="Bajar">↓</button>
+          <button style={btnSm({color:'#0d6efd', borderColor:'#0d6efd'})}
+                  onClick={() => setFormModal({...b})}>Editar</button>
+          <button style={btnSm({color:'#dc3545', borderColor:'#dc3545'})}
+                  onClick={() => eliminar(b.id)}>Eliminar</button>
+        </div>
+      )}
+
+      {b.tipo === 'texto' && (
+        <>
+          {b.titulo && <h2 style={{marginBottom:'.6rem'}}>{b.titulo}</h2>}
+          <div style={{fontSize:'.9rem', lineHeight:1.7, whiteSpace:'pre-wrap',
+                       color:'var(--texto)'}}>
+            {b.contenido}
+          </div>
+        </>
+      )}
+
+      {b.tipo === 'enlace' && (
+        <div style={{display:'flex', gap:'.85rem', alignItems:'flex-start'}}>
+          <span style={{fontSize:'1.35rem', flexShrink:0, marginTop:'.05rem'}}>🔗</span>
+          <div>
+            <a href={b.url} target="_blank" rel="noopener noreferrer"
+               style={{fontWeight:700, fontSize:'1rem', color:'var(--verde)',
+                       textDecoration:'none', display:'block', marginBottom:'.15rem'}}>
+              {b.titulo || b.url}
+            </a>
+            {b.titulo && (
+              <div style={{fontSize:'.76rem', color:'var(--texto2)', marginBottom:'.35rem',
+                           wordBreak:'break-all'}}>{b.url}</div>
+            )}
+            {b.contenido && (
+              <div style={{fontSize:'.88rem', color:'var(--texto)', lineHeight:1.55}}>
+                {b.contenido}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {b.tipo === 'imagen' && (
+        <>
+          {b.titulo && <h2 style={{marginBottom:'.75rem'}}>{b.titulo}</h2>}
+          <img src={b.url} alt={b.titulo || ''}
+               style={{width:'100%', maxHeight:440, objectFit:'contain',
+                       borderRadius:8, display:'block'}}
+               onError={e => { e.target.style.display='none'; }} />
+          {b.contenido && (
+            <div style={{fontSize:'.82rem', color:'var(--texto2)', marginTop:'.55rem',
+                         textAlign:'center', fontStyle:'italic'}}>
+              {b.contenido}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  const TIPO_LABEL = { texto: 'Nuevo bloque de texto', enlace: 'Nuevo enlace', imagen: 'Nueva imagen' };
+
+  return (
+    <div>
+      {isAdmin && (
+        <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap',
+                     marginBottom:'1rem', alignItems:'center'}}>
+          <button onClick={() => setEditando(e => !e)}
+                  style={{padding:'.38rem .9rem', borderRadius:8, fontWeight:600,
+                          fontSize:'.85rem', cursor:'pointer',
+                          background: editando ? 'var(--verde)' : '#fff',
+                          color: editando ? '#fff' : 'var(--texto)',
+                          border:'1.5px solid ' + (editando ? 'var(--verde)' : 'var(--borde)')}}>
+            {editando ? '✓ Modo edición' : '✏ Editar contenido'}
+          </button>
+          {editando && ['texto','enlace','imagen'].map(t => (
+            <button key={t}
+                    onClick={() => setFormModal({tipo:t, titulo:'', contenido:'', url:''})}
+                    style={{padding:'.38rem .9rem', borderRadius:8, fontSize:'.85rem',
+                            border:'1.5px solid var(--borde)', background:'#fff',
+                            cursor:'pointer'}}>
+              + {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {bloques === null
+        ? <Spinner />
+        : bloques.length === 0
+          ? <div className="card"><div className="empty">
+              {isAdmin
+                ? 'Aún no hay contenido. Activa el modo edición para añadir bloques.'
+                : 'El administrador todavía no ha publicado información.'}
+            </div></div>
+          : bloques.map((b, i) => renderBloque(b, i))
+      }
+
+      {formModal && (
+        <div className="overlay" onClick={() => !guardando && setFormModal(null)}>
+          <div className="modal" style={{maxWidth:460, width:'92%'}}
+               onClick={e => e.stopPropagation()}>
+            <h3 style={{marginBottom:'1rem'}}>
+              {formModal.id ? 'Editar bloque' : TIPO_LABEL[formModal.tipo]}
+            </h3>
+
+            <div style={{marginBottom:'.75rem'}}>
+              <label style={{display:'block', fontSize:'.83rem', fontWeight:600,
+                             marginBottom:'.3rem'}}>
+                {formModal.tipo === 'enlace' ? 'Nombre del enlace' : 'Título'}
+                {' '}<span style={{fontWeight:400, color:'var(--texto2)'}}>(opcional)</span>
+              </label>
+              <input type="text" value={formModal.titulo}
+                     onChange={e => setFormModal(f => ({...f, titulo: e.target.value}))}
+                     placeholder={formModal.tipo === 'enlace'
+                       ? 'Ej: Hoja de puntuaciones' : 'Ej: Reglamento de la liga'}
+                     style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                             border:'1.5px solid var(--borde)', fontSize:'.9rem',
+                             boxSizing:'border-box'}} />
+            </div>
+
+            {(formModal.tipo === 'enlace' || formModal.tipo === 'imagen') && (
+              <div style={{marginBottom:'.75rem'}}>
+                <label style={{display:'block', fontSize:'.83rem', fontWeight:600,
+                               marginBottom:'.3rem'}}>
+                  {formModal.tipo === 'enlace' ? 'URL *' : 'URL de la imagen *'}
+                </label>
+                <input type="url" value={formModal.url}
+                       onChange={e => setFormModal(f => ({...f, url: e.target.value}))}
+                       placeholder={formModal.tipo === 'imagen'
+                         ? 'https://i.imgur.com/…' : 'https://…'}
+                       style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                               border:'1.5px solid var(--borde)', fontSize:'.9rem',
+                               boxSizing:'border-box'}} />
+                {formModal.tipo === 'imagen' && formModal.url?.startsWith('http') && (
+                  <img src={formModal.url} alt="Vista previa"
+                       style={{marginTop:'.5rem', maxWidth:'100%', maxHeight:160,
+                               objectFit:'contain', borderRadius:6, display:'block'}}
+                       onError={e => { e.target.style.display='none'; }} />
+                )}
+              </div>
+            )}
+
+            <div style={{marginBottom:'1rem'}}>
+              <label style={{display:'block', fontSize:'.83rem', fontWeight:600,
+                             marginBottom:'.3rem'}}>
+                {formModal.tipo === 'texto'
+                  ? 'Contenido *'
+                  : formModal.tipo === 'enlace'
+                  ? 'Descripción'
+                  : 'Pie de imagen'}
+                {formModal.tipo !== 'texto' &&
+                  <span style={{fontWeight:400, color:'var(--texto2)'}}> (opcional)</span>}
+              </label>
+              <textarea value={formModal.contenido}
+                        onChange={e => setFormModal(f => ({...f, contenido: e.target.value}))}
+                        rows={formModal.tipo === 'texto' ? 7 : 3}
+                        placeholder={
+                          formModal.tipo === 'texto'
+                            ? 'Escribe el contenido…'
+                            : formModal.tipo === 'enlace'
+                            ? 'Breve descripción de lo que hay en el enlace…'
+                            : 'Descripción de la imagen…'}
+                        style={{width:'100%', padding:'.5rem .7rem', borderRadius:8,
+                                border:'1.5px solid var(--borde)', fontSize:'.9rem',
+                                resize:'vertical', fontFamily:'inherit',
+                                boxSizing:'border-box'}} />
+            </div>
+
+            <div className="modal-btns">
+              <button className="btn-cancel" disabled={guardando}
+                      onClick={() => setFormModal(null)}>Cancelar</button>
+              <button className="btn-ok" onClick={guardar} disabled={guardando}>
+                {guardando ? 'Guardando…' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Tablon({ federacionId, isAdmin }) {
+  const [tab, setTab]          = useState('anuncios');
   const [anuncios, setAnuncios] = useState(null);
   const [pagina, setPagina]    = useState(0);
   const POR_PAG = 20;
@@ -2869,6 +3126,18 @@ function Tablon({ federacionId, isAdmin }) {
 
   return (
     <div>
+      <div className="tabs" style={{marginBottom:'1rem'}}>
+        <button className={`tab ${tab==='anuncios'?'active':''}`}
+                onClick={() => setTab('anuncios')}>Anuncios</button>
+        <button className={`tab ${tab==='info'?'active':''}`}
+                onClick={() => setTab('info')}>Información</button>
+      </div>
+
+      {tab === 'info' && (
+        <FederacionInfo federacionId={federacionId} isAdmin={isAdmin} />
+      )}
+
+      {tab === 'anuncios' && <>
       {/* ── Composición admin ── */}
       {isAdmin && (
         <div className="card" style={{marginBottom:'.75rem'}}>
@@ -2950,6 +3219,7 @@ function Tablon({ federacionId, isAdmin }) {
             </>
         }
       </div>
+      </>}
     </div>
   );
 }
@@ -8239,6 +8509,7 @@ function Ayuda({ isAdmin }) {
       contenido: [
         ['¿Qué aparece?', 'El tablón recoge automáticamente los eventos importantes de la federación: fichajes, traspasos, cambios de nombre, entrenadores, resultados de pujas, etc.'],
         ['Anuncios del admin', 'El admin puede publicar mensajes personalizados en el tablón para comunicar noticias a todos los equipos.'],
+        ['Información de la federación', 'La pestaña "Información" dentro del Tablón permite al admin publicar contenido fijo: bloques de texto (reglamento, normas), enlaces externos y imágenes. Los bloques se pueden reordenar, editar y eliminar en cualquier momento.'],
       ]
     },
     {

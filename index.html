@@ -3072,7 +3072,7 @@ function FederacionInfo({ federacionId, isAdmin }) {
   );
 }
 
-function Tablon({ federacionId, isAdmin }) {
+function Tablon({ federacionId, isAdmin, miNombre, onBadgeChange }) {
   const [tab, setTab]          = useState('anuncios');
   const [anuncios, setAnuncios] = useState(null);
   const [pagina, setPagina]    = useState(0);
@@ -3083,11 +3083,21 @@ function Tablon({ federacionId, isAdmin }) {
   const [enviando, setEnviando] = useState(false);
   const [msgOk, setMsgOk]       = useState('');
 
+  // Pendientes de aprobación (admin)
+  const [pendientes, setPendientes]         = useState([]);
+  const [aprobando, setAprobando]           = useState(null);
+
+  // Envío de mensaje por usuario
+  const [textoUsuario, setTextoUsuario]     = useState('');
+  const [enviandoUsuario, setEnviandoUsuario] = useState(false);
+  const [msgUsuario, setMsgUsuario]         = useState('');
+
   const cargar = async () => {
     if (!sb || !federacionId) return;
     const { data } = await sb.from('anuncios')
       .select('id, tipo, texto, actor_nombre, created_at')
       .eq('federacion_id', federacionId)
+      .eq('estado', 'aprobado')
       .order('created_at', { ascending: false })
       .range(pagina * POR_PAG, (pagina + 1) * POR_PAG - 1);
     setAnuncios(prev => pagina === 0 ? (data || []) : [...(prev || []), ...(data || [])]);
@@ -3112,10 +3122,55 @@ function Tablon({ federacionId, isAdmin }) {
     setAnuncios(prev => (prev || []).filter(a => a.id !== id));
   };
 
+  const cargarPendientes = async () => {
+    if (!sb || !federacionId || !isAdmin) return;
+    const { data } = await sb.from('anuncios')
+      .select('id, tipo, texto, actor_nombre, created_at')
+      .eq('federacion_id', federacionId)
+      .eq('estado', 'pendiente')
+      .order('created_at', { ascending: true });
+    setPendientes(data || []);
+    onBadgeChange && onBadgeChange();
+  };
+
+  const aprobar = async (id) => {
+    setAprobando(id);
+    await sb.from('anuncios').update({ estado: 'aprobado' }).eq('id', id);
+    setPagina(0); setAnuncios(null);
+    await cargarPendientes();
+    setAprobando(null);
+  };
+
+  const rechazar = async (id) => {
+    setAprobando(id);
+    await sb.from('anuncios').delete().eq('id', id);
+    await cargarPendientes();
+    setAprobando(null);
+  };
+
+  const enviarMensaje = async () => {
+    if (!textoUsuario.trim() || enviandoUsuario) return;
+    setEnviandoUsuario(true);
+    const { error } = await sb.from('anuncios').insert({
+      federacion_id: federacionId,
+      tipo: 'mensaje_usuario',
+      texto: textoUsuario.trim(),
+      actor_nombre: miNombre || null,
+      estado: 'pendiente',
+    });
+    setEnviandoUsuario(false);
+    if (error) { setMsgUsuario('Error: ' + error.message); return; }
+    setTextoUsuario('');
+    setMsgUsuario('Mensaje enviado. Pendiente de aprobación del administrador.');
+    setTimeout(() => setMsgUsuario(''), 6000);
+  };
+
+  useEffect(() => { if (isAdmin) cargarPendientes(); }, [federacionId, isAdmin]);
+
   const ICONOS = {
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
-    admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄',
+    admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬',
   };
 
   const fmtFecha = ts => {
@@ -3164,6 +3219,53 @@ function Tablon({ federacionId, isAdmin }) {
         </div>
       )}
 
+      {/* ── Pendientes de aprobación (solo admin) ── */}
+      {isAdmin && pendientes.length > 0 && (
+        <div className="card" style={{marginBottom:'.75rem',
+                                      border:'1.5px solid #f6ad55'}}>
+          <h2 style={{margin:'0 0 .75rem', color:'#b7791f'}}>
+            Pendientes de aprobación ({pendientes.length})
+          </h2>
+          <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
+            {pendientes.map(p => (
+              <div key={p.id} style={{padding:'.65rem .9rem', borderRadius:8,
+                                      background:'rgba(246,173,85,.09)',
+                                      border:'1px solid rgba(246,173,85,.4)'}}>
+                <div style={{fontSize:'.88rem', whiteSpace:'pre-wrap',
+                             marginBottom:'.4rem'}}>{p.texto}</div>
+                <div style={{display:'flex', alignItems:'center',
+                             justifyContent:'space-between', flexWrap:'wrap', gap:'.4rem'}}>
+                  <div style={{fontSize:'.78rem', color:'var(--texto2)'}}>
+                    {p.actor_nombre && <span>por <strong>{p.actor_nombre}</strong> · </span>}
+                    {fmtFecha(p.created_at)}
+                  </div>
+                  <div style={{display:'flex', gap:'.5rem'}}>
+                    <button onClick={() => aprobar(p.id)}
+                            disabled={aprobando === p.id}
+                            style={{padding:'.28rem .8rem', borderRadius:6,
+                                    border:'none', background:'var(--verde)',
+                                    color:'#fff', fontWeight:700, cursor:'pointer',
+                                    fontSize:'.8rem',
+                                    opacity: aprobando === p.id ? .6 : 1}}>
+                      Aprobar
+                    </button>
+                    <button onClick={() => rechazar(p.id)}
+                            disabled={aprobando === p.id}
+                            style={{padding:'.28rem .8rem', borderRadius:6,
+                                    border:'1.5px solid #dc3545', background:'none',
+                                    color:'#dc3545', fontWeight:700, cursor:'pointer',
+                                    fontSize:'.8rem',
+                                    opacity: aprobando === p.id ? .6 : 1}}>
+                      Rechazar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Lista de anuncios ── */}
       <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem'}}>
@@ -3181,11 +3283,13 @@ function Tablon({ federacionId, isAdmin }) {
                 {anuncios.map(a => (
                   <div key={a.id} style={{display:'flex', gap:'.75rem', alignItems:'flex-start',
                                           padding:'.65rem .9rem',
-                                          background: a.tipo === 'mensaje_admin' ? '#eaf4ea'
-                                                    : a.tipo === 'reinicio'      ? 'rgba(220,53,69,.06)'
+                                          background: a.tipo === 'mensaje_admin'   ? '#eaf4ea'
+                                                    : a.tipo === 'reinicio'        ? 'rgba(220,53,69,.06)'
+                                                    : a.tipo === 'mensaje_usuario' ? 'rgba(99,179,237,.07)'
                                                     : 'var(--gris)',
-                                          border: a.tipo === 'mensaje_admin' ? '1.5px solid var(--verde)'
-                                                : a.tipo === 'reinicio'      ? '1.5px solid #dc3545'
+                                          border: a.tipo === 'mensaje_admin'   ? '1.5px solid var(--verde)'
+                                                : a.tipo === 'reinicio'        ? '1.5px solid #dc3545'
+                                                : a.tipo === 'mensaje_usuario' ? '1.5px solid rgba(99,179,237,.5)'
                                                 : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
                     <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
@@ -3193,7 +3297,9 @@ function Tablon({ federacionId, isAdmin }) {
                       <div style={{fontWeight: a.tipo === 'mensaje_admin' || a.tipo === 'reinicio' ? 600 : 500,
                                    whiteSpace:'pre-wrap'}}>{a.texto}</div>
                       {a.actor_nombre && (
-                        <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>por {a.actor_nombre}</div>
+                        <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
+                          por <strong>{a.actor_nombre}</strong>
+                        </div>
                       )}
                     </div>
                     <div style={{display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'.35rem', flexShrink:0}}>
@@ -3223,6 +3329,43 @@ function Tablon({ federacionId, isAdmin }) {
             </>
         }
       </div>
+
+      {/* ── Enviar mensaje al tablón (solo usuarios, no admin) ── */}
+      {!isAdmin && (
+        <div className="card" style={{marginTop:'.75rem'}}>
+          <h2 style={{margin:'0 0 .4rem'}}>Enviar mensaje al tablón</h2>
+          <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Tu mensaje será visible para todos una vez que el administrador lo apruebe.
+          </p>
+          <textarea
+            value={textoUsuario}
+            onChange={e => setTextoUsuario(e.target.value)}
+            placeholder="Escribe tu mensaje…"
+            rows={3}
+            style={{width:'100%', padding:'.55rem .75rem', borderRadius:8,
+                    border:'1.5px solid var(--borde)', fontSize:'.92rem',
+                    resize:'vertical', boxSizing:'border-box', fontFamily:'inherit'}}
+          />
+          <div style={{display:'flex', alignItems:'center', gap:'1rem',
+                       marginTop:'.6rem', flexWrap:'wrap'}}>
+            <button onClick={enviarMensaje}
+                    disabled={enviandoUsuario || !textoUsuario.trim()}
+                    style={{background:'var(--verde)', color:'#fff', border:'none',
+                            padding:'.48rem 1.3rem', borderRadius:8, fontWeight:700,
+                            fontSize:'.9rem',
+                            cursor: enviandoUsuario || !textoUsuario.trim() ? 'default' : 'pointer',
+                            opacity: enviandoUsuario || !textoUsuario.trim() ? .5 : 1}}>
+              {enviandoUsuario ? 'Enviando…' : 'Enviar'}
+            </button>
+            {msgUsuario && (
+              <span style={{fontSize:'.85rem',
+                            color: msgUsuario.startsWith('Error') ? '#dc3545' : 'var(--texto2)'}}>
+                {msgUsuario}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       </>}
     </div>
   );
@@ -6944,7 +7087,8 @@ function App() {
   const [authUser, setAuthUser]       = useState(null);
   const [session, setSession]         = useState(null);
   const [sesionLista, setSesionLista] = useState(false);
-  const [ofertasBadge, setOfertasBadge] = useState(0);
+  const [ofertasBadge,  setOfertasBadge]  = useState(0);
+  const [tablonBadge,   setTablonBadge]   = useState(0);
 
   const seleccionarFederacion = async (part, fed, userOverride) => {
     const u = userOverride || authUser;
@@ -7035,6 +7179,18 @@ function App() {
 
   useEffect(() => { recargarParticipantes(); }, [federacion, session]);
 
+  const refrescarTablonBadge = async () => {
+    if (!sb || !federacion?.id || !(federacion?.admin_user_id === authUser?.id)) {
+      setTablonBadge(0); return;
+    }
+    const { count } = await sb.from('anuncios')
+      .select('*', { count: 'exact', head: true })
+      .eq('federacion_id', federacion.id)
+      .eq('estado', 'pendiente');
+    setTablonBadge(count || 0);
+  };
+  useEffect(() => { refrescarTablonBadge(); }, [federacion?.id, authUser?.id]);
+
   const refrescarBadge = async () => {
     const pid = session?.participante_id;
     if (!sb || !pid) { setOfertasBadge(0); return; }
@@ -7101,6 +7257,16 @@ function App() {
           <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}
                   style={{position:'relative'}}>
             {v}
+            {v === 'Tablón' && tablonBadge > 0 && (
+              <span style={{
+                position:'absolute', top:2, right:2,
+                background:'#e53e3e', color:'#fff',
+                borderRadius:'50%', width:16, height:16,
+                fontSize:10, fontWeight:700,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                lineHeight:1, pointerEvents:'none'
+              }}>{tablonBadge > 9 ? '9+' : tablonBadge}</span>
+            )}
             {v === 'Mercado' && ofertasBadge > 0 && (
               <span style={{
                 position:'absolute', top:2, right:2,
@@ -7185,7 +7351,9 @@ function App() {
           <Ayuda isAdmin={isAdmin} />
         )}
         {vista === 'Tablón' && (
-          <Tablon federacionId={federacion?.id} isAdmin={isAdmin} />
+          <Tablon federacionId={federacion?.id} isAdmin={isAdmin}
+                  miNombre={participantes.find(p => p.id === session?.participante_id)?.nombre}
+                  onBadgeChange={refrescarTablonBadge} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (
           <ErrorBoundary>

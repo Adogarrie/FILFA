@@ -9040,9 +9040,20 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       contenido: [
         ['Titulares y suplentes', 'Cada jornada debes configurar tu alineación en la pestaña Alineación. Tienes 11 titulares y el resto son suplentes.'],
         ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],
+        ['Jugadores con doble posición', 'Si un jugador tiene una posición alternativa asignada por el admin, verás dos badges pulsables junto a su nombre cuando sea titular. Pulsa el que prefieras para elegir en qué posición computa ese jugador en tu formación. Los suplentes muestran ambas posiciones como referencia pero sin toggle.'],
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
         ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
-        ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al primer suplente cuya posición sea compatible con alguna de las formaciones permitidas. Se da prioridad a los suplentes que hayan jugado algún minuto. Los porteros no participan en este mecanismo.'],
+        ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al primer suplente cuya posición sea compatible con alguna de las formaciones permitidas. Se da prioridad a los suplentes que hayan jugado algún minuto. Si el suplente tiene doble posición, puede entrar en cualquiera de sus dos posiciones siempre que una encaje con la formación. Los porteros no participan en este mecanismo.'],
+      ]
+    },
+    {
+      id: 'dobleposicion',
+      titulo: '⚽ Doble posición',
+      contenido: [
+        ['¿Qué es?', 'Un jugador puede tener, además de su posición principal, una posición alternativa (por ejemplo, MED/DEL o DEF/MED). Los porteros no pueden tener posición alternativa.'],
+        ['¿Quién la asigna?', 'Solo el admin y los moderadores pueden asignar o eliminar la posición alternativa de un jugador, desde Admin → Jugadores, en la columna "Pos. alt" de la tabla.'],
+        ['En la alineación', 'Cuando alineas como titular a un jugador con doble posición, aparecen dos badges pulsables. El que elijas determina en qué posición computa ese jugador para el recuento de la formación ese jornada. La elección se guarda con la alineación.'],
+        ['En las sustituciones', 'El sistema de sustituciones automáticas tiene en cuenta la posición efectiva elegida para el titular saliente, y puede introducir al suplente en cualquiera de sus dos posiciones si alguna encaja con las formaciones válidas.'],
       ]
     },
     {
@@ -9101,16 +9112,17 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       id: 'admin',
       titulo: '🛠 Rol del Admin',
       contenido: [
-        ['Gestión de la federación', 'El admin crea y configura la federación: nombre, logo, presupuesto inicial, número de jornadas, hora de cierre de pujas, etc.'],
-        ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno.'],
-        ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos. También puede gestionar los jugadores de cualquier plantilla.'],
-        ['Introducir puntuaciones', 'El admin (o moderador si está habilitado) introduce los puntos obtenidos por cada jugador real cada jornada. Esto genera la clasificación de la liga.'],
-        ['Ejecutar el cierre de pujas', 'Aunque el cierre es automático a la hora configurada, el admin puede forzarlo manualmente desde el panel de administración.'],
-        ['Fichajes pendientes', 'El admin puede activar o descartar fichajes pendientes de cualquier equipo, y asignar qué jugador se libera si la plantilla está llena.'],
-        ['Pujas (AdminPujas)', 'El admin puede ver todas las pujas activas por jugador, resolver manualmente una adjudicación y publicar el anuncio correspondiente en el tablón.'],
-        ['Sorteo', 'Solo el admin puede lanzar el sorteo aleatorio de jugadores.'],
-        ['Cesiones', 'El admin aprueba o rechaza las solicitudes de cesión de jugadores libres del mercado. También puede activar o desactivar la posibilidad de que los equipos envíen solicitudes.'],
-        ['No Jugaron / Sustituciones automáticas', 'El admin marca qué jugadores disputaron 0 minutos en cada jornada. El sistema calcula y aplica automáticamente las sustituciones en todas las alineaciones afectadas, y recalcula la clasificación.'],
+        ['Panel de administración', 'El panel admin está organizado en pestañas principales: Mi Federación, Equipos, Pts Jugadores, Presupuestos, Ajustes Generales, Mercado, Jugadores y Liga H2H. Algunas pestañas agrupan sub-pestañas relacionadas para mantener el panel ordenado.'],
+        ['Gestión de la federación', 'Desde Admin → Mi Federación el admin configura el nombre, logo, presupuesto inicial, jornada actual, hora de cierre de pujas y el número máximo de jugadores por plantilla.'],
+        ['Máx. jugadores por plantilla', `El límite de jugadores por equipo (por defecto ${maxJugadores}) es configurable por el admin desde Mi Federación. Los equipos que ya superan el nuevo límite conservan sus jugadores; simplemente no podrán fichar más hasta que bajen de él.`],
+        ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno. Esta opción está en Admin → Ajustes Generales.'],
+        ['Cierres de pujas', 'La hora de cierre automático y la ejecución manual del cierre están en Admin → Ajustes Generales → Cierres.'],
+        ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos desde Admin → Equipos.'],
+        ['Gestión de jugadores', 'Desde Admin → Jugadores el admin puede añadir, eliminar y marcar como lesionado a cualquier jugador. También puede asignar o quitar la posición alternativa (doble posición) de jugadores no porteros.'],
+        ['Doble posición', 'El admin (y los moderadores) pueden asignar una posición alternativa a cualquier jugador no portero desde Admin → Jugadores. Los jugadores con doble posición pueden ser alineados en cualquiera de sus dos posiciones por su equipo fantasy.'],
+        ['Introducir puntuaciones', 'Desde Admin → Pts Jugadores el admin introduce los puntos de cada jugador por jornada. La sub-pestaña "No Jugaron" permite marcar quién no disputó minutos para aplicar las sustituciones automáticas y recalcular la clasificación.'],
+        ['Pujas, fichajes y cesiones', 'Todas las operaciones de mercado están agrupadas en Admin → Mercado: sub-pestañas Pujas (ver y resolver adjudicaciones), Fich. Pendientes (activar o descartar fichajes en espera) y Cesiones (aprobar o rechazar solicitudes de préstamo).'],
+        ['Sorteo', 'Solo el admin puede lanzar el sorteo aleatorio de jugadores (Admin → Ajustes Generales).'],
         ['Jugadores duplicados', 'El admin puede permitir que un mismo jugador (no porteros) pertenezca a varios equipos a la vez. Configura el valor mínimo de mercado y el número máximo de copias. Al desactivar o subir el umbral, el sistema elimina las copias extra con reembolso automático.'],
       ]
     },
@@ -9119,7 +9131,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       titulo: '👮 Rol del Moderador',
       contenido: [
         ['¿Qué es un moderador?', 'El admin puede otorgar permisos de moderador a un equipo. El moderador tiene acceso al panel de administración con capacidades reducidas.'],
-        ['Permisos', 'El moderador puede introducir puntuaciones de jugadores y gestionar alineaciones, pero no puede modificar la configuración de la federación, eliminar equipos ni ejecutar el sorteo.'],
+        ['Permisos', 'El moderador puede introducir puntuaciones de jugadores, gestionar la sub-pestaña "No Jugaron", y asignar o quitar la posición alternativa de jugadores desde Admin → Jugadores. No puede modificar la configuración general de la federación, eliminar equipos ni ejecutar el sorteo.'],
       ]
     },
   ];

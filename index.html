@@ -7119,28 +7119,66 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
   );
 }
 
+function AdminPtsGroup({ participantes, federacion, actorNombre }) {
+  const [sub, setSub] = useState('pts');
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:'.5rem'}}>
+        <button className={`tab ${sub==='pts'?'active':''}`} onClick={() => setSub('pts')}>Pts Jugadores</button>
+        <button className={`tab ${sub==='nojugo'?'active':''}`} onClick={() => setSub('nojugo')}>No Jugaron</button>
+      </div>
+      {sub === 'pts'    && <AdminPtsJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {sub === 'nojugo' && <AdminNoJugo federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
+    </div>
+  );
+}
+
+function AdminAjustesGroup({ federacion, onFederacionUpdate, actorNombre }) {
+  const [sub, setSub] = useState('general');
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:'.5rem'}}>
+        <button className={`tab ${sub==='general'?'active':''}`} onClick={() => setSub('general')}>Ajustes Generales</button>
+        <button className={`tab ${sub==='cierres'?'active':''}`} onClick={() => setSub('cierres')}>Cierres</button>
+      </div>
+      {sub === 'general' && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
+      {sub === 'cierres' && <AdminCierres federacion={federacion} actorNombre={actorNombre} />}
+    </div>
+  );
+}
+
+function AdminMercadoGroup({ participantes, federacion, actorNombre }) {
+  const [sub, setSub] = useState('pujas');
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:'.5rem'}}>
+        <button className={`tab ${sub==='pujas'?'active':''}`} onClick={() => setSub('pujas')}>Pujas</button>
+        <button className={`tab ${sub==='fichajespend'?'active':''}`} onClick={() => setSub('fichajespend')}>Fich. Pendientes</button>
+        <button className={`tab ${sub==='cesiones'?'active':''}`} onClick={() => setSub('cesiones')}>Cesiones</button>
+      </div>
+      {sub === 'pujas'        && <AdminPujas participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {sub === 'fichajespend' && <AdminFichajesPendientes participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {sub === 'cesiones'     && <AdminCesiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador, actorNombre }) {
-  // [key, label, soloAdmin]
   const TABS_DEF = [
     ['federacion',   'Mi Federación'],
     ['equipos',      'Equipos'],
     ['ptsjug',       'Pts Jugadores'],
     ['presupuestos', 'Presupuestos'],
-    ['pujas',        'Pujas'],
-    ['fichajespend', 'Fich. Pend.'],
-    ['cierres',      'Cierres'],
+    ['ajustes',      'Ajustes Generales'],
     ['mercado',      'Mercado'],
     ['jugadores',    'Jugadores'],
     ['h2h',          'Liga H2H'],
-    ['cesiones',     'Cesiones'],
-    ['nojugo',       'No Jugaron'],
   ];
-  const tabs = TABS_DEF;
-  const primera = tabs[0]?.[0] || 'federacion';
+  const primera = TABS_DEF[0][0];
   const [subtab, setSubtab] = useState(primera);
 
   React.useEffect(() => {
-    if (!tabs.find(([k]) => k === subtab)) setSubtab(primera);
+    if (!TABS_DEF.find(([k]) => k === subtab)) setSubtab(primera);
   }, [isModerador]);
 
   return (
@@ -7152,22 +7190,18 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
         </div>
       )}
       <div className="tabs">
-        {tabs.map(([k, l]) => (
+        {TABS_DEF.map(([k, l]) => (
           <button key={k} className={`tab ${subtab===k?'active':''}`} onClick={() => setSubtab(k)}>{l}</button>
         ))}
       </div>
-      {subtab === 'federacion'    && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} isModerador={isModerador} actorNombre={actorNombre} />}
-      {subtab === 'equipos'       && <AdminEquipos participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} actorNombre={actorNombre} />}
-      {subtab === 'ptsjug'        && <AdminPtsJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'presupuestos'  && <AdminPresupuestos participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'pujas'         && <AdminPujas participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'fichajespend'  && <AdminFichajesPendientes participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'cierres'       && <AdminCierres federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'mercado'       && <AdminMercado federacion={federacion} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
-      {subtab === 'jugadores'    && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'h2h'          && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
-      {subtab === 'cesiones'     && <AdminCesiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
-      {subtab === 'nojugo'      && <AdminNoJugo federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
+      {subtab === 'federacion'  && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} isModerador={isModerador} actorNombre={actorNombre} />}
+      {subtab === 'equipos'     && <AdminEquipos participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} actorNombre={actorNombre} />}
+      {subtab === 'ptsjug'      && <AdminPtsGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'presupuestos'&& <AdminPresupuestos participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'ajustes'     && <AdminAjustesGroup federacion={federacion} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
+      {subtab === 'mercado'     && <AdminMercadoGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'jugadores'   && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
     </div>
   );
 }

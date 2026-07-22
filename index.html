@@ -7831,6 +7831,7 @@ function LigaH2H({ federacion, participantes }) {
       if      (first === 'h2h') { const h = calcH2H(group.map(r => r.id)); scoreOf = r => h[r.id].pts; }
       else if (first === 'gf')  scoreOf = r => r.gf;
       else if (first === 'dif') scoreOf = r => r.gf - r.gc;
+      else if (first === 'pf')  scoreOf = r => r.pf;
       else                      return sortGroup(group, rest);
 
       const byScore = {};
@@ -7853,8 +7854,11 @@ function LigaH2H({ federacion, participantes }) {
     };
 
     const criterios = (() => {
-      try { return JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif"]'); }
-      catch { return ['h2h','gf','dif']; }
+      const ALL = ['h2h','gf','dif','pf'];
+      try {
+        const parsed = JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif","pf"]');
+        return [...parsed, ...ALL.filter(c => !parsed.includes(c))];
+      } catch { return ALL; }
     })();
 
     const rows = Object.values(stats);
@@ -8260,8 +8264,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   const [modoSorteo,   setModoSorteo]   = useState(false);
   const [asignaciones, setAsignaciones] = useState({}); // { divKey: [participante_id, ...] }
   // Criterios de desempate
-  const CRITERIOS_H2H = { h2h: 'Gol average particular', gf: 'Goles a favor', dif: 'Diferencia de goles' };
-  const parsarOrden = (val) => { try { return JSON.parse(val || '["h2h","gf","dif"]'); } catch { return ['h2h','gf','dif']; } };
+  const CRITERIOS_H2H = { h2h: 'Gol average particular', gf: 'Goles a favor', dif: 'Diferencia de goles', pf: 'Puntos Fantasy a Favor' };
+  const TODOS_CRITERIOS_H2H = ['h2h', 'gf', 'dif', 'pf'];
+  const normalizarOrden = (arr) => [...arr, ...TODOS_CRITERIOS_H2H.filter(c => !arr.includes(c))];
+  const parsarOrden = (val) => { try { return normalizarOrden(JSON.parse(val || '["h2h","gf","dif","pf"]')); } catch { return [...TODOS_CRITERIOS_H2H]; } };
   const [desempateOrden, setDesempateOrden] = useState(() => parsarOrden(federacion?.h2h_desempate_orden));
   // Fantasy ↔ H2H
   const parsarBaremo = (val) => { try { return JSON.parse(val || 'null') || BAREMO_DEFAULT; } catch { return BAREMO_DEFAULT; } };

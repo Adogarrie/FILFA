@@ -2241,6 +2241,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const [jornada, setJornada] = useState(1);
   const [jugadores, setJugadores] = useState([]);
   const [ptsJug, setPtsJug]   = useState({});
+  const [propietarios, setPropietarios] = useState({});
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]         = useState('');
   const [equipoSel, setEquipoSel] = useState('');
@@ -2250,15 +2251,21 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     (async () => {
       const partIds = participantes.map(p => p.id);
       const { data: pl } = await sb.from('plantillas')
-        .select('jugador_id')
+        .select('jugador_id, participante_id')
         .in('participante_id', partIds);
       const ids = [...new Set((pl || []).map(r => r.jugador_id))];
-      if (!ids.length) { setJugadores([]); return; }
+      if (!ids.length) { setJugadores([]); setPropietarios({}); return; }
       const { data } = await sb.from('jugadores')
         .select('id, nombre, equipo, posicion')
         .in('id', ids)
         .order('equipo').order('posicion');
       setJugadores(data || []);
+      const mapa = {};
+      for (const r of (pl || [])) {
+        const part = participantes.find(p => p.id === r.participante_id);
+        if (part) mapa[r.jugador_id] = part.nombre;
+      }
+      setPropietarios(mapa);
     })();
   }, [federacion?.id, participantes.length]);
 
@@ -2374,12 +2381,13 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
                 <Escudo equipo={equipoActual} size={ESCUDO_SIZE} />{equipoActual}
               </h2>
               <table>
-                <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
+                <thead><tr><th>Jugador</th><th>Pos</th><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
                 <tbody>
                   {jugsEq.map(j => (
                     <tr key={j.id}>
                       <td style={{fontWeight:600}}>{j.nombre}</td>
                       <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
+                      <td style={{fontSize:'.82rem', color:'var(--texto2)'}}>{propietarios[j.id] || '—'}</td>
                       <td style={{textAlign:'right'}}>
                         <input type="number" min="0" value={ptsJug[j.id] ?? ''}
                                onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
@@ -6125,10 +6133,21 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const [filtroNom, setFiltroNom]   = useState('');
   const [filtroEq, setFiltroEq]     = useState('');
   const [borrando, setBorrando]     = useState(null);
+  const [propietarios, setPropietarios] = useState({});
 
   const cargarJugadores = async () => {
-    const { data } = await sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, lesionado').order('equipo').order('nombre');
+    const partIds = participantes.map(p => p.id);
+    const [{ data }, { data: pl }] = await Promise.all([
+      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, lesionado').order('equipo').order('nombre'),
+      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+    ]);
     setJugadores(data || []);
+    const mapa = {};
+    for (const r of (pl || [])) {
+      const part = participantes.find(p => p.id === r.participante_id);
+      if (part) mapa[r.jugador_id] = part.nombre;
+    }
+    setPropietarios(mapa);
   };
 
   const toggleLesionado = async (j) => {
@@ -6294,7 +6313,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
             ? <div className="empty">No hay jugadores que coincidan.</div>
             : <table>
                 <thead>
-                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th>Pos. alt</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
+                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th>Pos. alt</th><th>Equipo fantasy</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
                 </thead>
                 <tbody>
                   {listaFiltrada.map(j => (
@@ -6321,6 +6340,9 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                               )}
                             </select>
                         }
+                      </td>
+                      <td style={{ fontSize:'.82rem', color: propietarios[j.id] ? 'var(--texto)' : 'var(--texto2)' }}>
+                        {propietarios[j.id] || 'Libre'}
                       </td>
                       <td style={{ textAlign:'right', fontVariantNumeric:'tabular-nums' }}>{fmt(j.valor_mercado ?? 0)}</td>
                       <td style={{ textAlign:'center' }}>

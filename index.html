@@ -6117,10 +6117,8 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     'FC Barcelona','Real Madrid CF','Atlético de Madrid','Athletic Club',
     'Villarreal CF','Real Sociedad','Real Betis','Sevilla FC','Valencia CF',
     'RC Celta de Vigo','CA Osasuna','Getafe CF','Rayo Vallecano','RCD Espanyol',
-    'Deportivo Alavés','Málaga CF','Real Zaragoza','CD Tenerife','SD Huesca',
-    'Elche CF','Levante UD','Granada CF','RC Deportivo de La Coruña',
-    'Burgos CF','Racing de Santander','SD Ponferradina','FC Andorra',
-    'CD Castellón','AD Alcorcón',
+    'Deportivo Alavés','Málaga CF','Elche CF','Levante UD',
+    'RC Deportivo de La Coruña','Racing de Santander',
   ].sort();
 
   const vacioForm = { nombre: '', equipo: '', posicion: 'DEF', posicion_alt: '', valor: '', destino: 'mercado', participante_id: '' };
@@ -6132,6 +6130,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const [jugadores, setJugadores]   = useState(null);
   const [filtroNom, setFiltroNom]   = useState('');
   const [filtroEq, setFiltroEq]     = useState('');
+  const [filtroLes, setFiltroLes]   = useState('');
   const [borrando, setBorrando]     = useState(null);
   const [propietarios, setPropietarios] = useState({});
 
@@ -6228,7 +6227,11 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
 
   const listaFiltrada = (jugadores || []).filter(j => {
     const nom = (j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre).toLowerCase();
-    return nom.includes(filtroNom.toLowerCase()) && j.equipo.toLowerCase().includes(filtroEq.toLowerCase());
+    if (!nom.includes(filtroNom.toLowerCase())) return false;
+    if (!j.equipo.toLowerCase().includes(filtroEq.toLowerCase())) return false;
+    if (filtroLes === 'lesionado' && !j.lesionado) return false;
+    if (filtroLes === 'sano' && j.lesionado) return false;
+    return true;
   });
 
   const iS = { width: '100%', padding: '.45rem .7rem', borderRadius: 8,
@@ -6306,6 +6309,17 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
           <input value={filtroEq} onChange={e => setFiltroEq(e.target.value)}
                  placeholder="Filtrar por equipo real…"
                  style={{ flex:1, minWidth:140, padding:'.4rem .7rem', borderRadius:8, border:'1.5px solid var(--borde)', fontSize:'.88rem' }} />
+          <div style={{ display:'flex', gap:'.3rem', alignItems:'center' }}>
+            {[['', 'Todos'], ['lesionado', 'Lesionados'], ['sano', 'Sanos']].map(([val, label]) => (
+              <button key={val} onClick={() => setFiltroLes(val)}
+                      style={{ padding:'.3rem .65rem', borderRadius:7, fontSize:'.8rem', fontWeight:600,
+                               border:'1.5px solid var(--borde)', cursor:'pointer',
+                               background: filtroLes === val ? (val === 'lesionado' ? '#dc3545' : val === 'sano' ? 'var(--verde)' : 'var(--texto)') : 'var(--fondo)',
+                               color: filtroLes === val ? '#fff' : 'var(--texto)' }}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         {jugadores === null
           ? <Spinner />

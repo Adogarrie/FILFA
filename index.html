@@ -335,6 +335,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [fichajesPend, setFichajesPend]     = useState([]);
   const [liberarSel, setLiberarSel]         = useState({});   // pendiente_id → jugador_id
   const [procesandoPend, setProcesandoPend] = useState(null);
+  const [msgPend, setMsgPend]               = useState('');
   const [escudoUrl, setEscudoUrl]           = useState(null);
   const [subtabPlantilla, setSubtabPlantilla] = useState('plantilla');
 
@@ -389,9 +390,20 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       alert(msgs[error.message] || 'Error: ' + error.message); return;
     }
     const jug = fp.jugadores;
-    const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
-    publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nom} a su plantilla`);
+    const nomEntra = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
     setLiberarSel(s => { const n = {...s}; delete n[fp.id]; return n; });
+    if (liberar) {
+      const jugLib = lista.find(j => j.jugador_id === liberar);
+      const nomSale = jugLib
+        ? (jugLib.posicion === 'POR' ? `Portería ${jugLib.equipo}` : jugLib.nombre)
+        : 'un jugador';
+      publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nomSale}`);
+      setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nomSale}.`);
+    } else {
+      publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nomEntra} a su plantilla`);
+      setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla.`);
+    }
+    setTimeout(() => setMsgPend(''), 6000);
     cargar();
   };
 
@@ -408,7 +420,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       if (error || !data?.ok) { alert('Error: ' + (error?.message || data?.error || 'desconocido')); return; }
     } else {
       const pct2 = federacion?.pct_venta_mercado ?? 100;
-      if (!confirm(`¿Anular el fichaje pendiente de ${nom}?\nSe reembolsará el ${pct2}% del precio pagado (${fmt(Math.round(fp.precio_compra * pct2 / 100))}).`)) return;
+      if (!confirm(`¿Descartar el fichaje de ${nom}?\nSe reembolsará el ${pct2}% del precio pagado (${fmt(Math.round(fp.precio_compra * pct2 / 100))}).\nPerderás el ${100 - pct2}% restante.`)) return;
       setProcesandoPend(fp.id);
       const { error } = await sb.rpc('anular_fichaje_pendiente', { p_pendiente_id: fp.id, p_federacion_id: federacion?.id });
       setProcesandoPend(null);
@@ -419,6 +431,9 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
 
   const confirmarVenta = async () => {
     if (!modalVenta) return;
+    const nombreJugVendido = modalVenta.posicion === 'POR'
+      ? `Portería ${modalVenta.equipo}`
+      : `${modalVenta.nombre} (${modalVenta.equipo})`;
     const { error } = await sb.from('plantillas')
       .delete()
       .eq('id', modalVenta.id)
@@ -438,15 +453,24 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         .eq('id', participanteId);
       if (errPres) console.error('Error actualizando presupuesto:', errPres);
       else { setPresupuesto(nuevo); if (modalVenta.lesionado && mercadoCerrado) setSustLesion(nuevaSust); }
-      // Tablón
-      const nombreJug = modalVenta.posicion === 'POR'
-        ? `Portería ${modalVenta.equipo}`
-        : `${modalVenta.nombre} (${modalVenta.equipo})`;
-      publicar(
-        federacion?.id,
-        'venta',
-        `${participanteNombre} vende a ${nombreJug} al mercado por ${fmt(valorVenta)}`
-      );
+      publicar(federacion?.id, 'venta', `${participanteNombre} vende a ${nombreJugVendido} al mercado por ${fmt(valorVenta)}`);
+
+      // Auto-activar primer fichaje pendiente si la venta libera un hueco
+      if (fichajesPend.length > 0 && lista.length - 1 < maxJug) {
+        const primerPend = fichajesPend[0];
+        const { error: errAct } = await sb.rpc('activar_fichaje_pendiente', {
+          p_pendiente_id:       primerPend.id,
+          p_liberar_jugador_id: null,
+          p_federacion_id:      federacion?.id,
+        });
+        if (!errAct) {
+          const jugPend = primerPend.jugadores;
+          const nomEntra = jugPend?.posicion === 'POR' ? `Portería ${jugPend?.equipo}` : jugPend?.nombre;
+          publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nombreJugVendido}`);
+          setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nombreJugVendido}.`);
+          setTimeout(() => setMsgPend(''), 6000);
+        }
+      }
       cargar();
     }
     setModalVenta(null);
@@ -683,6 +707,12 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       </div>
 
       {/* ── Fichajes / traspasos pendientes de plaza ── */}
+      {msgPend && (
+        <div style={{background:'var(--verde)', color:'#fff', padding:'.65rem 1rem',
+                     borderRadius:'var(--radio)', marginBottom:'.75rem', fontWeight:600, fontSize:'.9rem'}}>
+          {msgPend}
+        </div>
+      )}
       {fichajesPend.length > 0 && (
         <div className="card">
           <h2 style={{marginBottom:'1rem'}}>Pendientes de plaza ({fichajesPend.length})</h2>
@@ -742,7 +772,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                           style={{padding:'.35rem .85rem', borderRadius:7,
                                   border:'1.5px solid #dc3545', background:'var(--fondo)',
                                   color:'#dc3545', cursor:'pointer', fontWeight:600, fontSize:'.82rem'}}>
-                    {esTrasp ? 'Descartar (80%)' : 'Anular'}
+                    Descartar (−{100 - (federacion?.pct_venta_mercado ?? 100)}%)
                   </button>
                 </div>
               </div>
@@ -3771,7 +3801,7 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
 }
 
 // ── ALINEACIÓN ─────────────────────────────────────────────────
-function Alineacion({ participanteId, jornadaActual, federacionId }) {
+function Alineacion({ participanteId, participanteNombre, jornadaActual, federacionId }) {
   const [jornada, setJornada]     = useState(jornadaActual || 1);
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
@@ -3961,6 +3991,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
     setGuardando(false);
     setMsg('✓ Alineación guardada');
     setTimeout(() => setMsg(''), 3000);
+    publicar(federacionId, 'alineacion', `${participanteNombre || 'Un equipo'} ha modificado su alineación (J${jornada})`);
   };
 
   if (plantilla === null) return <Spinner />;
@@ -7619,6 +7650,7 @@ function App() {
         </div>
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}
+                      participanteNombre={participanteActual?.nombre}
                       jornadaActual={federacion?.jornada_actual || 1}
                       federacionId={federacion?.id} />
         )}

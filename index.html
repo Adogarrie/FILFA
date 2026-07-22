@@ -486,6 +486,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   // Admin actuando sobre equipo ajeno → poderes de admin; sobre su propio equipo → presidente
   const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
 
+  const POS_ORDER = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
   const lista = jugadores.map(p => ({
     id:         p.id,
     jugador_id: p.jugador_id,
@@ -495,7 +496,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     valor:      p.jugadores?.valor_mercado || 0,
     compra:     p.precio_compra || 0,
     lesionado:  p.jugadores?.lesionado || false,
-  }));
+  })).sort((a, b) => (POS_ORDER[a.posicion] ?? 4) - (POS_ORDER[b.posicion] ?? 4));
 
   const presupuestoDisplay = presupuesto ?? null;
 
@@ -2517,6 +2518,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
   };
 
+  const POS_ORDER_EQ = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
   const lista = (jugadores || []).map(p => ({
     jugador_id: p.jugador_id,
     nombre:     p.jugadores?.nombre || '',
@@ -2525,7 +2527,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     valor:      p.jugadores?.valor_mercado || 0,
     compra:     p.precio_compra || 0,
     lesionado:  p.jugadores?.lesionado || false,
-  }));
+  })).sort((a, b) => (POS_ORDER_EQ[a.posicion] ?? 4) - (POS_ORDER_EQ[b.posicion] ?? 4));
 
   const puedeOfrecer = !!(sesionParticipanteId && equipoId !== sesionParticipanteId && federacion?.ventas_habilitadas);
 

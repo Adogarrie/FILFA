@@ -1,0 +1,19 @@
+{
+  "name": "FILFA Fantasy Football",
+  "short_name": "FILFA",
+  "description": "Gestiona tu liga de fantasy fútbol",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1a7f37",
+  "background_color": "#ffffff",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

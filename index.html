@@ -3765,8 +3765,9 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
   const [jornada, setJornada]     = useState(jornadaActual || 1);
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
-  const [estado, setEstado]       = useState({});      // id → 'T'|'S'|'F'
-  const [ordenSup, setOrdenSup]   = useState({});      // id → 1|2|3|4
+  const [estado, setEstado]         = useState({});      // id → 'T'|'S'|'F'
+  const [ordenSup, setOrdenSup]     = useState({});      // id → 1|2|3|4
+  const [posicionUsada, setPosicionUsada] = useState({}); // id → posicion elegida (solo titulares con doble pos)
   const [jugadoresHistoricos, setJugadoresHistoricos] = useState([]);
   const [jugadoresCedidos, setJugadoresCedidos]       = useState([]);
   const [cargandoAli, setCargandoAli] = useState(false);
@@ -3776,7 +3777,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
   useEffect(() => {
     if (!sb || !participanteId) return;
     sb.from('plantillas')
-      .select('jugador_id, jugadores(id, nombre, equipo, posicion)')
+      .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt)')
       .eq('participante_id', participanteId)
       .then(({ data }) => {
         const jugs = (data || []).map(p => p.jugadores).filter(Boolean);
@@ -3790,12 +3791,12 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
     const cargar = async () => {
       setCargandoAli(true);
       const [{ data: ali }, { data: cierreRow }, { data: cesData }] = await Promise.all([
-        sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente')
+        sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente, posicion_usada')
           .eq('participante_id', participanteId).eq('jornada', jornada),
         sb.from('jornadas_cierre').select('cierre')
           .eq('federacion_id', federacionId).eq('jornada', jornada).maybeSingle(),
         sb.from('cesiones')
-          .select('jugador_id, jugadores(id, nombre, equipo, posicion)')
+          .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt)')
           .eq('participante_id', participanteId).eq('federacion_id', federacionId)
           .eq('jornada', jornada).eq('estado', 'aprobada'),
       ]);
@@ -3821,7 +3822,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
           .limit(1);
         if (ref?.length > 0) {
           const { data: ultima } = await sb.from('alineaciones')
-            .select('jugador_id, es_titular, orden_suplente')
+            .select('jugador_id, es_titular, orden_suplente, posicion_usada')
             .eq('participante_id', participanteId)
             .eq('jornada', ref[0].jornada);
           fuente = ultima || [];
@@ -3829,12 +3830,15 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
       }
 
       const ord = {};
+      const pu  = {};
       for (const a of fuente) {
         if (Object.prototype.hasOwnProperty.call(e, a.jugador_id)) {
           e[a.jugador_id] = a.es_titular ? 'T' : 'S';
           if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
+          if (a.es_titular && a.posicion_usada)          pu[a.jugador_id]  = a.posicion_usada;
         }
       }
+      setPosicionUsada(pu);
 
       // Jugadores vendidos: en alineación guardada pero ya no en plantilla
       const idsActuales = new Set(plantilla.map(j => j.id));
@@ -3879,7 +3883,9 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
   const nS = Object.values(estado).filter(v => v === 'S').length;
 
   const titPos = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
-  for (const j of [...(plantilla || []), ...jugadoresHistoricos, ...jugadoresCedidos]) if (estado[j.id] === 'T') titPos[j.posicion]++;
+  for (const j of [...(plantilla || []), ...jugadoresHistoricos, ...jugadoresCedidos]) {
+    if (estado[j.id] === 'T') { const p = posicionUsada[j.id] ?? j.posicion; titPos[p] = (titPos[p]||0) + 1; }
+  }
   const formActual  = [titPos.DEF, titPos.MED, titPos.DEL];
   const formStr     = formActual.join('-');
   const formCompleta = nT === 11 && titPos.POR === 1;
@@ -3891,6 +3897,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
     if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
     if (op === 'S' && nS >= 4  && prev !== 'S') { alert('Máximo 4 suplentes.'); return; }
     setEstado(e => ({ ...e, [id]: op }));
+    if (prev === 'T' && op !== 'T') setPosicionUsada(p => { const n = {...p}; delete n[id]; return n; });
     if (op === 'S' && prev !== 'S') {
       // Asignar siguiente posición disponible
       setOrdenSup(o => {
@@ -3932,6 +3939,7 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
         participante_id: participanteId, jornada,
         jugador_id: jugadorId, es_titular: v === 'T',
         orden_suplente: v === 'S' ? (ordenSup[jugadorId] ?? null) : null,
+        posicion_usada: v === 'T' ? (posicionUsada[jugadorId] ?? null) : null,
       }));
     const { error: errDel } = await sb.from('alineaciones').delete()
       .eq('participante_id', participanteId).eq('jornada', jornada);
@@ -4030,7 +4038,31 @@ function Alineacion({ participanteId, jornadaActual, federacionId }) {
                                 {ordenSup[j.id]}°
                               </td>
                             )}
-                            <td style={{width:48}}><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                            <td style={{width: key === 'T' && j.posicion_alt ? 86 : 48}}>
+                              {key === 'T' && j.posicion_alt && !bloqueado
+                                ? <span style={{display:'inline-flex', gap:2}}>
+                                    {[j.posicion, j.posicion_alt].map(pos => {
+                                      const activo = (posicionUsada[j.id] ?? j.posicion) === pos;
+                                      return (
+                                        <button key={pos}
+                                                className={`badge ${pos}`}
+                                                onClick={() => setPosicionUsada(p => ({...p, [j.id]: pos}))}
+                                                style={{cursor:'pointer', border:'none',
+                                                        opacity: activo ? 1 : 0.35,
+                                                        transform: activo ? 'none' : 'scale(.92)'}}>
+                                          {pos}
+                                        </button>
+                                      );
+                                    })}
+                                  </span>
+                                : <span className={`badge ${key === 'T' ? (posicionUsada[j.id] ?? j.posicion) : j.posicion}`}>
+                                    {key === 'T' ? (posicionUsada[j.id] ?? j.posicion) : j.posicion}
+                                    {key !== 'T' && j.posicion_alt && (
+                                      <span style={{opacity:.6, fontWeight:400}}>/{j.posicion_alt}</span>
+                                    )}
+                                  </span>
+                              }
+                            </td>
                             <td style={{fontWeight:600}}>
                               {nombreJugador(j.nombre, j.posicion, j.equipo)}
                               {esCedido && (
@@ -6083,7 +6115,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     'CD Castellón','AD Alcorcón',
   ].sort();
 
-  const vacioForm = { nombre: '', equipo: '', posicion: 'DEF', valor: '', destino: 'mercado', participante_id: '' };
+  const vacioForm = { nombre: '', equipo: '', posicion: 'DEF', posicion_alt: '', valor: '', destino: 'mercado', participante_id: '' };
   const [form, setForm]         = useState(vacioForm);
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]           = useState('');
@@ -6095,7 +6127,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const [borrando, setBorrando]     = useState(null);
 
   const cargarJugadores = async () => {
-    const { data } = await sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado, lesionado').order('equipo').order('nombre');
+    const { data } = await sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, lesionado').order('equipo').order('nombre');
     setJugadores(data || []);
   };
 
@@ -6106,6 +6138,17 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
     publicar(federacion?.id, 'admin', `${nomJug} marcado como ${nuevoEstado ? 'lesionado' : 'disponible'}`, actorNombre);
     setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, lesionado: nuevoEstado } : p));
+  };
+
+  const cambiarPosAlt = async (j, nuevaAlt) => {
+    const val = nuevaAlt || null;
+    const { error } = await sb.from('jugadores').update({ posicion_alt: val }).eq('id', j.id);
+    if (error) { alert('Error: ' + error.message); return; }
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    publicar(federacion?.id, 'admin',
+      val ? `${nomJug}: posición alternativa → ${val}` : `${nomJug}: posición alternativa eliminada`,
+      actorNombre);
+    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, posicion_alt: val } : p));
   };
 
   useEffect(() => { if (sb) cargarJugadores(); }, []);
@@ -6124,6 +6167,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
       nombre:        form.nombre.trim(),
       equipo:        form.equipo.trim(),
       posicion:      form.posicion,
+      posicion_alt:  (form.posicion !== 'POR' && form.posicion_alt) ? form.posicion_alt : null,
       valor_mercado: Number(form.valor),
     }).select().single();
     if (errJug) { setMsg('Error: ' + errJug.message); setGuardando(false); return; }
@@ -6190,10 +6234,19 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
           </div>
           <div>
             <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Posición</label>
-            <select value={form.posicion} onChange={e => f('posicion', e.target.value)} style={iS}>
+            <select value={form.posicion} onChange={e => { f('posicion', e.target.value); f('posicion_alt', ''); }} style={iS}>
               {POSICIONES.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
+          {form.posicion !== 'POR' && (
+            <div>
+              <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Posición alternativa</label>
+              <select value={form.posicion_alt} onChange={e => f('posicion_alt', e.target.value)} style={iS}>
+                <option value="">— Ninguna —</option>
+                {POSICIONES.filter(p => p !== 'POR' && p !== form.posicion).map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Valor de mercado (€)</label>
             <input type="number" min="0" value={form.valor} onChange={e => f('valor', e.target.value)} placeholder="Ej: 5000000" style={iS} />
@@ -6241,7 +6294,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
             ? <div className="empty">No hay jugadores que coincidan.</div>
             : <table>
                 <thead>
-                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
+                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th>Pos. alt</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
                 </thead>
                 <tbody>
                   {listaFiltrada.map(j => (
@@ -6254,6 +6307,21 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                         <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                       </td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td>
+                        {j.posicion === 'POR'
+                          ? <span style={{ color:'var(--texto2)', fontSize:'.78rem' }}>—</span>
+                          : <select value={j.posicion_alt || ''}
+                                    onChange={e => cambiarPosAlt(j, e.target.value)}
+                                    style={{ padding:'.2rem .4rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                             fontSize:'.8rem', background:'var(--fondo)', color:'var(--texto)',
+                                             cursor:'pointer' }}>
+                              <option value="">—</option>
+                              {POSICIONES.filter(p => p !== 'POR' && p !== j.posicion).map(p =>
+                                <option key={p} value={p}>{p}</option>
+                              )}
+                            </select>
+                        }
+                      </td>
                       <td style={{ textAlign:'right', fontVariantNumeric:'tabular-nums' }}>{fmt(j.valor_mercado ?? 0)}</td>
                       <td style={{ textAlign:'center' }}>
                         <button onClick={() => toggleLesionado(j)}
@@ -6595,16 +6663,24 @@ function AdminCesiones({ federacion, participantes, actorNombre }) {
 }
 
 // ── HELPER: CÁLCULO DE SUSTITUCIONES AUTOMÁTICAS ─────────────
-// Recibe los registros de alineaciones (titulares + suplentes),
-// el Set de jugador_ids que no jugaron y un mapa jugador_id → {posicion}.
+// alisData       — registros de alineaciones (titulares + suplentes)
+// noJugoSet      — Set de jugador_ids que no jugaron
+// jugadoresMap   — mapa jugador_id → { posicion, posicion_alt, ... }
+// posicionUsadaMap — mapa jugador_id → posicion elegida por el usuario
+//                    (solo titulares con doble posición)
 // Devuelve array de { participante_id, jugador_sale_id, jugador_entra_id }.
-function calcularSustitucionesAuto(alisData, noJugoSet, jugadoresMap) {
+function calcularSustitucionesAuto(alisData, noJugoSet, jugadoresMap, posicionUsadaMap = {}) {
   const FORMACIONES = [[5,4,1],[5,3,2],[5,2,3],[4,5,1],[4,4,2],[4,3,3],[4,2,4],[3,5,2],[3,6,1],[3,4,3],[3,3,4]];
 
-  function esValida(jids) {
+  // Valida si los 11 IDs forman una formación permitida usando posicionEfectiva
+  // para saber qué posición ocupa cada jugador en ese momento.
+  function esValidaConMapa(jids, posEfec) {
     if (jids.length !== 11) return false;
     const c = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
-    for (const jid of jids) { const p = jugadoresMap[jid]?.posicion; if (p) c[p] = (c[p]||0) + 1; }
+    for (const jid of jids) {
+      const p = posEfec[jid] ?? jugadoresMap[jid]?.posicion;
+      if (p) c[p] = (c[p]||0) + 1;
+    }
     if (c.POR !== 1) return false;
     return FORMACIONES.some(f => f[0]===c.DEF && f[1]===c.MED && f[2]===c.DEL);
   }
@@ -6622,24 +6698,62 @@ function calcularSustitucionesAuto(alisData, noJugoSet, jugadoresMap) {
   for (const [partId, { titulars, bench }] of Object.entries(porParticipante)) {
     bench.sort((a, b) => a.orden - b.orden);
     const benchIds = bench.map(b => b.jid);
+
+    // posicionEfectiva: qué posición ocupa actualmente cada jugador en juego.
+    // Inicializada con posicion_usada (si la tiene) o posicion primaria.
+    const posicionEfectiva = {};
+    for (const tid of titulars) {
+      posicionEfectiva[tid] = posicionUsadaMap[tid] ?? jugadoresMap[tid]?.posicion;
+    }
+
+    // Ordenar titulares a sustituir por su posición efectiva
     const titOrdenados = [...titulars].sort((a, b) =>
-      (posOrder[jugadoresMap[a]?.posicion] ?? 3) - (posOrder[jugadoresMap[b]?.posicion] ?? 3)
+      (posOrder[posicionEfectiva[a]] ?? 3) - (posOrder[posicionEfectiva[b]] ?? 3)
     );
+
     const efectivos = [...titulars];
     const usados = new Set();
 
     for (const jid of titOrdenados) {
       if (!noJugoSet.has(jid)) continue;
-      if (jugadoresMap[jid]?.posicion === 'POR') continue;
+      if (posicionEfectiva[jid] === 'POR') continue;
 
-      const probar = sid => esValida(efectivos.map(t => t === jid ? sid : t));
-      let candidato = benchIds.find(sid => !usados.has(sid) && !noJugoSet.has(sid) && probar(sid));
-      if (!candidato) candidato = benchIds.find(sid => !usados.has(sid) && probar(sid));
+      let candidato = null;
+      let candidatoPosUsada = null;
+
+      // Intenta entrar con sid usando posicion indicada; devuelve true si es válido.
+      const intentarCon = (sid, posCandidata) => {
+        const nuevos = efectivos.map(t => t === jid ? sid : t);
+        return esValidaConMapa(nuevos, { ...posicionEfectiva, [sid]: posCandidata });
+      };
+
+      // Prueba un suplente: primero con posición primaria, luego con alt.
+      const probar = (sid) => {
+        if (usados.has(sid)) return false;
+        const posPrim = jugadoresMap[sid]?.posicion;
+        if (posPrim && intentarCon(sid, posPrim)) {
+          candidato = sid; candidatoPosUsada = posPrim; return true;
+        }
+        const posAlt = jugadoresMap[sid]?.posicion_alt;
+        if (posAlt && intentarCon(sid, posAlt)) {
+          candidato = sid; candidatoPosUsada = posAlt; return true;
+        }
+        return false;
+      };
+
+      // 1ª pasada: solo suplentes que jugaron
+      benchIds.some(sid => !noJugoSet.has(sid) && probar(sid));
+      // 2ª pasada: también suplentes que no jugaron
+      if (!candidato) benchIds.some(sid => probar(sid));
 
       if (candidato) {
         resultado.push({ participante_id: partId, jugador_sale_id: jid, jugador_entra_id: candidato });
         usados.add(candidato);
-        const idx = efectivos.indexOf(jid); if (idx !== -1) efectivos[idx] = candidato;
+        const idx = efectivos.indexOf(jid);
+        if (idx !== -1) efectivos[idx] = candidato;
+        // Actualizar el mapa para cascadas correctas
+        posicionEfectiva[candidato] = candidatoPosUsada;
+        delete posicionEfectiva[jid];
       }
     }
   }
@@ -6667,7 +6781,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
     const partIds = participantes.map(p => p.id);
     const [{ data: alis }, { data: njData }] = await Promise.all([
       sb.from('alineaciones')
-        .select('jugador_id, participante_id, orden_suplente, es_titular, jugadores(id, nombre, equipo, posicion)')
+        .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, equipo, posicion, posicion_alt)')
         .eq('jornada', jornada)
         .in('participante_id', partIds),
       sb.from('jornada_no_jugo')
@@ -6696,7 +6810,11 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
   // Recalcular preview cada vez que cambia noJugo o los datos
   useEffect(() => {
     if (!alisData.length) { setSubsPreview([]); return; }
-    setSubsPreview(calcularSustitucionesAuto(alisData, noJugo, jugMap));
+    const posicionUsadaMap = {};
+    for (const a of alisData) {
+      if (a.es_titular && a.posicion_usada) posicionUsadaMap[a.jugador_id] = a.posicion_usada;
+    }
+    setSubsPreview(calcularSustitucionesAuto(alisData, noJugo, jugMap, posicionUsadaMap));
   }, [noJugo, alisData, jugMap]);
 
   const toggleNoJugo = jid => {
@@ -6789,8 +6907,9 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
       if (!jug) continue;
       if (!porEquipo[a.participante_id]) porEquipo[a.participante_id] = { POR: [], DEF: [], MED: [], DEL: [], suplentes: [] };
       if (a.es_titular) {
-        if (porEquipo[a.participante_id][jug.posicion] !== undefined) {
-          porEquipo[a.participante_id][jug.posicion].push(jug.nombre);
+        const posEfectiva = a.posicion_usada ?? jug.posicion;
+        if (porEquipo[a.participante_id][posEfectiva] !== undefined) {
+          porEquipo[a.participante_id][posEfectiva].push(jug.nombre);
         }
       } else if (a.orden_suplente != null) {
         porEquipo[a.participante_id].suplentes.push({ nombre: jug.nombre, orden: a.orden_suplente });

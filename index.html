@@ -338,6 +338,8 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [escudoUrl, setEscudoUrl]           = useState(null);
   const [subtabPlantilla, setSubtabPlantilla] = useState('plantilla');
 
+  const maxJug = federacion?.max_jugadores ?? 14;
+
   const cargar = async () => {
     if (!participanteId || !sb) { setJugadores([]); return; }
     const [{ data: pl, error }, { data: pres }] = await Promise.all([
@@ -367,9 +369,9 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const activarPendiente = async (fp) => {
     const plantillaActual = (jugadores || []);
     const activosCount = plantillaActual.filter(p => !p.jugadores?.lesionado).length;
-    const llena  = activosCount >= 14;
+    const llena  = activosCount >= maxJug;
     const liberar = llena ? (liberarSel[fp.id] || '') : null;
-    if (llena && !liberar) { alert('La plantilla está llena (14 activos). Selecciona qué jugador liberar primero.'); return; }
+    if (llena && !liberar) { alert(`La plantilla está llena (${maxJug} activos). Selecciona qué jugador liberar primero.`); return; }
     setProcesandoPend(fp.id);
     const { error } = await sb.rpc('activar_fichaje_pendiente', {
       p_pendiente_id:       fp.id,
@@ -687,7 +689,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             const jug     = fp.jugadores || {};
             const nom     = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
             const esTrasp = !!fp.traspaso_de_id;
-            const llena   = lista.filter(j => !j.lesionado).length >= 14;
+            const llena   = lista.filter(j => !j.lesionado).length >= maxJug;
             const sel     = liberarSel[fp.id] || '';
             const enProc  = procesandoPend === fp.id;
             return (
@@ -898,6 +900,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const duplHabilitado = !!federacion?.duplicados_habilitado;
   const duplValorMin   = federacion?.duplicados_valor_min ?? 0;
   const duplMax        = federacion?.duplicados_max ?? 2;
+  const maxJug         = federacion?.max_jugadores ?? 14;
 
   const esDuplicable = (jug) =>
     duplHabilitado && jug.posicion !== 'POR' &&
@@ -921,7 +924,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     return count;
   }, [misJugadoresIds, jugadoresMap]);
 
-  const miPlantillaLlena = miActivosCount >= 14;
+  const miPlantillaLlena = miActivosCount >= maxJug;
 
   // Equipos LaLiga cuya portería ya está cogida (plantilla o pendiente) en MI división
   const porteríasBloqueadas = useMemo(() => {
@@ -1069,10 +1072,10 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
 
-    // Límite 14 jugadores (sin contar lesionados)
+    // Límite de jugadores activos (sin contar lesionados)
     const activosCnt = (miPlantilla || []).filter(p => !p.jugadores?.lesionado).length;
-    if (activosCnt >= 14) {
-      alert('Tu equipo ya tiene 14 jugadores activos (máximo permitido).');
+    if (activosCnt >= maxJug) {
+      alert(`Tu equipo ya tiene ${maxJug} jugadores activos (máximo permitido).`);
       setModal(null);
       return;
     }
@@ -1160,11 +1163,11 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
-    const TARGET = 14;
+    const TARGET = maxJug;
     const huecos = TARGET - (miPlantilla || []).filter(p => !p.jugadores?.lesionado).length;
 
     if (huecos <= 0) {
-      alert('Tu plantilla ya tiene 14 jugadores activos.');
+      alert(`Tu plantilla ya tiene ${maxJug} jugadores activos.`);
       setSorteando(false); setModalSorteo(false); return;
     }
 
@@ -1349,7 +1352,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   };
 
   const plantillaActivaCnt = todasPlantillas.filter(p => p.participante_id === participanteId && !jugadoresMap.get(p.jugador_id)?.lesionado).length;
-  const huecosRestantes = 14 - plantillaActivaCnt;
+  const huecosRestantes = maxJug - plantillaActivaCnt;
 
   return (
     <div>
@@ -1385,13 +1388,13 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         <div className="card">
           <h2 style={{marginBottom:'.75rem'}}>Liberar jugadores</h2>
           <p style={{color:'var(--texto2)', fontSize:'.88rem', marginBottom:'1.25rem'}}>
-            {miPlantilla.filter(p => !p.lesionado).length >= 14
+            {miPlantilla.filter(p => !p.lesionado).length >= maxJug
               ? 'Tu plantilla está llena. Para cada fichaje pendiente selecciona qué jugador liberas para hacerle hueco.'
-              : `Tienes ${14 - miPlantilla.filter(p => !p.lesionado).length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
+              : `Tienes ${maxJug - miPlantilla.filter(p => !p.lesionado).length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
           </p>
           {misFichajes.map(f => {
             const jug = jugadoresMap.get(f.jugador_id);
-            const plazasLibres = 14 - miPlantilla.filter(p => !p.lesionado).length;
+            const plazasLibres = maxJug - miPlantilla.filter(p => !p.lesionado).length;
             const sel = liberarSel[f.id] || '';
             return (
               <div key={f.id} style={{display:'flex', flexWrap:'wrap', alignItems:'flex-start',
@@ -1461,7 +1464,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
           </div>
           {sorteoHabilitado && participanteId && federacion?.ventas_habilitadas && (
             <button className="btn-fichar" disabled={huecosRestantes <= 0}
-                    title={huecosRestantes <= 0 ? 'Tu plantilla ya tiene 14 jugadores activos' : ''}
+                    title={huecosRestantes <= 0 ? `Tu plantilla ya tiene ${maxJug} jugadores activos` : ''}
                     onClick={() => setModalSorteo(true)}>
               🎲 Sorteo aleatorio
             </button>
@@ -4192,6 +4195,8 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
   const [liberarSel, setLiberarSel]   = useState({});     // pendiente_id → jugador_id a liberar
   const [procesando, setProcesando]   = useState(null);
 
+  const maxJug = federacion?.max_jugadores ?? 14;
+
   const cargar = async () => {
     if (!sb) return;
     const partIds = participantes.map(p => p.id);
@@ -4219,9 +4224,9 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
   const activar = async (pend) => {
     const plantilla = plantillasMap[pend.participante_id] || [];
     const activosCount = plantilla.filter(p => !p.lesionado).length;
-    const liberar   = activosCount >= 14 ? (liberarSel[pend.id] || '') : null;
-    if (activosCount >= 14 && !liberar) {
-      alert('El equipo tiene la plantilla llena (14 activos). Selecciona qué jugador liberar primero.');
+    const liberar   = activosCount >= maxJug ? (liberarSel[pend.id] || '') : null;
+    if (activosCount >= maxJug && !liberar) {
+      alert(`El equipo tiene la plantilla llena (${maxJug} activos). Selecciona qué jugador liberar primero.`);
       return;
     }
     setProcesando(pend.id);
@@ -4300,7 +4305,7 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
         const nomJug   = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
         const plantilla = plantillasMap[pend.participante_id] || [];
         const activosAdm = plantilla.filter(p => !p.lesionado).length;
-        const llena     = activosAdm >= 14;
+        const llena     = activosAdm >= maxJug;
         const sel       = liberarSel[pend.id] || '';
         const enProceso = procesando === pend.id;
 
@@ -4338,7 +4343,7 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
             <div style={{minWidth:80, flex:'0 0 auto'}}>
               <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.1rem'}}>Plantilla</div>
               <div style={{fontWeight:600, color: llena ? '#dc3545' : '#198754'}}>
-                {activosAdm}/14 {llena ? '(llena)' : ''}
+                {activosAdm}/{maxJug} {llena ? '(llena)' : ''}
                 {plantilla.length > activosAdm && <span style={{fontSize:'.8rem', color:'#dc3545', marginLeft:4}}>(+{plantilla.length - activosAdm} les.)</span>}
               </div>
             </div>
@@ -4919,6 +4924,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [nombre, setNombre]       = useState(federacion?.nombre || '');
   const [presup, setPresup]       = useState(String(federacion?.presupuesto_inicial ?? 100000000));
   const [jornada, setJornada]     = useState(String(federacion?.jornada_actual ?? 1));
+  const [maxJug, setMaxJug]       = useState(String(federacion?.max_jugadores ?? 14));
   const [msg, setMsg]             = useState('');
   const [copiado, setCopiado]     = useState(false);
   const [nuevoEq, setNuevoEq]     = useState({ nombre:'', estadio:'', entrenador:'' });
@@ -4991,19 +4997,21 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
 
   const guardar = async () => {
     if (!sb || !federacion) return;
-    const nuevoNombre = nombre.trim() || federacion.nombre;
-    const nuevoPresup = parseFloat(presup) || federacion.presupuesto_inicial;
+    const nuevoNombre  = nombre.trim() || federacion.nombre;
+    const nuevoPresup  = parseFloat(presup) || federacion.presupuesto_inicial;
     const nuevaJornada = parseInt(jornada) || federacion.jornada_actual;
+    const nuevoMaxJug  = Math.max(1, parseInt(maxJug) || federacion.max_jugadores || 14);
     const { error, data } = await sb.from('federaciones')
-      .update({ nombre: nuevoNombre, presupuesto_inicial: nuevoPresup, jornada_actual: nuevaJornada })
+      .update({ nombre: nuevoNombre, presupuesto_inicial: nuevoPresup, jornada_actual: nuevaJornada, max_jugadores: nuevoMaxJug })
       .eq('id', federacion.id)
       .select().single();
     if (error) { alert('Error: ' + error.message); return; }
     onFederacionUpdate(data);
     const cambios = [];
-    if (nuevoNombre !== federacion.nombre) cambios.push(`nombre → "${nuevoNombre}"`);
-    if (nuevoPresup !== federacion.presupuesto_inicial) cambios.push(`presupuesto inicial → ${fmt(nuevoPresup)}`);
-    if (nuevaJornada !== federacion.jornada_actual) cambios.push(`jornada actual → J${nuevaJornada}`);
+    if (nuevoNombre  !== federacion.nombre)                        cambios.push(`nombre → "${nuevoNombre}"`);
+    if (nuevoPresup  !== federacion.presupuesto_inicial)           cambios.push(`presupuesto inicial → ${fmt(nuevoPresup)}`);
+    if (nuevaJornada !== federacion.jornada_actual)                cambios.push(`jornada actual → J${nuevaJornada}`);
+    if (nuevoMaxJug  !== (federacion.max_jugadores ?? 14))         cambios.push(`máx. jugadores → ${nuevoMaxJug}`);
     if (cambios.length) publicar(federacion.id, 'admin', `Configuración de federación actualizada: ${cambios.join(', ')}`, actorNombre);
     setMsg('Guardado correctamente');
     setTimeout(() => setMsg(''), 3000);
@@ -5126,6 +5134,14 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             Jornada actual
           </label>
           <input type="number" min="1" max="38" value={jornada} onChange={e => setJornada(e.target.value)}
+                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+        </div>
+        <div style={{minWidth:90}}>
+          <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
+            Máx. jugadores
+          </label>
+          <input type="number" min="1" max="50" value={maxJug} onChange={e => setMaxJug(e.target.value)}
                  style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
                          border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
         </div>
@@ -7428,7 +7444,7 @@ function App() {
           <Competiciones federacion={federacion} participantes={participantes} />
         )}
         {vista === 'Ayuda' && (
-          <Ayuda isAdmin={isAdmin} />
+          <Ayuda isAdmin={isAdmin} maxJugadores={federacion?.max_jugadores ?? 14} />
         )}
         {vista === 'Tablón' && (
           <Tablon federacionId={federacion?.id} isAdmin={isAdmin} isModerador={isModerador}
@@ -8796,7 +8812,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
 
 // ── AYUDA ──────────────────────────────────────────────────────
-function Ayuda({ isAdmin }) {
+function Ayuda({ isAdmin, maxJugadores = 14 }) {
   const [abierto, setAbierto] = React.useState(null);
   const toggle = (k) => setAbierto(a => a === k ? null : k);
 
@@ -8805,7 +8821,7 @@ function Ayuda({ isAdmin }) {
       id: 'plantilla',
       titulo: '🗂 Tu plantilla',
       contenido: [
-        ['Límite de jugadores', 'Cada equipo puede tener como máximo 14 jugadores en su plantilla activa. Si ya tienes 14 y fichas uno nuevo, el jugador queda en "Fichajes pendientes" hasta que liberes un hueco.'],
+        ['Límite de jugadores', `Cada equipo puede tener como máximo ${maxJugadores} jugadores en su plantilla activa. Si ya tienes ${maxJugadores} y fichas uno nuevo, el jugador queda en "Fichajes pendientes" hasta que liberes un hueco.`],
         ['Presupuesto', 'Cada equipo dispone de un presupuesto inicial fijado por el admin. Cada fichaje descuenta su precio de tu presupuesto. Si vendes o liberas un jugador, recuperas su valor de mercado actual.'],
         ['Liberar jugadores', 'Puedes vender un jugador desde Mi Plantilla. Recibirás su valor de mercado actual (no necesariamente lo que pagaste por él).'],
         ['Escudo del equipo', 'Puedes subir una imagen como escudo del equipo desde Equipos → Editar perfil. El escudo aparece en el calendario, clasificaciones y en la vista de tu equipo.'],
@@ -8816,7 +8832,7 @@ function Ayuda({ isAdmin }) {
       titulo: '🛒 Fichar del mercado',
       contenido: [
         ['Compra directa', 'En la pestaña Mercado verás todos los jugadores disponibles (sin equipo fantasy). Pulsa "Fichar" para añadirlo a tu plantilla al precio de mercado actual.'],
-        ['Condiciones', 'Necesitas presupuesto suficiente y tener menos de 14 jugadores, o aceptar que quede como fichaje pendiente si ya tienes la plantilla completa.'],
+        ['Condiciones', `Necesitas presupuesto suficiente y tener menos de ${maxJugadores} jugadores, o aceptar que quede como fichaje pendiente si ya tienes la plantilla completa.`],
         ['Mercado habilitado', 'El admin puede abrir o cerrar el mercado. Si está cerrado, no podrás fichar ni poner jugadores a la venta.'],
         ['Jugadores duplicados', 'Si el admin ha activado los jugadores duplicados, algunos jugadores ya fichados por otro equipo pueden seguir disponibles en el mercado. Aparecerá un indicador "X/N equipos" mostrando cuántas copias hay y cuántas quedan disponibles.'],
       ]
@@ -8838,7 +8854,7 @@ function Ayuda({ isAdmin }) {
       id: 'pendientes',
       titulo: '⏳ Fichajes pendientes',
       contenido: [
-        ['¿Qué son?', 'Si ganas una puja o aceptas un traspaso pero ya tienes 14 jugadores, el fichaje queda "pendiente de plaza". El dinero ya se descuenta en el momento del fichaje.'],
+        ['¿Qué son?', `Si ganas una puja o aceptas un traspaso pero ya tienes ${maxJugadores} jugadores, el fichaje queda "pendiente de plaza". El dinero ya se descuenta en el momento del fichaje.`],
         ['Activar', 'Desde Mi Plantilla, sección "Pendientes de plaza", puedes activar el fichaje. Si la plantilla sigue llena, deberás elegir qué jugador liberar (recuperas su valor de mercado).'],
         ['Descartar', 'Si no quieres al jugador, puedes descartarlo. Solo se te devuelve el 80 % de lo que pagaste (penalización del 20 %). En traspasos, el jugador vuelve al equipo vendedor si tiene hueco; si no, queda libre en el mercado.'],
       ]

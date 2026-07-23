@@ -1047,7 +1047,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         }
       }
     }
-    const cantidad = parseFloat(String(cantidadPuja).replace(',', '.'));
+    const cantidad = Math.round(parseFloat(String(cantidadPuja).replace(',', '.')) * 100) / 100 * 1_000_000;
     const minimo   = modalPuja.valor_mercado || 0;
     if (isNaN(cantidad) || cantidad < minimo) {
       alert(`La puja mínima es ${fmt(minimo)}.`); return;
@@ -1592,7 +1592,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                             <span style={{fontSize:'.8rem', color:'#198754', fontWeight:600}}>
                               {fmt(miPuja.cantidad)}
                             </span>
-                            <button onClick={() => { setModalPuja(j); setCantidadPuja(String(miPuja.cantidad)); }}
+                            <button onClick={() => { setModalPuja(j); setCantidadPuja(String((miPuja.cantidad || 0) / 1_000_000)); }}
                                     style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
                                             border:'1.5px solid #198754', background:'#fff',
                                             color:'#198754', cursor:'pointer'}}>
@@ -1607,7 +1607,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                           </>
                         ) : (
                           <button className="btn-fichar"
-                                  onClick={() => { setModalPuja(j); setCantidadPuja(String(j.valor_mercado || 0)); }}>
+                                  onClick={() => { setModalPuja(j); setCantidadPuja(String((j.valor_mercado || 0) / 1_000_000)); }}>
                             Pujar
                           </button>
                         )}
@@ -1646,7 +1646,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                         <span style={{fontSize:'.8rem', color:'#198754', fontWeight:600}}>
                           {fmt(miPuja.cantidad)}
                         </span>
-                        <button onClick={() => { setModalPuja(j); setCantidadPuja(String(miPuja.cantidad)); }}
+                        <button onClick={() => { setModalPuja(j); setCantidadPuja(String((miPuja.cantidad || 0) / 1_000_000)); }}
                                 style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
                                         border:'1.5px solid #198754', background:'#fff',
                                         color:'#198754', cursor:'pointer'}}>
@@ -1661,7 +1661,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                       </span>
                     ) : (
                       <button className="btn-fichar"
-                              onClick={() => { setModalPuja(j); setCantidadPuja(String(j.valor_mercado || 0)); }}
+                              onClick={() => { setModalPuja(j); setCantidadPuja(String((j.valor_mercado || 0) / 1_000_000)); }}
                               disabled={!participanteId}>
                         Pujar
                       </button>
@@ -1697,9 +1697,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
             </p>
             <div style={{marginBottom:'1rem'}}>
               <label style={{fontSize:'.85rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
-                Tu puja (€)
+                Tu puja (M)
               </label>
-              <input type="number" min={modalPuja.valor_mercado || 0} step="100000"
+              <input type="number" min={(modalPuja.valor_mercado || 0) / 1_000_000} step="0.01"
                      value={cantidadPuja}
                      onChange={e => setCantidadPuja(e.target.value)}
                      style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
@@ -2569,7 +2569,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const puedeOfrecer = !!(sesionParticipanteId && equipoId !== sesionParticipanteId && federacion?.ventas_habilitadas);
 
   const enviarOferta = async () => {
-    const cant = Number(cantOferta);
+    const cant = Math.round(Number(cantOferta) * 100) / 100 * 1_000_000;
     if (!cant || cant <= 0) { setMsgOferta('Introduce una cantidad válida.'); return; }
     setEnviandoOf(true); setMsgOferta('');
     const { error } = await sb.from('ofertas_jugadores').insert({
@@ -2724,8 +2724,8 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
               {' — '}<strong>{equipo?.nombre}</strong>
             </p>
             <div className="campo">
-              <label>Tu oferta (€)</label>
-              <input type="number" min="1" value={cantOferta}
+              <label>Tu oferta (M)</label>
+              <input type="number" min="0.001" step="0.01" value={cantOferta}
                      onChange={e => { setCantOferta(e.target.value); setMsgOferta(''); }}
                      placeholder={`Valor: ${fmt(modalOferta.valor || 0)}`}
                      style={{width:'100%'}} />

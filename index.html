@@ -5514,7 +5514,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     setPresupuesto(pd?.presupuesto ?? null);
     setClas(cl || []);
     const precios = {};
-    (pl || []).forEach(r => { precios[r.id] = String(r.precio_compra || 0); });
+    (pl || []).forEach(r => { precios[r.id] = String((r.precio_compra || 0) / 1_000_000); });
     setEditPrecios(precios);
   };
 
@@ -5523,7 +5523,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
   // Guardar precio de compra de todos los jugadores
   const guardarPrecios = async () => {
     for (const [rowId, val] of Object.entries(editPrecios)) {
-      await sb.from('plantillas').update({ precio_compra: Number(val) || 0 }).eq('id', rowId);
+      await sb.from('plantillas').update({ precio_compra: (Number(val) || 0) * 1_000_000 }).eq('id', rowId);
     }
     flash('Precios guardados');
   };
@@ -5570,12 +5570,13 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     const cant = Number(penCantidad);
     if (!cant) { flash('Introduce una cantidad válida'); return; }
     if (penTipo === 'presupuesto') {
-      const nuevo = (presupuesto || 0) - cant;
+      const cantRaw = cant * 1_000_000;
+      const nuevo = (presupuesto || 0) - cantRaw;
       await sb.from('participantes').update({ presupuesto: nuevo }).eq('id', selId);
       onParticipantesChange?.();
       cargar();
-      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cant)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
-      flash(`Penalización de ${fmt(cant)} aplicada al presupuesto`);
+      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
+      flash(`Penalización de ${fmt(cantRaw)} aplicada al presupuesto`);
     } else {
       const jornadaActual = clas.length > 0 ? Math.max(...clas.map(r => r.jornada)) : 1;
       const actual = clas.find(r => r.jornada === jornadaActual)?.puntos_jornada || 0;
@@ -5724,7 +5725,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
             </div>
             <div>
               <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>
-                Cantidad ({penTipo === 'presupuesto' ? '€' : 'pts'})
+                Cantidad ({penTipo === 'presupuesto' ? 'M' : 'pts'})
               </label>
               <input type="number" min="0" value={penCantidad} onChange={e => setPenCantidad(e.target.value)}
                      style={{width:100, padding:'.35rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)'}} />
@@ -9271,6 +9272,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      window.location.reload();
     });
   }
 </script>

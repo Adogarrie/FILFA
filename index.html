@@ -7957,6 +7957,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   const [sJornada, setSJornada]         = useState('');
   const [msg, setMsg]   = useState('');
   const [busy, setBusy] = useState(false);
+  const [ptsLocalFase, setPtsLocalFase] = useState(0);
 
   const flash  = m => { setMsg(m); setTimeout(() => setMsg(''), 3500); };
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
@@ -7968,7 +7969,12 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     if (compSel) loadFases(compSel); else { setFases([]); setFaseSel(null); }
   }, [compSel]);
   useEffect(() => {
-    if (faseSel) loadFaseDetail(faseSel); else { setGrupos([]); setGMiembros({}); setPartidos([]); }
+    if (faseSel) {
+      loadFaseDetail(faseSel);
+      setPtsLocalFase(fases.find(f => f.id === faseSel)?.pts_local ?? 0);
+    } else {
+      setGrupos([]); setGMiembros({}); setPartidos([]);
+    }
   }, [faseSel]);
 
   const loadComps = async () => {
@@ -8116,6 +8122,13 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   };
 
   // ── Calcular resultado de una ronda de grupo ────────────────
+  const guardarPtsLocal = async () => {
+    const val = Math.max(0, parseInt(ptsLocalFase) || 0);
+    await sb.from('fases_competicion').update({ pts_local: val }).eq('id', faseSel);
+    setFases(prev => prev.map(f => f.id === faseSel ? { ...f, pts_local: val } : f));
+    flash(`Ventaja local guardada: +${val} pts`);
+  };
+
   // Helper: aplica comodines con scope='torneo' sobre un ptsMap dado
   const aplicarComoDinesTorneo = async (pidsArray, jornada) => {
     const scopeCapT = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_torneo   ?? false) && (federacion?.comodin_capitan_torneo_ids   ?? []).includes(compSel);
@@ -8160,9 +8173,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     if (ajuste) for (const pid of allPids) {
       if (ajuste[pid] != null) ptsMap[pid] = ajuste[pid]; // banquillo: override; capitan: ya sumado en helper
     }
+    const ptsLocal = faseAct?.pts_local ?? 0;
     const updates = ms.map(m=>({
       id:m.id,
-      goles_local:    ptsToGoles(ptsMap[m.participante_local_id]??0, baremo),
+      goles_local:    ptsToGoles((ptsMap[m.participante_local_id]??0) + ptsLocal, baremo),
       goles_visitante:ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo),
     }));
     await Promise.all(updates.map(u=>sb.from('partidos_competicion').update({goles_local:u.goles_local,goles_visitante:u.goles_visitante}).eq('id',u.id)));
@@ -8181,7 +8195,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
     const ajuste = await aplicarComoDinesTorneo(pids, m.jornada_fantasy);
     if (ajuste) for (const pid of pids) { if (ajuste[pid] != null) ptsMap[pid] = ajuste[pid]; }
-    const gL = ptsToGoles(ptsMap[m.participante_local_id]??0, baremo);
+    const ptsLocal = faseAct?.pts_local ?? 0;
+    const gL = ptsToGoles((ptsMap[m.participante_local_id]??0) + ptsLocal, baremo);
     const gV = ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo);
     await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
     setPartidos(p=>p.map(x=>x.id===m.id?{...x,goles_local:gL,goles_visitante:gV}:x));
@@ -8260,6 +8275,27 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
           <button style={{...sBtn, marginTop:'.5rem'}} onClick={()=>setShowNewFase(true)}>+ Añadir fase</button>
         )}
       </>)}
+
+      {/* Ventaja local — común a grupos y sueltos */}
+      {faseSel && (
+        <div style={{display:'flex', alignItems:'center', gap:'.6rem', padding:'.55rem .75rem',
+                     borderRadius:8, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.25)',
+                     marginBottom:'.75rem', flexWrap:'wrap'}}>
+          <span style={{fontSize:'.85rem', fontWeight:600}}>Ventaja local:</span>
+          <input type="number" min="0" max="100" value={ptsLocalFase}
+                 onChange={e => setPtsLocalFase(e.target.value)}
+                 style={{width:65, padding:'.28rem .4rem', borderRadius:6,
+                         border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.82)',
+                         fontSize:'.88rem', textAlign:'center'}} />
+          <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>pts sumados al local antes del baremo</span>
+          <button style={{...sBtn, marginLeft:'auto'}} onClick={guardarPtsLocal}>Guardar</button>
+          {(faseAct?.pts_local ?? 0) > 0 && (
+            <span style={{fontSize:'.78rem', color:'var(--texto2)', fontStyle:'italic'}}>
+              Actual: +{faseAct.pts_local} pts
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Fase de grupos */}
       {faseSel && faseAct?.tipo==='grupos' && (<>
@@ -8676,11 +8712,19 @@ function TorneosVista({ federacion, participantes }) {
       {cargando ? <div className="loading">Cargando...</div> : fases.map(fase=>(
         <div key={fase.id}>
           <div style={{fontWeight:700,fontSize:'.9rem',margin:'.75rem 0 .4rem',padding:'.4rem .75rem',
-            borderRadius:7,background:'rgba(15,32,68,.09)',borderLeft:'3px solid var(--verde)'}}>
-            {fase.nombre}
-            <span style={{marginLeft:'.5rem',fontSize:'.74rem',color:'var(--texto2)',fontWeight:400}}>
+            borderRadius:7,background:'rgba(15,32,68,.09)',borderLeft:'3px solid var(--verde)',
+            display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
+            <span>{fase.nombre}</span>
+            <span style={{fontSize:'.74rem',color:'var(--texto2)',fontWeight:400}}>
               {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}
             </span>
+            {(fase.pts_local??0)>0 && (
+              <span style={{fontSize:'.72rem',background:'rgba(15,80,180,0.15)',
+                border:'1px solid var(--borde)',borderRadius:5,padding:'.1rem .4rem',
+                color:'var(--texto)',fontWeight:500,marginLeft:'auto'}}>
+                +{fase.pts_local} pts local
+              </span>
+            )}
           </div>
 
           {/* Grupos */}

@@ -2284,6 +2284,12 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]         = useState('');
   const [equipoSel, setEquipoSel] = useState('');
+  const [jornadaCerrada, setJornadaCerrada]         = useState(false);
+  const [snapshotsMap, setSnapshotsMap]             = useState({});
+  const [cerrando, setCerrando]                     = useState(false);
+  const [snapshotEditPid, setSnapshotEditPid]       = useState(null);
+  const [snapshotEditDatos, setSnapshotEditDatos]   = useState([]);
+  const [guardandoEdit, setGuardandoEdit]           = useState(false);
 
   useEffect(() => {
     if (!sb || !participantes.length) return;
@@ -2309,19 +2315,38 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   }, [federacion?.id, participantes.length]);
 
   useEffect(() => {
-    if (!sb || jugadores.length === 0) return;
-    Promise.all([
-      sb.from('puntos_jugador').select('jugador_id, pts')
-        .eq('jornada', jornada).eq('federacion_id', federacion?.id),
-      sb.from('jugadores_aplazados').select('jugador_id')
-        .eq('jornada', jornada).eq('federacion_id', federacion?.id),
-    ]).then(([{ data: pts }, { data: apl }]) => {
-      const m = {};
-      (pts || []).forEach(r => { m[r.jugador_id] = String(r.pts); });
-      setPtsJug(m);
-      setAplazados(new Set((apl || []).map(r => r.jugador_id)));
+    if (!sb || !federacion?.id) return;
+    const queries = [
+      sb.from('alineaciones_snapshot')
+        .select('participante_id, participante_nombre, datos, puntos_totales, cerrada_at')
+        .eq('federacion_id', federacion.id).eq('jornada', jornada),
+    ];
+    if (jugadores.length > 0) {
+      queries.push(
+        sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion.id),
+        sb.from('jugadores_aplazados').select('jugador_id').eq('jornada', jornada).eq('federacion_id', federacion.id),
+      );
+    }
+    Promise.all(queries).then(([{ data: snaps }, ptsRes, aplRes]) => {
+      if (snaps?.length) {
+        setJornadaCerrada(true);
+        const sm = {};
+        snaps.forEach(s => { sm[s.participante_id] = s; });
+        setSnapshotsMap(sm);
+      } else {
+        setJornadaCerrada(false);
+        setSnapshotsMap({});
+      }
+      if (ptsRes) {
+        const m = {};
+        (ptsRes.data || []).forEach(r => { m[r.jugador_id] = String(r.pts); });
+        setPtsJug(m);
+      }
+      if (aplRes) {
+        setAplazados(new Set((aplRes.data || []).map(r => r.jugador_id)));
+      }
     });
-  }, [jornada, jugadores]);
+  }, [jornada, jugadores, federacion?.id]);
 
   const guardar = async () => {
     if (!sb) return;
@@ -2397,6 +2422,100 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     }
   };
 
+  const cerrarJornada = async () => {
+    if (!sb || !federacion || !participantes.length) return;
+    const partIds = participantes.map(p => p.id);
+    const { data: aplPend } = await sb.from('jugadores_aplazados')
+      .select('id').eq('federacion_id', federacion.id).eq('jornada', jornada).limit(1);
+    if (aplPend?.length) { alert('No se puede cerrar: hay jugadores aplazados pendientes en esta jornada.'); return; }
+    const { data: ptsCheck } = await sb.from('puntos_jugador')
+      .select('jugador_id').eq('jornada', jornada).eq('federacion_id', federacion.id).limit(1);
+    if (!ptsCheck?.length) { alert('No se puede cerrar: no hay puntos introducidos para esta jornada.'); return; }
+    if (!window.confirm(`¿Cerrar J${jornada} definitivamente?\nLas alineaciones quedarán archivadas como registro histórico.\nPodrás editar datos incorrectos desde aquí.`)) return;
+    setCerrando(true);
+    const [{ data: alis }, { data: ptsData }, { data: clasData }, { data: jugsData }, { data: subsData }] = await Promise.all([
+      sb.from('alineaciones').select('participante_id, jugador_id, es_titular, orden_suplente, posicion_usada').eq('jornada', jornada).in('participante_id', partIds),
+      sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion.id),
+      sb.from('clasificacion').select('participante_id, puntos_jornada').eq('jornada', jornada).in('participante_id', partIds),
+      sb.from('jugadores').select('id, nombre, posicion, equipo'),
+      sb.from('sustituciones_auto').select('participante_id, jugador_sale_id, jugador_entra_id').eq('federacion_id', federacion.id).eq('jornada', jornada).in('participante_id', partIds),
+    ]);
+    const ptsMap  = Object.fromEntries((ptsData || []).map(r => [r.jugador_id, Number(r.pts) || 0]));
+    const clasMap = Object.fromEntries((clasData || []).map(r => [r.participante_id, r.puntos_jornada]));
+    const jugsMap = Object.fromEntries((jugsData || []).map(j => [j.id, j]));
+    const alisByPart = {};
+    for (const a of (alis || [])) {
+      if (!alisByPart[a.participante_id]) alisByPart[a.participante_id] = [];
+      alisByPart[a.participante_id].push(a);
+    }
+    const subsByPart = {};
+    for (const s of (subsData || [])) {
+      if (!subsByPart[s.participante_id]) subsByPart[s.participante_id] = { sale: new Set(), entra: new Set() };
+      subsByPart[s.participante_id].sale.add(s.jugador_sale_id);
+      subsByPart[s.participante_id].entra.add(s.jugador_entra_id);
+    }
+    const snapshots = participantes.map(p => {
+      const ps = subsByPart[p.id] || { sale: new Set(), entra: new Set() };
+      const datos = (alisByPart[p.id] || []).map(a => {
+        const jug = jugsMap[a.jugador_id] || {};
+        const jugo = a.es_titular ? !ps.sale.has(a.jugador_id) : ps.entra.has(a.jugador_id);
+        return { jugador_id: a.jugador_id, nombre: jug.nombre || '?', posicion: jug.posicion || '?',
+                 equipo_real: jug.equipo || '?', es_titular: a.es_titular, orden_suplente: a.orden_suplente,
+                 posicion_usada: a.posicion_usada, jugo, pts: ptsMap[a.jugador_id] ?? 0 };
+      });
+      return { federacion_id: federacion.id, participante_id: p.id, participante_nombre: p.nombre,
+               jornada, datos, puntos_totales: clasMap[p.id] ?? 0 };
+    });
+    const { error } = await sb.from('alineaciones_snapshot').upsert(snapshots, { onConflict: 'federacion_id,participante_id,jornada' });
+    setCerrando(false);
+    if (error) { alert('Error al cerrar: ' + error.message); return; }
+    publicar(federacion.id, 'admin', `J${jornada} cerrada. Alineaciones archivadas como historial definitivo.`, actorNombre);
+    const { data: snaps2 } = await sb.from('alineaciones_snapshot')
+      .select('participante_id, participante_nombre, datos, puntos_totales, cerrada_at')
+      .eq('federacion_id', federacion.id).eq('jornada', jornada);
+    if (snaps2?.length) {
+      setJornadaCerrada(true);
+      const sm = {};
+      snaps2.forEach(s => { sm[s.participante_id] = s; });
+      setSnapshotsMap(sm);
+    }
+  };
+
+  const reabrirJornada = async () => {
+    if (!window.confirm(`¿Re-abrir J${jornada}?\nLos snapshots se borrarán. Si algún jugador fue eliminado desde el cierre, esos datos relacionales pueden estar incompletos.`)) return;
+    await sb.from('alineaciones_snapshot').delete().eq('federacion_id', federacion.id).eq('jornada', jornada);
+    setJornadaCerrada(false); setSnapshotsMap({}); setSnapshotEditPid(null);
+    publicar(federacion.id, 'admin', `J${jornada} re-abierta. Los datos vuelven a ser editables.`, actorNombre);
+  };
+
+  const iniciarEdicion = (pid) => {
+    setSnapshotEditPid(pid);
+    setSnapshotEditDatos(JSON.parse(JSON.stringify(snapshotsMap[pid]?.datos || [])));
+  };
+
+  const guardarEdicion = async () => {
+    if (!sb || !snapshotEditPid) return;
+    setGuardandoEdit(true);
+    const datos = snapshotEditDatos;
+    const puntos_totales = datos.filter(d => d.jugo).reduce((s, d) => s + (Number(d.pts) || 0), 0);
+    const { error } = await sb.from('alineaciones_snapshot').update({ datos, puntos_totales })
+      .eq('federacion_id', federacion.id).eq('participante_id', snapshotEditPid).eq('jornada', jornada);
+    if (!error) {
+      await sb.from('clasificacion').upsert({ participante_id: snapshotEditPid, jornada, puntos_jornada: puntos_totales }, { onConflict: 'participante_id,jornada' });
+    }
+    setGuardandoEdit(false);
+    if (error) { alert('Error: ' + error.message); return; }
+    setSnapshotEditPid(null);
+    const { data: snaps2 } = await sb.from('alineaciones_snapshot')
+      .select('participante_id, participante_nombre, datos, puntos_totales, cerrada_at')
+      .eq('federacion_id', federacion.id).eq('jornada', jornada);
+    if (snaps2?.length) {
+      const sm = {};
+      snaps2.forEach(s => { sm[s.participante_id] = s; });
+      setSnapshotsMap(sm);
+    }
+  };
+
   const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
   const equipoActual  = (equipoSel && equiposReales.includes(equipoSel)) ? equipoSel : (equiposReales[0] || '');
   const jugsEq        = jugadores.filter(j => j.equipo === equipoActual);
@@ -2420,58 +2539,165 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
         </div>
       </div>
 
-      {jugadores.length === 0
-        ? <div className="card"><div className="empty">No hay jugadores en la base de datos.</div></div>
-        : <>
-            <div className="tabs" style={{flexWrap:'wrap', marginBottom:'.5rem'}}>
-              {equiposReales.map(eq => (
-                <button key={eq} className={`tab ${equipoActual===eq?'active':''}`}
-                        onClick={() => setEquipoSel(eq)}>
-                  <Escudo equipo={eq} size={ESCUDO_SIZE} />{' '}{eq}
-                </button>
-              ))}
-            </div>
-            <div className="card" style={{paddingBottom:'.75rem'}}>
-              <h2 style={{fontSize:'.95rem', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
-                <Escudo equipo={equipoActual} size={ESCUDO_SIZE} />{equipoActual}
-              </h2>
-              <table>
-                <thead><tr><th>Jugador</th><th>Pos</th><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Pts J{jornada}</th><th style={{textAlign:'center'}} title="Marcar partido aplazado">⏸</th></tr></thead>
+      {jornadaCerrada ? (
+        <div className="card" style={{borderColor:'#198754', background:'rgba(25,135,84,.04)'}}>
+          <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginBottom:'1rem', flexWrap:'wrap'}}>
+            <span style={{fontWeight:700, color:'#198754', fontSize:'1rem'}}>📦 J{jornada} archivada</span>
+            {Object.values(snapshotsMap)[0]?.cerrada_at && (
+              <span style={{fontSize:'.78rem', color:'var(--texto2)'}}>
+                {new Date(Object.values(snapshotsMap)[0].cerrada_at).toLocaleString('es-ES', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})}
+              </span>
+            )}
+          </div>
+          {snapshotEditPid ? (
+            <div>
+              <div style={{display:'flex', alignItems:'baseline', gap:'.5rem', marginBottom:'.6rem'}}>
+                <h3 style={{fontSize:'.95rem', margin:0}}>Editando: {snapshotsMap[snapshotEditPid]?.participante_nombre}</h3>
+                <span style={{fontSize:'.75rem', color:'var(--texto2)'}}>Los pts del ✅ cuentan en el total</span>
+              </div>
+              <table style={{width:'100%', marginBottom:'.75rem'}}>
+                <thead><tr><th>Jugador</th><th>Pos</th><th style={{textAlign:'right'}}>Pts</th><th style={{textAlign:'center'}} title="Contabiliza en el total">Jugó</th></tr></thead>
                 <tbody>
-                  {jugsEq.map(j => (
-                    <tr key={j.id} style={aplazados.has(j.id) ? {background:'rgba(255,193,7,.12)'} : {}}>
-                      <td style={{fontWeight:600}}>{j.nombre}</td>
-                      <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
-                      <td style={{fontSize:'.82rem', color:'var(--texto2)'}}>{propietarios[j.id] || '—'}</td>
-                      <td style={{textAlign:'right'}}>
-                        <input type="number" min="0" value={ptsJug[j.id] ?? ''}
-                               onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
-                               placeholder="0" style={iS} />
-                      </td>
-                      <td style={{textAlign:'center'}}>
-                        <button onClick={() => toggleAplazado(j.id)}
-                                title={aplazados.has(j.id) ? 'Quitar aplazado' : 'Marcar como aplazado'}
-                                style={{border:'none', background:'none', cursor:'pointer', fontSize:'1rem',
-                                        opacity: aplazados.has(j.id) ? 1 : 0.25}}>
-                          ⏸
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {snapshotEditDatos.filter(d => d.es_titular).map((d) => {
+                    const ri = snapshotEditDatos.indexOf(d);
+                    return (
+                      <tr key={ri} style={!d.jugo ? {opacity:.5} : {}}>
+                        <td><input value={d.nombre} onChange={e => setSnapshotEditDatos(prev => prev.map((x,j) => j===ri ? {...x, nombre: e.target.value} : x))}
+                                   style={{width:'100%', border:'1px solid var(--borde)', borderRadius:5, padding:'.2rem .4rem', fontSize:'.87rem'}} /></td>
+                        <td style={{color:'var(--texto2)', fontSize:'.78rem', paddingLeft:4}}>{d.posicion}</td>
+                        <td style={{textAlign:'right'}}>
+                          <input type="number" min="0" value={d.pts} onChange={e => setSnapshotEditDatos(prev => prev.map((x,j) => j===ri ? {...x, pts: Number(e.target.value)||0} : x))}
+                                 style={{width:60, textAlign:'right', border:'1px solid var(--borde)', borderRadius:5, padding:'.2rem .4rem', fontSize:'.87rem'}} />
+                        </td>
+                        <td style={{textAlign:'center'}}>
+                          <button onClick={() => setSnapshotEditDatos(prev => prev.map((x,j) => j===ri ? {...x, jugo: !x.jugo} : x))}
+                                  style={{border:'none', background:'none', cursor:'pointer', fontSize:'.9rem'}}>{d.jugo ? '✅' : '❌'}</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {snapshotEditDatos.some(d => !d.es_titular) && (
+                    <tr><td colSpan={4} style={{fontSize:'.75rem', color:'#fd7e14', paddingTop:6, paddingBottom:2, fontWeight:700}}>Suplentes</td></tr>
+                  )}
+                  {snapshotEditDatos.filter(d => !d.es_titular).sort((a,b) => (a.orden_suplente||99)-(b.orden_suplente||99)).map((d) => {
+                    const ri = snapshotEditDatos.indexOf(d);
+                    return (
+                      <tr key={ri} style={!d.jugo ? {opacity:.5} : {background:'rgba(253,126,20,.06)'}}>
+                        <td><input value={d.nombre} onChange={e => setSnapshotEditDatos(prev => prev.map((x,j) => j===ri ? {...x, nombre: e.target.value} : x))}
+                                   style={{width:'100%', border:'1px solid var(--borde)', borderRadius:5, padding:'.2rem .4rem', fontSize:'.87rem'}} /></td>
+                        <td style={{color:'var(--texto2)', fontSize:'.78rem', paddingLeft:4}}>{d.posicion}</td>
+                        <td style={{textAlign:'right'}}>
+                          <input type="number" min="0" value={d.pts} onChange={e => setSnapshotEditDatos(prev => prev.map((x,j) => j===ri ? {...x, pts: Number(e.target.value)||0} : x))}
+                                 style={{width:60, textAlign:'right', border:'1px solid var(--borde)', borderRadius:5, padding:'.2rem .4rem', fontSize:'.87rem'}} />
+                        </td>
+                        <td style={{textAlign:'center'}}>
+                          <button onClick={() => setSnapshotEditDatos(prev => prev.map((x,j) => j===ri ? {...x, jugo: !x.jugo} : x))}
+                                  style={{border:'none', background:'none', cursor:'pointer', fontSize:'.9rem'}}>{d.jugo ? '✅' : '❌'}</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+              <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
+                Total calculado: <strong>{snapshotEditDatos.filter(d=>d.jugo).reduce((s,d)=>s+(Number(d.pts)||0),0)} pts</strong>
+              </div>
+              <div style={{display:'flex', gap:'.75rem', flexWrap:'wrap'}}>
+                <button className="btn-ok" onClick={guardarEdicion} disabled={guardandoEdit}>{guardandoEdit ? 'Guardando…' : 'Guardar cambios'}</button>
+                <button onClick={() => setSnapshotEditPid(null)}
+                        style={{padding:'.45rem 1rem', borderRadius:9, border:'1.5px solid var(--borde)', background:'#fff', cursor:'pointer'}}>
+                  Cancelar
+                </button>
+              </div>
             </div>
-          </>
-      }
+          ) : (
+            <table style={{width:'100%'}}>
+              <thead><tr><th>Equipo</th><th style={{textAlign:'right'}}>Pts J{jornada}</th><th></th></tr></thead>
+              <tbody>
+                {participantes.map(p => {
+                  const snap = snapshotsMap[p.id];
+                  return (
+                    <tr key={p.id}>
+                      <td style={{fontWeight:600}}>{p.nombre}</td>
+                      <td style={{textAlign:'right', fontWeight:700}}>{snap ? snap.puntos_totales : <span style={{color:'var(--texto2)', fontSize:'.8rem'}}>—</span>}</td>
+                      <td style={{textAlign:'right'}}>
+                        {snap && <button onClick={() => iniciarEdicion(p.id)}
+                                         style={{padding:'.22rem .55rem', borderRadius:6, fontSize:'.8rem', border:'1.5px solid var(--borde)', background:'#fff', cursor:'pointer'}}>Editar</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : (
+        jugadores.length === 0
+          ? <div className="card"><div className="empty">No hay jugadores en la base de datos.</div></div>
+          : <>
+              <div className="tabs" style={{flexWrap:'wrap', marginBottom:'.5rem'}}>
+                {equiposReales.map(eq => (
+                  <button key={eq} className={`tab ${equipoActual===eq?'active':''}`}
+                          onClick={() => setEquipoSel(eq)}>
+                    <Escudo equipo={eq} size={ESCUDO_SIZE} />{' '}{eq}
+                  </button>
+                ))}
+              </div>
+              <div className="card" style={{paddingBottom:'.75rem'}}>
+                <h2 style={{fontSize:'.95rem', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
+                  <Escudo equipo={equipoActual} size={ESCUDO_SIZE} />{equipoActual}
+                </h2>
+                <table>
+                  <thead><tr><th>Jugador</th><th>Pos</th><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Pts J{jornada}</th><th style={{textAlign:'center'}} title="Marcar partido aplazado">⏸</th></tr></thead>
+                  <tbody>
+                    {jugsEq.map(j => (
+                      <tr key={j.id} style={aplazados.has(j.id) ? {background:'rgba(255,193,7,.12)'} : {}}>
+                        <td style={{fontWeight:600}}>{j.nombre}</td>
+                        <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
+                        <td style={{fontSize:'.82rem', color:'var(--texto2)'}}>{propietarios[j.id] || '—'}</td>
+                        <td style={{textAlign:'right'}}>
+                          <input type="number" min="0" value={ptsJug[j.id] ?? ''}
+                                 onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
+                                 placeholder="0" style={iS} />
+                        </td>
+                        <td style={{textAlign:'center'}}>
+                          <button onClick={() => toggleAplazado(j.id)}
+                                  title={aplazados.has(j.id) ? 'Quitar aplazado' : 'Marcar como aplazado'}
+                                  style={{border:'none', background:'none', cursor:'pointer', fontSize:'1rem',
+                                          opacity: aplazados.has(j.id) ? 1 : 0.25}}>
+                            ⏸
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+      )}
 
       <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>
         {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
-        <button onClick={guardar} disabled={guardando}
-                style={{background:'var(--verde)', color:'#fff', border:'none',
-                        padding:'.55rem 1.5rem', borderRadius:9, fontSize:'1rem',
-                        fontWeight:700, cursor: guardando?'wait':'pointer', opacity: guardando?.7:1}}>
-          {guardando ? 'Guardando…' : `Guardar J${jornada}`}
-        </button>
+        {jornadaCerrada ? (
+          <button onClick={reabrirJornada}
+                  style={{background:'#6c757d', color:'#fff', border:'none', padding:'.55rem 1.5rem', borderRadius:9, fontSize:'1rem', fontWeight:700, cursor:'pointer'}}>
+            Re-abrir J{jornada}
+          </button>
+        ) : (
+          <>
+            <button onClick={cerrarJornada} disabled={cerrando}
+                    style={{background:'#198754', color:'#fff', border:'none', padding:'.55rem 1.5rem', borderRadius:9, fontSize:'1rem',
+                            fontWeight:700, cursor: cerrando?'wait':'pointer', opacity: cerrando?.7:1}}>
+              {cerrando ? 'Cerrando…' : `Cerrar J${jornada}`}
+            </button>
+            <button onClick={guardar} disabled={guardando}
+                    style={{background:'var(--verde)', color:'#fff', border:'none',
+                            padding:'.55rem 1.5rem', borderRadius:9, fontSize:'1rem',
+                            fontWeight:700, cursor: guardando?'wait':'pointer', opacity: guardando?.7:1}}>
+              {guardando ? 'Guardando…' : `Guardar J${jornada}`}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -3847,6 +4073,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const [jugadoresHistoricos, setJugadoresHistoricos] = useState([]);
   const [jugadoresCedidos, setJugadoresCedidos]       = useState([]);
   const [aplazadosSet, setAplazadosSet] = useState(new Set());
+  const [snapshot, setSnapshot]         = useState(null);
   const [cargandoAli, setCargandoAli] = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
@@ -3867,7 +4094,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     if (!sb || !participanteId || !plantilla) return;
     const cargar = async () => {
       setCargandoAli(true);
-      const [{ data: ali }, { data: cierreRow }, { data: cesData }, { data: aplData }] = await Promise.all([
+      const [{ data: ali }, { data: cierreRow }, { data: cesData }, { data: aplData }, { data: snapData }] = await Promise.all([
         sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente, posicion_usada')
           .eq('participante_id', participanteId).eq('jornada', jornada),
         sb.from('jornadas_cierre').select('cierre')
@@ -3878,9 +4105,12 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
           .eq('jornada', jornada).eq('estado', 'aprobada'),
         sb.from('jugadores_aplazados').select('jugador_id')
           .eq('federacion_id', federacionId).eq('jornada', jornada),
+        sb.from('alineaciones_snapshot').select('datos, puntos_totales, cerrada_at')
+          .eq('federacion_id', federacionId).eq('participante_id', participanteId).eq('jornada', jornada).maybeSingle(),
       ]);
       setCierre(cierreRow?.cierre || null);
       setAplazadosSet(new Set((aplData || []).map(r => r.jugador_id)));
+      setSnapshot(snapData || null);
 
       const idsPlantilla = new Set(plantilla.map(j => j.id));
       const cedidos = (cesData || [])
@@ -4071,33 +4301,88 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
           </select>
         </div>
         <div style={{fontSize:'.85rem'}}>
-          {cierre
+          {snapshot
+            ? <span style={{color:'#198754', fontWeight:600}}>📦 Archivada — {new Date(snapshot.cerrada_at).toLocaleDateString('es-ES', {day:'2-digit', month:'short', year:'numeric'})}</span>
+            : cierre
             ? <span style={{color: bloqueado && !hayAplazados ? '#dc3545' : bloqueado && hayAplazados ? '#856404' : '#198754', fontWeight:600}}>
                 {bloqueado && !hayAplazados ? '🔒 Cerrada' : bloqueado && hayAplazados ? '⏸ Cerrada (aplazados)' : '🟢 Abierta'} — cierre: {new Date(cierre).toLocaleString('es-ES')}
               </span>
             : <span style={{color:'#198754', fontWeight:600}}>🟢 Sin hora de cierre</span>}
         </div>
-        <div style={{marginLeft:'auto', fontSize:'.9rem', display:'flex', gap:'.75rem', alignItems:'center', flexWrap:'wrap'}}>
-          {nT > 0 && (
-            <span style={{fontWeight:700, padding:'.2rem .55rem', borderRadius:7,
-                          background: formValida ? '#d1e7dd' : formCompleta ? '#f8d7da' : '#fff3cd',
-                          color:      formValida ? '#0a3622' : formCompleta ? '#842029' : '#664d03'}}>
-              {titPos.POR > 0 ? `1-${formStr}` : formStr}
-              {formCompleta && !formValida && ' ✗'}
-              {formValida && ' ✓'}
+        {!snapshot && (
+          <div style={{marginLeft:'auto', fontSize:'.9rem', display:'flex', gap:'.75rem', alignItems:'center', flexWrap:'wrap'}}>
+            {nT > 0 && (
+              <span style={{fontWeight:700, padding:'.2rem .55rem', borderRadius:7,
+                            background: formValida ? '#d1e7dd' : formCompleta ? '#f8d7da' : '#fff3cd',
+                            color:      formValida ? '#0a3622' : formCompleta ? '#842029' : '#664d03'}}>
+                {titPos.POR > 0 ? `1-${formStr}` : formStr}
+                {formCompleta && !formValida && ' ✗'}
+                {formValida && ' ✓'}
+              </span>
+            )}
+            <span>
+              <strong style={{color: nT===11 ? '#198754' : 'inherit'}}>{nT}/11</strong>
+              <span style={{color:'var(--texto2)'}}> tit &nbsp;·&nbsp; </span>
+              <strong>{nS}/4</strong>
+              <span style={{color:'var(--texto2)'}}> sup</span>
             </span>
-          )}
-          <span>
-            <strong style={{color: nT===11 ? '#198754' : 'inherit'}}>{nT}/11</strong>
-            <span style={{color:'var(--texto2)'}}> tit &nbsp;·&nbsp; </span>
-            <strong>{nS}/4</strong>
-            <span style={{color:'var(--texto2)'}}> sup</span>
-          </span>
-        </div>
+          </div>
+        )}
       </div>
 
       {cargandoAli
         ? <Spinner />
+        : snapshot
+        ? (
+            <div>
+              <div style={{marginBottom:'1rem'}}>
+                <div style={{fontWeight:700, fontSize:'.78rem', color:'#198754', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
+                  Titulares
+                </div>
+                <table style={{width:'100%'}}>
+                  <tbody>
+                    {(snapshot.datos||[]).filter(d => d.es_titular).map((d, i) => (
+                      <tr key={i} style={!d.jugo ? {opacity:.45} : {}}>
+                        <td style={{width:48}}><span className={`badge ${d.posicion_usada || d.posicion}`}>{d.posicion_usada || d.posicion}</span></td>
+                        <td style={{fontWeight:600}}>
+                          {d.nombre}
+                          {!d.jugo && <span style={{marginLeft:5, fontSize:'.72rem', color:'var(--texto2)', fontStyle:'italic'}}>no jugó</span>}
+                        </td>
+                        <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>{d.equipo_real}</td>
+                        <td style={{textAlign:'right', fontWeight:700, color: d.jugo && d.pts > 0 ? '#198754' : 'var(--texto2)'}}>{d.pts} pts</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {(snapshot.datos||[]).some(d => !d.es_titular) && (
+                <div style={{marginBottom:'1rem'}}>
+                  <div style={{fontWeight:700, fontSize:'.78rem', color:'#fd7e14', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
+                    Suplentes
+                  </div>
+                  <table style={{width:'100%'}}>
+                    <tbody>
+                      {(snapshot.datos||[]).filter(d => !d.es_titular).sort((a,b) => (a.orden_suplente||99)-(b.orden_suplente||99)).map((d, i) => (
+                        <tr key={i} style={!d.jugo ? {opacity:.45} : {background:'rgba(253,126,20,.06)'}}>
+                          <td style={{width:28, textAlign:'center', fontWeight:700, fontSize:'.82rem', color:'#fd7e14'}}>{d.orden_suplente || i+1}°</td>
+                          <td style={{width:48}}><span className={`badge ${d.posicion}`}>{d.posicion}</span></td>
+                          <td style={{fontWeight:600}}>
+                            {d.nombre}
+                            {d.jugo && <span style={{marginLeft:5, fontSize:'.7rem', color:'#198754', fontWeight:700}}>⬆ entró</span>}
+                          </td>
+                          <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>{d.equipo_real}</td>
+                          <td style={{textAlign:'right', fontWeight:700, color: d.jugo && d.pts > 0 ? '#198754' : 'var(--texto2)'}}>{d.pts} pts</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div style={{textAlign:'right', fontWeight:700, fontSize:'1rem', paddingTop:'.5rem', borderTop:'1.5px solid var(--borde)', color:'var(--verde)'}}>
+                Total: {snapshot.puntos_totales} pts
+              </div>
+            </div>
+          )
         : <>
             {plantilla.length === 0 && jugadoresCedidos.length === 0 && (
               <div className="empty">Tu plantilla está vacía. Ficha jugadores primero.</div>

@@ -2400,6 +2400,9 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       const capitanMap  = Object.fromEntries((capitanesData || []).map(c => [c.participante_id, c.jugador_id]));
       const usaBanquillo = new Set((comodinesData || []).filter(c => c.tipo === 'banquillo').map(c => c.participante_id));
       const usaCapitan   = new Set((comodinesData || []).filter(c => c.tipo === 'capitan').map(c => c.participante_id));
+      // Scope: comodines solo se aplican al Calendario si su scope es 'calendario'
+      const scopeCapCal = (federacion?.comodin_capitan_scope   ?? 'calendario') === 'calendario';
+      const scopeBanCal = (federacion?.comodin_banquillo_scope ?? 'calendario') === 'calendario';
 
       // Agrupamos alineaciones completas (titulares + suplentes) y solo titulares
       const alisAllByPart = {};
@@ -2421,8 +2424,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
 
       const clasRows = participantes.map(p => {
         let pts = 0;
-        if (federacion?.comodin_banquillo_habilitado && usaBanquillo.has(p.id)) {
-          // Banquillo completo: todos los jugadores suman, sin sustituciones automáticas
+        if (federacion?.comodin_banquillo_habilitado && scopeBanCal && usaBanquillo.has(p.id)) {
+          // Banquillo completo (scope=calendario): todos los jugadores suman, sin sustituciones automáticas
           pts = (alisAllByPart[p.id] || []).reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0);
         } else {
           // Normal: titulares tras sustituciones automáticas
@@ -2432,8 +2435,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
           }
           pts = jids.reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0);
         }
-        // Capitán doble: se suman los puntos del capitán una vez más
-        if (federacion?.comodin_capitan_habilitado && usaCapitan.has(p.id)) {
+        // Capitán doble (scope=calendario): se suman los puntos del capitán una vez más
+        if (federacion?.comodin_capitan_habilitado && scopeCapCal && usaCapitan.has(p.id)) {
           const cap = capitanMap[p.id];
           if (cap) pts += ptsMapa[cap] ?? 0;
         }
@@ -4631,27 +4634,30 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                 <div style={{display:'flex', gap:'.6rem', flexWrap:'wrap', alignItems:'center'}}>
                   {federacion?.comodin_capitan_habilitado && (() => {
                     const max = federacion?.max_comodin_capitan ?? null;
-                    const usados = comodinesUsados.capitan + (comodinJornada === 'capitan' ? 1 : 0);
                     const restantes = max === null ? null : max - comodinesUsados.capitan;
                     const activo = comodinJornada === 'capitan';
                     const agotado = max !== null && comodinesUsados.capitan >= max && !activo;
+                    const scopeLbl = { calendario:'Calendario', h2h:'Liga H2H', torneo:'Torneo', ninguno:'Sin efecto' }[federacion?.comodin_capitan_scope ?? 'calendario'];
                     return (
-                      <button onClick={() => toggleComodin('capitan')}
-                              disabled={agotado || (comodinJornada === 'banquillo')}
-                              title={agotado ? 'Comodín agotado' : activo ? 'Desactivar capitán doble' : 'Activar capitán doble esta jornada'}
-                              style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.38rem .75rem',
-                                      borderRadius:8, border:'2px solid', fontSize:'.85rem', fontWeight:700, cursor: (agotado || comodinJornada==='banquillo') ? 'not-allowed' : 'pointer',
-                                      borderColor: activo ? '#c0392b' : agotado ? 'var(--borde)' : 'var(--borde)',
-                                      background: activo ? '#c0392b' : '#fff',
-                                      color: activo ? '#fff' : agotado ? 'var(--texto2)' : 'var(--texto)',
-                                      opacity: (agotado || comodinJornada==='banquillo') ? .45 : 1}}>
-                        <span>©️</span>
-                        <span>Capitán doble</span>
-                        <span style={{fontSize:'.72rem', opacity:.8}}>
-                          {max === null ? '' : ` (${restantes} restante${restantes !== 1 ? 's' : ''})`}
-                        </span>
-                        {activo && <span style={{fontSize:'.7rem'}}>✓ Activo</span>}
-                      </button>
+                      <div style={{display:'flex',flexDirection:'column',gap:'.18rem'}}>
+                        <button onClick={() => toggleComodin('capitan')}
+                                disabled={agotado || (comodinJornada === 'banquillo')}
+                                title={agotado ? 'Comodín agotado' : activo ? 'Desactivar capitán doble' : 'Activar capitán doble esta jornada'}
+                                style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.38rem .75rem',
+                                        borderRadius:8, border:'2px solid', fontSize:'.85rem', fontWeight:700, cursor: (agotado || comodinJornada==='banquillo') ? 'not-allowed' : 'pointer',
+                                        borderColor: activo ? '#c0392b' : 'var(--borde)',
+                                        background: activo ? '#c0392b' : 'rgba(200,225,255,0.85)',
+                                        color: activo ? '#fff' : agotado ? 'var(--texto2)' : 'var(--texto)',
+                                        opacity: (agotado || comodinJornada==='banquillo') ? .45 : 1}}>
+                          <span>©️</span>
+                          <span>Capitán doble</span>
+                          <span style={{fontSize:'.72rem', opacity:.8}}>
+                            {max === null ? '' : ` (${restantes} restante${restantes !== 1 ? 's' : ''})`}
+                          </span>
+                          {activo && <span style={{fontSize:'.7rem'}}>✓ Activo</span>}
+                        </button>
+                        <span style={{fontSize:'.72rem', color:'var(--texto2)', paddingLeft:'.15rem'}}>Aplica a: {scopeLbl}</span>
+                      </div>
                     );
                   })()}
                   {federacion?.comodin_banquillo_habilitado && (() => {
@@ -4659,23 +4665,27 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                     const restantes = max === null ? null : max - comodinesUsados.banquillo;
                     const activo = comodinJornada === 'banquillo';
                     const agotado = max !== null && comodinesUsados.banquillo >= max && !activo;
+                    const scopeLbl = { calendario:'Calendario', h2h:'Liga H2H', torneo:'Torneo', ninguno:'Sin efecto' }[federacion?.comodin_banquillo_scope ?? 'calendario'];
                     return (
-                      <button onClick={() => toggleComodin('banquillo')}
-                              disabled={agotado || (comodinJornada === 'capitan')}
-                              title={agotado ? 'Comodín agotado' : activo ? 'Desactivar banquillo completo' : 'Activar banquillo completo esta jornada'}
-                              style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.38rem .75rem',
-                                      borderRadius:8, border:'2px solid', fontSize:'.85rem', fontWeight:700, cursor: (agotado || comodinJornada==='capitan') ? 'not-allowed' : 'pointer',
-                                      borderColor: activo ? '#0d6efd' : 'var(--borde)',
-                                      background: activo ? '#0d6efd' : '#fff',
-                                      color: activo ? '#fff' : agotado ? 'var(--texto2)' : 'var(--texto)',
-                                      opacity: (agotado || comodinJornada==='capitan') ? .45 : 1}}>
-                        <span>🔄</span>
-                        <span>Banquillo completo</span>
-                        <span style={{fontSize:'.72rem', opacity:.8}}>
-                          {max === null ? '' : ` (${restantes} restante${restantes !== 1 ? 's' : ''})`}
-                        </span>
-                        {activo && <span style={{fontSize:'.7rem'}}>✓ Activo</span>}
-                      </button>
+                      <div style={{display:'flex',flexDirection:'column',gap:'.18rem'}}>
+                        <button onClick={() => toggleComodin('banquillo')}
+                                disabled={agotado || (comodinJornada === 'capitan')}
+                                title={agotado ? 'Comodín agotado' : activo ? 'Desactivar banquillo completo' : 'Activar banquillo completo esta jornada'}
+                                style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.38rem .75rem',
+                                        borderRadius:8, border:'2px solid', fontSize:'.85rem', fontWeight:700, cursor: (agotado || comodinJornada==='capitan') ? 'not-allowed' : 'pointer',
+                                        borderColor: activo ? '#0d6efd' : 'var(--borde)',
+                                        background: activo ? '#0d6efd' : 'rgba(200,225,255,0.85)',
+                                        color: activo ? '#fff' : agotado ? 'var(--texto2)' : 'var(--texto)',
+                                        opacity: (agotado || comodinJornada==='capitan') ? .45 : 1}}>
+                          <span>🔄</span>
+                          <span>Banquillo completo</span>
+                          <span style={{fontSize:'.72rem', opacity:.8}}>
+                            {max === null ? '' : ` (${restantes} restante${restantes !== 1 ? 's' : ''})`}
+                          </span>
+                          {activo && <span style={{fontSize:'.7rem'}}>✓ Activo</span>}
+                        </button>
+                        <span style={{fontSize:'.72rem', color:'var(--texto2)', paddingLeft:'.15rem'}}>Aplica a: {scopeLbl}</span>
+                      </div>
                     );
                   })()}
                   {comodinJornada === 'capitan' && !capitanId && (
@@ -5559,6 +5569,11 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [comodinBanquillo, setComodinBanquillo]  = useState(federacion?.comodin_banquillo_habilitado ?? false);
   const [maxCapitan,   setMaxCapitan]    = useState(federacion?.max_comodin_capitan   ?? '');
   const [maxBanquillo, setMaxBanquillo]  = useState(federacion?.max_comodin_banquillo ?? '');
+  const [scopeCapitan,   setScopeCapitan]   = useState(federacion?.comodin_capitan_scope   ?? 'calendario');
+  const [scopeBanquillo, setScopeBanquillo] = useState(federacion?.comodin_banquillo_scope ?? 'calendario');
+  const [torneoCapitan,   setTorneoCapitan]   = useState(federacion?.comodin_capitan_torneo_id   ?? '');
+  const [torreoBanquillo, setTorreoBanquillo] = useState(federacion?.comodin_banquillo_torneo_id ?? '');
+  const [compsConfig, setCompsConfig] = useState([]);
   const [msgComodin,   setMsgComodin]    = useState('');
 
   const cargarMods = async () => {
@@ -5638,6 +5653,13 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     setTimeout(() => setMsg(''), 3000);
   };
 
+  useEffect(() => {
+    if ((scopeCapitan === 'torneo' || scopeBanquillo === 'torneo') && federacion?.id && sb) {
+      sb.from('competiciones').select('id, nombre').eq('federacion_id', federacion.id).order('created_at')
+        .then(({ data }) => setCompsConfig(data || []));
+    }
+  }, [scopeCapitan, scopeBanquillo, federacion?.id]);
+
   const guardarComodines = async () => {
     if (!sb || !federacion) return;
     const updates = {
@@ -5645,6 +5667,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       comodin_banquillo_habilitado: comodinBanquillo,
       max_comodin_capitan:   maxCapitan === '' ? null : Number(maxCapitan),
       max_comodin_banquillo: maxBanquillo === '' ? null : Number(maxBanquillo),
+      comodin_capitan_scope:   scopeCapitan,
+      comodin_banquillo_scope: scopeBanquillo,
+      comodin_capitan_torneo_id:   scopeCapitan   === 'torneo' ? (torneoCapitan   || null) : null,
+      comodin_banquillo_torneo_id: scopeBanquillo === 'torneo' ? (torreoBanquillo || null) : null,
     };
     const { error, data } = await sb.from('federaciones').update(updates).eq('id', federacion.id).select().single();
     if (error) { alert('Error: ' + error.message); return; }
@@ -5936,64 +5962,63 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         No pueden usarse ambos en la misma jornada. El admin configura cuántas veces están disponibles.
       </p>
 
-      {/* Comodín Capitán doble */}
-      <div style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.85rem 1rem', marginBottom:'.75rem'}}>
+      {/* helper reutilizable para el selector de scope */}
+      {[
+        { key:'capitan',   label:'©️ Capitán doble',   desc:'Los puntos del capitán cuentan el doble esa jornada',
+          habilitado:comodinCapitan, setHab:setComodinCapitan, max:maxCapitan, setMax:setMaxCapitan,
+          scope:scopeCapitan, setScope:setScopeCapitan, torneo:torneoCapitan, setTorneo:setTorneoCapitan },
+        { key:'banquillo', label:'🔄 Banquillo completo', desc:`Los ${federacion?.max_jugadores??14} jugadores (titulares + suplentes) suman puntos esa jornada`,
+          habilitado:comodinBanquillo, setHab:setComodinBanquillo, max:maxBanquillo, setMax:setMaxBanquillo,
+          scope:scopeBanquillo, setScope:setScopeBanquillo, torneo:torreoBanquillo, setTorneo:setTorreoBanquillo },
+      ].map(cm => (
+      <div key={cm.key} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.85rem 1rem', marginBottom:'.75rem'}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
           <div>
-            <div style={{fontWeight:700}}>©️ Capitán doble</div>
-            <div style={{fontSize:'.82rem', color:'var(--texto2)', marginTop:'.15rem'}}>
-              Los puntos del capitán cuentan el doble esa jornada
-            </div>
+            <div style={{fontWeight:700}}>{cm.label}</div>
+            <div style={{fontSize:'.82rem', color:'var(--texto2)', marginTop:'.15rem'}}>{cm.desc}</div>
           </div>
           <label style={{display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer', fontWeight:600, fontSize:'.88rem'}}>
-            <input type="checkbox" checked={comodinCapitan} onChange={e => setComodinCapitan(e.target.checked)} />
-            {comodinCapitan ? 'Habilitado' : 'Deshabilitado'}
+            <input type="checkbox" checked={cm.habilitado} onChange={e => cm.setHab(e.target.checked)} />
+            {cm.habilitado ? 'Habilitado' : 'Deshabilitado'}
           </label>
         </div>
-        {comodinCapitan && (
-          <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginTop:'.65rem', flexWrap:'wrap'}}>
-            <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Usos máximos por equipo:</label>
-            <select value={maxCapitan} onChange={e => setMaxCapitan(e.target.value)}
-                    style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
-              <option value="1">1 vez</option>
-              <option value="2">2 veces</option>
-              <option value="3">3 veces</option>
-              <option value="5">5 veces</option>
-              <option value="">Ilimitado</option>
-            </select>
+        {cm.habilitado && (
+          <div style={{display:'flex', flexWrap:'wrap', gap:'.75rem', marginTop:'.65rem', alignItems:'center'}}>
+            <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
+              <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Usos máximos:</label>
+              <select value={cm.max} onChange={e => cm.setMax(e.target.value)}
+                      style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
+                <option value="1">1 vez</option>
+                <option value="2">2 veces</option>
+                <option value="3">3 veces</option>
+                <option value="5">5 veces</option>
+                <option value="">Ilimitado</option>
+              </select>
+            </div>
+            <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
+              <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Aplica a:</label>
+              <select value={cm.scope} onChange={e => cm.setScope(e.target.value)}
+                      style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
+                <option value="calendario">Calendario (puntos)</option>
+                <option value="h2h">Liga H2H</option>
+                <option value="torneo">Torneo específico</option>
+                <option value="ninguno">Ninguno</option>
+              </select>
+            </div>
+            {cm.scope === 'torneo' && (
+              <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
+                <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Torneo:</label>
+                <select value={cm.torneo} onChange={e => cm.setTorneo(e.target.value)}
+                        style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
+                  <option value="">— elige —</option>
+                  {compsConfig.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         )}
       </div>
-
-      {/* Comodín Banquillo completo */}
-      <div style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.85rem 1rem', marginBottom:'1rem'}}>
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
-          <div>
-            <div style={{fontWeight:700}}>🔄 Banquillo completo</div>
-            <div style={{fontSize:'.82rem', color:'var(--texto2)', marginTop:'.15rem'}}>
-              Los {federacion?.max_jugadores ?? 14} jugadores (titulares + suplentes) suman puntos esa jornada
-            </div>
-          </div>
-          <label style={{display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer', fontWeight:600, fontSize:'.88rem'}}>
-            <input type="checkbox" checked={comodinBanquillo} onChange={e => setComodinBanquillo(e.target.checked)} />
-            {comodinBanquillo ? 'Habilitado' : 'Deshabilitado'}
-          </label>
-        </div>
-        {comodinBanquillo && (
-          <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginTop:'.65rem', flexWrap:'wrap'}}>
-            <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Usos máximos por equipo:</label>
-            <select value={maxBanquillo} onChange={e => setMaxBanquillo(e.target.value)}
-                    style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
-              <option value="1">1 vez</option>
-              <option value="2">2 veces</option>
-              <option value="3">3 veces</option>
-              <option value="5">5 veces</option>
-              <option value="">Ilimitado</option>
-            </select>
-          </div>
-        )}
-      </div>
-
+      ))}
       <div style={{display:'flex', gap:'1rem', alignItems:'center'}}>
         <button className="btn-ok" onClick={guardarComodines}>Guardar comodines</button>
         {msgComodin && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msgComodin}</span>}
@@ -8059,6 +8084,37 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   };
 
   // ── Calcular resultado de una ronda de grupo ────────────────
+  // Helper: aplica comodines con scope='torneo' sobre un ptsMap dado
+  const aplicarComoDinesTorneo = async (pidsArray, jornada) => {
+    const scopeCapT = federacion?.comodin_capitan_habilitado   && federacion?.comodin_capitan_scope   === 'torneo' && federacion?.comodin_capitan_torneo_id   === compSel;
+    const scopeBanT = federacion?.comodin_banquillo_habilitado && federacion?.comodin_banquillo_scope === 'torneo' && federacion?.comodin_banquillo_torneo_id === compSel;
+    if (!scopeCapT && !scopeBanT) return null; // sin ajuste
+    const {data:comsTorn} = await sb.from('comodines_usados')
+      .select('participante_id,tipo').eq('jornada',jornada).in('participante_id',pidsArray);
+    const tornBan = new Set((comsTorn||[]).filter(c=>c.tipo==='banquillo').map(c=>c.participante_id));
+    const tornCap = new Set((comsTorn||[]).filter(c=>c.tipo==='capitan').map(c=>c.participante_id));
+    const ajuste = {};
+    if (scopeCapT && tornCap.size > 0) {
+      const [{ data: capsTorn }, { data: pjTorn }] = await Promise.all([
+        sb.from('capitanes').select('participante_id,jugador_id').eq('jornada',jornada).in('participante_id',[...tornCap]),
+        sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada).eq('federacion_id',federacion.id),
+      ]);
+      const pjMap = Object.fromEntries((pjTorn||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
+      (capsTorn||[]).forEach(c => { ajuste[c.participante_id] = (ajuste[c.participante_id]||0) + (pjMap[c.jugador_id]||0); });
+    }
+    if (scopeBanT && tornBan.size > 0) {
+      const [{ data: alisTorn }, { data: pjTorn }] = await Promise.all([
+        sb.from('alineaciones').select('participante_id,jugador_id').eq('jornada',jornada).in('participante_id',[...tornBan]),
+        sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada).eq('federacion_id',federacion.id),
+      ]);
+      const pjMap = Object.fromEntries((pjTorn||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
+      const alisByPid = {};
+      (alisTorn||[]).forEach(a=>{ if(!alisByPid[a.participante_id]) alisByPid[a.participante_id]=[]; alisByPid[a.participante_id].push(a.jugador_id); });
+      tornBan.forEach(pid => { ajuste[pid] = (alisByPid[pid]||[]).reduce((s,jid)=>s+(pjMap[jid]||0),0); }); // override completo
+    }
+    return ajuste;
+  };
+
   const calcularRonda = async (gid, ronda, jornada) => {
     if (!jornada) { flash('Asigna una jornada a esta ronda antes de calcular'); return; }
     const ms = partidos.filter(p => p.grupo_id===gid && p.ronda===ronda);
@@ -8068,6 +8124,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const {data:cls} = await sb.from('clasificacion').select('participante_id,puntos_jornada')
       .in('participante_id',allPids).eq('jornada',jornada);
     const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
+    const ajuste = await aplicarComoDinesTorneo(allPids, jornada);
+    if (ajuste) for (const pid of allPids) {
+      if (ajuste[pid] != null) ptsMap[pid] = ajuste[pid]; // banquillo: override; capitan: ya sumado en helper
+    }
     const updates = ms.map(m=>({
       id:m.id,
       goles_local:    ptsToGoles(ptsMap[m.participante_local_id]??0, baremo),
@@ -8087,6 +8147,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const {data:cls} = await sb.from('clasificacion').select('participante_id,puntos_jornada')
       .in('participante_id',pids).eq('jornada',m.jornada_fantasy);
     const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
+    const ajuste = await aplicarComoDinesTorneo(pids, m.jornada_fantasy);
+    if (ajuste) for (const pid of pids) { if (ajuste[pid] != null) ptsMap[pid] = ajuste[pid]; }
     const gL = ptsToGoles(ptsMap[m.participante_local_id]??0, baremo);
     const gV = ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo);
     await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
@@ -9828,6 +9890,39 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       .in('participante_id', partIds);
     const ptsMap = {};
     (clsData || []).forEach(r => { ptsMap[r.participante_id] = r.puntos_jornada ?? 0; });
+
+    // Aplicar comodines con scope='h2h' si están habilitados
+    const scopeCapH2H = federacion?.comodin_capitan_habilitado   && federacion?.comodin_capitan_scope   === 'h2h';
+    const scopeBanH2H = federacion?.comodin_banquillo_habilitado && federacion?.comodin_banquillo_scope === 'h2h';
+    if (scopeCapH2H || scopeBanH2H) {
+      const { data: comsH2H } = await sb.from('comodines_usados')
+        .select('participante_id, tipo').eq('jornada', jornada_fantasy).in('participante_id', partIds);
+      const h2hBan = new Set((comsH2H||[]).filter(c=>c.tipo==='banquillo').map(c=>c.participante_id));
+      const h2hCap = new Set((comsH2H||[]).filter(c=>c.tipo==='capitan').map(c=>c.participante_id));
+
+      // Capitán doble H2H: leer capitan + puntos_jugador, sumar pts del capitán
+      if (scopeCapH2H && h2hCap.size > 0) {
+        const [{ data: capsH2H }, { data: pjH2H }] = await Promise.all([
+          sb.from('capitanes').select('participante_id,jugador_id').eq('jornada',jornada_fantasy).in('participante_id',[...h2hCap]),
+          sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada_fantasy).eq('federacion_id',federacion.id),
+        ]);
+        const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
+        (capsH2H||[]).forEach(c => { ptsMap[c.participante_id] = (ptsMap[c.participante_id]||0) + (pjMap[c.jugador_id]||0); });
+      }
+
+      // Banquillo completo H2H: recalcular sumando todos los jugadores de la alineación
+      if (scopeBanH2H && h2hBan.size > 0) {
+        const [{ data: alisH2H }, { data: pjH2H }] = await Promise.all([
+          sb.from('alineaciones').select('participante_id,jugador_id').eq('jornada',jornada_fantasy).in('participante_id',[...h2hBan]),
+          sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada_fantasy).eq('federacion_id',federacion.id),
+        ]);
+        const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
+        const alisByPid = {};
+        (alisH2H||[]).forEach(a=>{ if(!alisByPid[a.participante_id]) alisByPid[a.participante_id]=[]; alisByPid[a.participante_id].push(a.jugador_id); });
+        h2hBan.forEach(pid => { ptsMap[pid] = (alisByPid[pid]||[]).reduce((s,jid)=>s+(pjMap[jid]||0),0); });
+      }
+    }
+
     const ms = partidos.filter(p => p.jornada === j_h2h);
     await Promise.all(ms.map(m => {
       const gl = ptsToGoles((ptsMap[m.local_id] ?? 0) + ptsLocal, baremo);

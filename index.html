@@ -404,10 +404,10 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       const nomSale = jugLib
         ? (jugLib.posicion === 'POR' ? `Portería ${jugLib.equipo}` : jugLib.nombre)
         : 'un jugador';
-      publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nomSale}`);
+      publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nomSale}`);
       setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nomSale}.`);
     } else {
-      publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nomEntra} a su plantilla`);
+      publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${participanteNombre} incorpora a ${nomEntra} a su plantilla`);
       setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla.`);
     }
     setTimeout(() => setMsgPend(''), 6000);
@@ -460,7 +460,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         .eq('id', participanteId);
       if (errPres) console.error('Error actualizando presupuesto:', errPres);
       else { setPresupuesto(nuevo); if (modalVenta.lesionado && mercadoCerrado) setSustLesion(nuevaSust); }
-      publicar(federacion?.id, 'venta', `${participanteNombre} vende a ${nombreJugVendido} al mercado por ${fmt(valorVenta)}`);
+      publicar(federacion?.id, 'venta', `ÚLTIMA HORA: ${participanteNombre} vende a ${nombreJugVendido} al mercado por ${fmt(valorVenta)}`);
 
       // Auto-activar primer fichaje pendiente si la venta libera un hueco
       if (fichajesPend.length > 0 && lista.length - 1 < maxJug) {
@@ -473,7 +473,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         if (!errAct) {
           const jugPend = primerPend.jugadores;
           const nomEntra = jugPend?.posicion === 'POR' ? `Portería ${jugPend?.equipo}` : jugPend?.nombre;
-          publicar(federacion?.id, 'fichaje', `${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nombreJugVendido}`);
+          publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nombreJugVendido}`);
           setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nombreJugVendido}.`);
           setTimeout(() => setMsgPend(''), 6000);
         }
@@ -505,7 +505,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     publicar(
       federacion?.id,
       'venta',
-      `${participanteNombre} vende toda su plantilla al mercado (${lista.length} jugadores) por ${fmt(total)} (acción del administrador)`
+      `ÚLTIMA HORA: ${participanteNombre} vende toda su plantilla al mercado (${lista.length} jugadores) por ${fmt(total)} (acción del administrador)`
     );
     setVendiendoTodo(false);
     setModalVentaTodo(false);
@@ -1325,7 +1325,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       await sb.from('participantes').update({ presupuesto: presupuestoRestante }).eq('id', participanteId);
       setResultadoSorteo({ jugadores: elegidos, gastado });
       const miEquipo = participantes.find(p => p.id === participanteId);
-      publicar(federacion?.id, 'sorteo', `${miEquipo?.nombre || 'Un equipo'} ha rellenado su plantilla por sorteo (${elegidos.length} jugadores, ${fmt(gastado)})`);
+      publicar(federacion?.id, 'sorteo', `La suerte está echada. ${miEquipo?.nombre || 'Un equipo'} ha rellenado su plantilla por sorteo (${elegidos.length} jugadores, ${fmt(gastado)}).`);
       onFichaje && onFichaje();
       cargar();
     }
@@ -1371,9 +1371,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     if (liberarJugadorId) {
       const baja = miPlantilla.find(p => p.jugador_id === liberarJugadorId);
       const nomBaja = baja?.posicion === 'POR' ? `Portería ${baja?.equipo}` : baja?.nombre;
-      publicar(federacion?.id, 'fichaje', `${miEq?.nombre} incorpora a ${nomJug} y libera a ${nomBaja}`);
+      publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${miEq?.nombre} incorpora a ${nomJug} y libera a ${nomBaja}`);
     } else {
-      publicar(federacion?.id, 'fichaje', `${miEq?.nombre} incorpora a ${nomJug}`);
+      publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${miEq?.nombre} incorpora a ${nomJug}`);
     }
     setLiberarSel(s => { const n = {...s}; delete n[fichajeId]; return n; });
     cargar();
@@ -2375,7 +2375,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     }
 
     setGuardando(false);
-    publicar(federacion?.id, 'puntos', `Puntos de jornada ${jornada} introducidos`, actorNombre);
+    publicar(federacion?.id, 'puntos', `Puntos de jornada ${jornada} introducidos. Revisa los puntos de tu equipo.`, actorNombre);
     setMsg(`J${jornada} guardada y totales de equipo actualizados.`);
     setTimeout(() => setMsg(''), 4000);
   };
@@ -2548,9 +2548,12 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     if (error) { setEditMsg('Error: ' + error.message); return; }
     onParticipantesChange && onParticipantesChange();
     if (newEnt && newEnt !== oldEnt)
-      publicar(federacion?.id, 'admin', `${newNom || oldNom} nombra nuevo entrenador: ${newEnt}`, actorNombre);
+      publicar(federacion?.id, 'admin', oldEnt
+        ? `ÚLTIMA HORA: ${newNom || oldNom} despide al entrenador ${oldEnt} y nombra nuevo entrenador: ${newEnt}. Deseamos a ${newEnt} suerte en esta nueva aventura.`
+        : `ÚLTIMA HORA: ${newNom || oldNom} nombra nuevo entrenador: ${newEnt}. Deseamos a ${newEnt} suerte en esta nueva aventura.`
+      , actorNombre);
     if (newNom && newNom !== oldNom)
-      publicar(federacion?.id, 'admin', `El equipo "${oldNom}" pasa a llamarse "${newNom}"`, actorNombre);
+      publicar(federacion?.id, 'admin', `REBRANDING. El equipo "${oldNom}" pasa a llamarse "${newNom}". ¿Os gusta el cambio de nombre?`, actorNombre);
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
   };
@@ -2584,7 +2587,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     const nomJug = modalOferta.posicion === 'POR' ? 'Portería ' + modalOferta.equipo : modalOferta.nombre;
     const miNom  = participantes.find(p => p.id === sesionParticipanteId)?.nombre || '';
     const suNom  = participantes.find(p => p.id === equipoId)?.nombre || '';
-    publicar(federacion.id, 'oferta', `${miNom} hace una oferta a ${suNom} por ${nomJug}`);
+    publicar(federacion.id, 'oferta', `${miNom} hace una oferta a ${suNom} por ${nomJug}. Continúan las negociaciones.`);
     setModalOferta(null); setCantOferta(''); setMsgOferta('');
     onOfertaEnviada && onOfertaEnviada();
   };
@@ -3648,7 +3651,7 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
     });
     setCargando(false);
     if (errPart) { setError('Error al crear el equipo: ' + errPart.message); return; }
-    publicar(fedActual.id, 'nuevo_miembro', `¡${nombreEquipo.trim()} se ha unido a la federación!`);
+    publicar(fedActual.id, 'nuevo_miembro', `¡${nombreEquipo.trim()} se ha unido a la federación! Bienvenido a ${fedActual.nombre}.`);
     onDone();
   };
 
@@ -4221,7 +4224,7 @@ function AdminPresupuestos({ participantes, federacion, actorNombre }) {
     const { error } = await sb.from('participantes').update({ presupuesto: val }).eq('id', pid);
     if (error) { alert('Error: ' + error.message); return; }
     const equipo = participantes.find(p => p.id === pid)?.nombre;
-    publicar(federacion?.id, 'admin', `Presupuesto de ${equipo} modificado a ${fmt(val)}`, actorNombre);
+    publicar(federacion?.id, 'admin', `AJUSTE DE CUENTAS: Presupuesto de ${equipo} modificado a ${fmt(val)}.`, actorNombre);
     setGuardado(pid);
     setTimeout(() => setGuardado(null), 2000);
   };
@@ -4329,7 +4332,7 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
     }
     const jug = pend.jugadores;
     const nom = jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre;
-    publicar(federacion?.id, 'fichaje', `${pend.participantes?.nombre} incorpora a ${nom} a su plantilla`);
+    publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${pend.participantes?.nombre} incorpora a ${nom} a su plantilla`);
     cargar();
   };
 
@@ -4548,8 +4551,8 @@ function AdminPujas({ participantes, federacion, actorNombre }) {
       .map(b => `- ${b.equipo} pujó ${fmt(b.cantidad)}`)
       .join('\n');
     const lineaPrincipal = rpcData?.pendiente
-      ? `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)} (pendiente de plaza).`
-      : `${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}.`;
+      ? `ÚLTIMA HORA: ${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)} (pendiente de plaza).`
+      : `ÚLTIMA HORA: ${ganador.equipo} ficha a ${nomJug} por ${fmt(ganador.cantidad)}.`;
     const texto = resto ? `${lineaPrincipal}\nResto de pujas:\n${resto}` : lineaPrincipal;
     publicar(federacion?.id, 'fichaje', texto, actorNombre);
     setResueltos(prev => new Set([...prev, jugadorId]));
@@ -4709,7 +4712,7 @@ function AdminCierres({ federacion, actorNombre }) {
       await sb.from('jornadas_cierre')
         .upsert({ federacion_id: fedId, jornada, cierre: new Date(cierre).toISOString() },
                 { onConflict: 'federacion_id,jornada' });
-      publicar(fedId, 'admin', `Cierre de alineaciones de J${jornada} fijado para el ${new Date(cierre).toLocaleString('es-ES', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`, actorNombre);
+      publicar(fedId, 'admin', `🚨 ¡ATENCIÓN! Cierre de alineaciones de J${jornada} fijado para el ${new Date(cierre).toLocaleString('es-ES', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`, actorNombre);
       setMsg('Cierre guardado');
     }
     setTimeout(() => setMsg(''), 3000);
@@ -5036,7 +5039,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       .insert({ federacion_id: federacion.id, participante_id: selMod });
     if (error) { setMsgMod('Error: ' + error.message); return; }
     const nomMod = participantes.find(p => p.id === selMod)?.nombre || selMod;
-    publicar(federacion.id, 'moderador', `${nomMod} ha sido nombrado moderador de la federación`, actorNombre);
+    publicar(federacion.id, 'moderador', `${nomMod} ha sido nombrado moderador de la federación.`, actorNombre);
     setSelMod('');
     setMsgMod('Moderador añadido');
     setTimeout(() => setMsgMod(''), 2500);
@@ -5047,7 +5050,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     const modPid = mods.find(m => m.id === modId)?.participante_id;
     const nomMod = participantes.find(p => p.id === modPid)?.nombre;
     await sb.from('moderadores').delete().eq('id', modId);
-    if (nomMod) publicar(federacion.id, 'moderador', `${nomMod} ha dejado de ser moderador de la federación`, actorNombre);
+    if (nomMod) publicar(federacion.id, 'moderador', `${nomMod} ha dejado de ser moderador de la federación.`, actorNombre);
     cargarMods();
   };
 
@@ -5544,7 +5547,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     publicar(
       federacion?.id,
       'venta',
-      `${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)}`,
+      `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)}`,
       actorNombre
     );
     onParticipantesChange?.();
@@ -5580,10 +5583,10 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
       onParticipantesChange?.();
       cargar();
       if (esPremio) {
-        publicar(federacion?.id, 'admin', `${equipo?.nombre} recibe premio de presupuesto: +${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
+        publicar(federacion?.id, 'admin', `${equipo?.nombre} recibe premio de presupuesto: +${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}. ¡Felicidades!`, actorNombre);
         flash(`Premio de ${fmt(cantRaw)} aplicado al presupuesto`);
       } else {
-        publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
+        publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}. Esta sanción será polémica.`, actorNombre);
         flash(`Penalización de ${fmt(cantRaw)} aplicada al presupuesto`);
       }
     } else {
@@ -5591,7 +5594,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
       const actual = clas.find(r => r.jornada === jornadaActual)?.puntos_jornada || 0;
       await sb.from('clasificacion').upsert({ participante_id: selId, jornada: jornadaActual, puntos_jornada: actual - cant }, { onConflict: 'participante_id,jornada' });
       cargar();
-      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de puntos: -${cant} pts${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
+      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de puntos: -${cant} pts${penMotivo ? ` (${penMotivo})` : ''}. Esta sanción será polémica.`, actorNombre);
       flash(`Penalización de ${cant} pts aplicada en jornada ${jornadaActual}`);
     }
     setPenCantidad(''); setPenMotivo('');
@@ -6273,7 +6276,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     }
 
     const nomJug = form.posicion === 'POR' ? `Portería de ${form.equipo.trim()}` : form.nombre.trim();
-    publicar(federacion?.id, 'admin', `Jugador añadido: ${nomJug} (${form.equipo.trim()}, ${form.posicion})${form.destino === 'equipo' ? ` → ${participantes.find(p => p.id === form.participante_id)?.nombre}` : ' → Mercado libre'}`, actorNombre);
+    publicar(federacion?.id, 'admin', `NUEVO JUGADOR DISPONIBLE. Jugador añadido: ${nomJug} (${form.equipo.trim()}, ${form.posicion})${form.destino === 'equipo' ? ` → ${participantes.find(p => p.id === form.participante_id)?.nombre}` : ' → Mercado libre'}`, actorNombre);
     setMsg(`✓ ${nomJug} añadido${form.destino === 'equipo' ? ' a la plantilla' : ' al mercado'}.`);
     setForm(vacioForm);
     setGuardando(false);
@@ -6287,7 +6290,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     const { error } = await sb.from('jugadores').delete().eq('id', j.id);
     setBorrando(null);
     if (error) { alert('Error: ' + error.message); return; }
-    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo})`, actorNombre);
+    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo}) deja LaLiga.`, actorNombre);
     cargarJugadores();
   };
 
@@ -6981,7 +6984,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
       .map(j => j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre);
     publicar(federacion?.id, 'admin',
       noJugo.size > 0
-        ? `No jugaron J${jornada}: ${nomNJ.join(', ')}`
+        ? `No jugaron J${jornada}: ${nomNJ.join(', ')}. Entran en su lugar los sustitutos correspondientes.`
         : `No jugaron J${jornada}: lista limpiada`,
       actorNombre);
     setMsg('Guardado. Sustituciones calculadas y clasificación actualizada.');

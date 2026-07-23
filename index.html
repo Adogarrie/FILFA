@@ -2280,6 +2280,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const [jugadores, setJugadores] = useState([]);
   const [ptsJug, setPtsJug]   = useState({});
   const [propietarios, setPropietarios] = useState({});
+  const [aplazados, setAplazados] = useState(new Set());
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]         = useState('');
   const [equipoSel, setEquipoSel] = useState('');
@@ -2309,13 +2310,17 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
 
   useEffect(() => {
     if (!sb || jugadores.length === 0) return;
-    sb.from('puntos_jugador').select('jugador_id, pts')
-      .eq('jornada', jornada).eq('federacion_id', federacion?.id)
-      .then(({ data }) => {
-        const m = {};
-        (data || []).forEach(r => { m[r.jugador_id] = String(r.pts); });
-        setPtsJug(m);
-      });
+    Promise.all([
+      sb.from('puntos_jugador').select('jugador_id, pts')
+        .eq('jornada', jornada).eq('federacion_id', federacion?.id),
+      sb.from('jugadores_aplazados').select('jugador_id')
+        .eq('jornada', jornada).eq('federacion_id', federacion?.id),
+    ]).then(([{ data: pts }, { data: apl }]) => {
+      const m = {};
+      (pts || []).forEach(r => { m[r.jugador_id] = String(r.pts); });
+      setPtsJug(m);
+      setAplazados(new Set((apl || []).map(r => r.jugador_id)));
+    });
   }, [jornada, jugadores]);
 
   const guardar = async () => {
@@ -2380,6 +2385,18 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     setTimeout(() => setMsg(''), 4000);
   };
 
+  const toggleAplazado = async (jugadorId) => {
+    if (!sb) return;
+    if (aplazados.has(jugadorId)) {
+      await sb.from('jugadores_aplazados').delete()
+        .eq('federacion_id', federacion?.id).eq('jornada', jornada).eq('jugador_id', jugadorId);
+      setAplazados(s => { const n = new Set(s); n.delete(jugadorId); return n; });
+    } else {
+      await sb.from('jugadores_aplazados').insert({ federacion_id: federacion?.id, jornada, jugador_id: jugadorId });
+      setAplazados(s => new Set([...s, jugadorId]));
+    }
+  };
+
   const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
   const equipoActual  = (equipoSel && equiposReales.includes(equipoSel)) ? equipoSel : (equiposReales[0] || '');
   const jugsEq        = jugadores.filter(j => j.equipo === equipoActual);
@@ -2419,10 +2436,10 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
                 <Escudo equipo={equipoActual} size={ESCUDO_SIZE} />{equipoActual}
               </h2>
               <table>
-                <thead><tr><th>Jugador</th><th>Pos</th><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Pts J{jornada}</th></tr></thead>
+                <thead><tr><th>Jugador</th><th>Pos</th><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Pts J{jornada}</th><th style={{textAlign:'center'}} title="Marcar partido aplazado">⏸</th></tr></thead>
                 <tbody>
                   {jugsEq.map(j => (
-                    <tr key={j.id}>
+                    <tr key={j.id} style={aplazados.has(j.id) ? {background:'rgba(255,193,7,.12)'} : {}}>
                       <td style={{fontWeight:600}}>{j.nombre}</td>
                       <td style={{color:'var(--texto2)', fontSize:'.8rem'}}>{j.posicion}</td>
                       <td style={{fontSize:'.82rem', color:'var(--texto2)'}}>{propietarios[j.id] || '—'}</td>
@@ -2430,6 +2447,14 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
                         <input type="number" min="0" value={ptsJug[j.id] ?? ''}
                                onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
                                placeholder="0" style={iS} />
+                      </td>
+                      <td style={{textAlign:'center'}}>
+                        <button onClick={() => toggleAplazado(j.id)}
+                                title={aplazados.has(j.id) ? 'Quitar aplazado' : 'Marcar como aplazado'}
+                                style={{border:'none', background:'none', cursor:'pointer', fontSize:'1rem',
+                                        opacity: aplazados.has(j.id) ? 1 : 0.25}}>
+                          ⏸
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -3821,6 +3846,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const [posicionUsada, setPosicionUsada] = useState({}); // id → posicion elegida (solo titulares con doble pos)
   const [jugadoresHistoricos, setJugadoresHistoricos] = useState([]);
   const [jugadoresCedidos, setJugadoresCedidos]       = useState([]);
+  const [aplazadosSet, setAplazadosSet] = useState(new Set());
   const [cargandoAli, setCargandoAli] = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
@@ -3841,7 +3867,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     if (!sb || !participanteId || !plantilla) return;
     const cargar = async () => {
       setCargandoAli(true);
-      const [{ data: ali }, { data: cierreRow }, { data: cesData }] = await Promise.all([
+      const [{ data: ali }, { data: cierreRow }, { data: cesData }, { data: aplData }] = await Promise.all([
         sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente, posicion_usada')
           .eq('participante_id', participanteId).eq('jornada', jornada),
         sb.from('jornadas_cierre').select('cierre')
@@ -3850,8 +3876,11 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
           .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt)')
           .eq('participante_id', participanteId).eq('federacion_id', federacionId)
           .eq('jornada', jornada).eq('estado', 'aprobada'),
+        sb.from('jugadores_aplazados').select('jugador_id')
+          .eq('federacion_id', federacionId).eq('jornada', jornada),
       ]);
       setCierre(cierreRow?.cierre || null);
+      setAplazadosSet(new Set((aplData || []).map(r => r.jugador_id)));
 
       const idsPlantilla = new Set(plantilla.map(j => j.id));
       const cedidos = (cesData || [])
@@ -3933,6 +3962,18 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const nT = Object.values(estado).filter(v => v === 'T').length;
   const nS = Object.values(estado).filter(v => v === 'S').length;
 
+  // Aplazados que están en la plantilla activa de esta jornada
+  const aplazadosTitulares = [...aplazadosSet].filter(id => estado[id] === 'T').length;
+  const hayAplazados = [...aplazadosSet].some(id => id in estado);
+  // Un jugador se puede editar si la jornada está abierta,
+  // o si está aplazado, o si hay titulares aplazados y él es suplente (para cubrir el hueco)
+  const puedeEditar = (id) => {
+    if (!bloqueado) return true;
+    if (aplazadosSet.has(id)) return true;
+    if (aplazadosTitulares > 0 && estado[id] === 'S') return true;
+    return false;
+  };
+
   const titPos = { POR: 0, DEF: 0, MED: 0, DEL: 0 };
   for (const j of [...(plantilla || []), ...jugadoresHistoricos, ...jugadoresCedidos]) {
     if (estado[j.id] === 'T') { const p = posicionUsada[j.id] ?? j.posicion; titPos[p] = (titPos[p]||0) + 1; }
@@ -3943,7 +3984,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const formValida  = formCompleta && FORMACIONES.some(f => f[0]===formActual[0] && f[1]===formActual[1] && f[2]===formActual[2]);
 
   const setJugadorEstado = (id, op) => {
-    if (bloqueado) return;
+    if (!puedeEditar(id)) return;
     const prev = estado[id];
     if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
     if (op === 'S' && nS >= 4  && prev !== 'S') { alert('Máximo 4 suplentes.'); return; }
@@ -3978,7 +4019,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   };
 
   const guardar = async () => {
-    if (bloqueado || !sb) return;
+    if ((bloqueado && !hayAplazados) || !sb) return;
     if (nT === 11 && !formValida) {
       alert(`Formación ${formStr} no válida.\nFormaciones permitidas: ${FORMACIONES.map(f => f.join('-')).join(', ')}`);
       return;
@@ -4031,8 +4072,8 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
         </div>
         <div style={{fontSize:'.85rem'}}>
           {cierre
-            ? <span style={{color: bloqueado ? '#dc3545' : '#198754', fontWeight:600}}>
-                {bloqueado ? '🔒 Cerrada' : '🟢 Abierta'} — cierre: {new Date(cierre).toLocaleString('es-ES')}
+            ? <span style={{color: bloqueado && !hayAplazados ? '#dc3545' : bloqueado && hayAplazados ? '#856404' : '#198754', fontWeight:600}}>
+                {bloqueado && !hayAplazados ? '🔒 Cerrada' : bloqueado && hayAplazados ? '⏸ Cerrada (aplazados)' : '🟢 Abierta'} — cierre: {new Date(cierre).toLocaleString('es-ES')}
               </span>
             : <span style={{color:'#198754', fontWeight:600}}>🟢 Sin hora de cierre</span>}
         </div>
@@ -4091,7 +4132,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                               </td>
                             )}
                             <td style={{width: key === 'T' && j.posicion_alt ? 86 : 48}}>
-                              {key === 'T' && j.posicion_alt && !bloqueado
+                              {key === 'T' && j.posicion_alt && (!bloqueado || aplazadosSet.has(j.id))
                                 ? <span style={{display:'inline-flex', gap:2}}>
                                     {[j.posicion, j.posicion_alt].map(pos => {
                                       const activo = (posicionUsada[j.id] ?? j.posicion) === pos;
@@ -4123,6 +4164,13 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                                   CESIÓN
                                 </span>
                               )}
+                              {aplazadosSet.has(j.id) && (
+                                <span style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
+                                             padding:'1px 4px', borderRadius:3, background:'#ffc107', color:'#000', verticalAlign:'middle'}}
+                                      title="Partido aplazado — puedes cambiar este jugador">
+                                  ⏸ APL
+                                </span>
+                              )}
                             </td>
                             <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
                               {j.posicion === 'POR' ? null
@@ -4134,7 +4182,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                               ? <td style={{textAlign:'right'}}>
                                   <span style={{fontSize:'.72rem', color:'var(--texto2)', fontStyle:'italic'}}>vendido</span>
                                 </td>
-                              : !bloqueado && (
+                              : puedeEditar(j.id) && (
                                 <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
                                   {key === 'S' && (
                                     <>
@@ -4174,8 +4222,15 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
               );
             })}
 
-            {!bloqueado && (plantilla.length > 0 || jugadoresCedidos.length > 0) && (
+            {(!bloqueado || hayAplazados) && (plantilla.length > 0 || jugadoresCedidos.length > 0) && (
               <div style={{marginTop:'1rem', display:'flex', gap:'1rem', alignItems:'center', flexWrap:'wrap'}}>
+                {bloqueado && hayAplazados && (
+                  <span style={{width:'100%', padding:'.45rem .75rem', borderRadius:8,
+                                background:'rgba(255,193,7,.15)', border:'1.5px solid #ffc107',
+                                fontSize:'.85rem', color:'#664d03', fontWeight:600}}>
+                    ⏸ Jornada cerrada, pero hay jugadores aplazados — puedes modificar sus posiciones.
+                  </span>
+                )}
                 <button className="btn-ok" onClick={guardar} disabled={guardando}>
                   {guardando ? 'Guardando…' : 'Guardar alineación'}
                 </button>
@@ -4192,7 +4247,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                 {msg && <span style={{color:'#198754', fontSize:'.9rem'}}>{msg}</span>}
               </div>
             )}
-            {bloqueado && (
+            {bloqueado && !hayAplazados && (
               <p style={{color:'#dc3545', fontSize:'.9rem', marginTop:'.6rem'}}>
                 La alineación de esta jornada está cerrada y no puede modificarse.
               </p>

@@ -5482,6 +5482,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
   const [editPrecios, setEditPrecios] = useState({});
   const [jornadaEdit, setJornadaEdit] = useState(1);
   const [ptsEdit, setPtsEdit]     = useState('');
+  const [penOp, setPenOp]         = useState('penalizacion');
   const [penTipo, setPenTipo]     = useState('presupuesto');
   const [penCantidad, setPenCantidad] = useState('');
   const [penMotivo, setPenMotivo] = useState('');
@@ -5565,18 +5566,25 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     cargar();
   };
 
-  // Añadir penalización
-  const aplicarPenalizacion = async () => {
+  // Aplicar premio o penalización
+  const aplicarAccion = async () => {
     const cant = Number(penCantidad);
     if (!cant) { flash('Introduce una cantidad válida'); return; }
+    const esPremio = penOp === 'premio';
+
     if (penTipo === 'presupuesto') {
       const cantRaw = cant * 1_000_000;
-      const nuevo = (presupuesto || 0) - cantRaw;
+      const nuevo = esPremio ? (presupuesto || 0) + cantRaw : (presupuesto || 0) - cantRaw;
       await sb.from('participantes').update({ presupuesto: nuevo }).eq('id', selId);
       onParticipantesChange?.();
       cargar();
-      publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
-      flash(`Penalización de ${fmt(cantRaw)} aplicada al presupuesto`);
+      if (esPremio) {
+        publicar(federacion?.id, 'admin', `${equipo?.nombre} recibe premio de presupuesto: +${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
+        flash(`Premio de ${fmt(cantRaw)} aplicado al presupuesto`);
+      } else {
+        publicar(federacion?.id, 'penalizacion', `${equipo?.nombre} recibe penalización de presupuesto: -${fmt(cantRaw)}${penMotivo ? ` (${penMotivo})` : ''}`, actorNombre);
+        flash(`Penalización de ${fmt(cantRaw)} aplicada al presupuesto`);
+      }
     } else {
       const jornadaActual = clas.length > 0 ? Math.max(...clas.map(r => r.jornada)) : 1;
       const actual = clas.find(r => r.jornada === jornadaActual)?.puntos_jornada || 0;
@@ -5622,7 +5630,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
           )}
         </div>
         <div className="tabs" style={{marginBottom:0}}>
-          {[['plantilla','Plantilla'],['puntos','Puntos por jornada'],['penalizaciones','Penalizaciones']].map(([k,l]) => (
+          {[['plantilla','Plantilla'],['puntos','Puntos por jornada'],['penalizaciones','Premios y Penalizaciones']].map(([k,l]) => (
             <button key={k} className={`tab ${subtab===k?'active':''}`} onClick={() => setSubtab(k)}>{l}</button>
           ))}
         </div>
@@ -5713,21 +5721,35 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
 
       {subtab === 'penalizaciones' && (
         <div className="card">
-          <h3 style={{marginBottom:'1rem'}}>Añadir penalización — {equipo?.nombre}</h3>
+          <h3 style={{marginBottom:'1rem'}}>Premios y Penalizaciones — {equipo?.nombre}</h3>
           <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+            <div>
+              <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>Operación</label>
+              <div style={{display:'flex', borderRadius:8, overflow:'hidden', border:'1.5px solid var(--borde)'}}>
+                {[['penalizacion','Penalización'],['premio','Premio']].map(([v,l]) => (
+                  <button key={v} onClick={() => { setPenOp(v); if (v === 'premio') setPenTipo('presupuesto'); }}
+                          style={{padding:'.35rem .75rem', border:'none', cursor:'pointer', fontSize:'.85rem', fontWeight:600,
+                                  background: penOp === v ? (v === 'premio' ? '#198754' : '#dc3545') : '#fff',
+                                  color: penOp === v ? '#fff' : 'var(--texto)'}}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div>
               <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>Tipo</label>
               <select value={penTipo} onChange={e => setPenTipo(e.target.value)}
                       style={{padding:'.35rem .6rem', borderRadius:8, border:'1.5px solid var(--borde)'}}>
-                <option value="presupuesto">Presupuesto</option>
-                <option value="puntos">Puntos</option>
+                <option value="presupuesto">Dinero</option>
+                {penOp === 'penalizacion' && <option value="puntos">Puntos</option>}
               </select>
             </div>
             <div>
               <label style={{fontSize:'.82rem', display:'block', marginBottom:'.3rem'}}>
                 Cantidad ({penTipo === 'presupuesto' ? 'M' : 'pts'})
               </label>
-              <input type="number" min="0" value={penCantidad} onChange={e => setPenCantidad(e.target.value)}
+              <input type="number" min="0" step={penTipo === 'presupuesto' ? '0.01' : '1'}
+                     value={penCantidad} onChange={e => setPenCantidad(e.target.value)}
                      style={{width:100, padding:'.35rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)'}} />
             </div>
             <div style={{flex:1, minWidth:160}}>
@@ -5735,12 +5757,14 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
               <input value={penMotivo} onChange={e => setPenMotivo(e.target.value)}
                      style={{width:'100%', padding:'.35rem .5rem', borderRadius:8, border:'1.5px solid var(--borde)'}} />
             </div>
-            <button className="btn-ok" style={{background:'#dc3545'}} onClick={aplicarPenalizacion}>
-              Aplicar penalización
+            <button className="btn-ok"
+                    style={{background: penOp === 'premio' ? '#198754' : '#dc3545'}}
+                    onClick={aplicarAccion}>
+              {penOp === 'premio' ? 'Aplicar premio' : 'Aplicar penalización'}
             </button>
           </div>
           <p style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:'1rem'}}>
-            La penalización de presupuesto reduce directamente el presupuesto disponible del equipo.<br/>
+            El premio/penalización de dinero modifica directamente el presupuesto disponible.<br/>
             La penalización de puntos se descuenta de la última jornada con datos.
           </p>
         </div>

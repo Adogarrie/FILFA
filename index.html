@@ -7872,7 +7872,11 @@ function AdminMercadoGroup({ participantes, federacion, actorNombre }) {
 
 // ── ADMIN — COMPETICIONES ──────────────────────────────────────
 function AdminCompeticiones({ federacion, participantes, actorNombre }) {
-  const fedId = federacion?.id;
+  const fedId  = federacion?.id;
+  const baremo = useMemo(() => {
+    try { return JSON.parse(federacion?.h2h_baremo||'null')||BAREMO_DEFAULT; }
+    catch { return BAREMO_DEFAULT; }
+  }, [federacion?.h2h_baremo]);
   const [comps, setComps]         = useState([]);
   const [fases, setFases]         = useState([]);
   const [grupos, setGrupos]       = useState([]);
@@ -8054,6 +8058,43 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     setPartidos(p => p.map(m => m.id===id ? {...m,jornada_fantasy:j} : m));
   };
 
+  // ── Calcular resultado de una ronda de grupo ────────────────
+  const calcularRonda = async (gid, ronda, jornada) => {
+    if (!jornada) { flash('Asigna una jornada a esta ronda antes de calcular'); return; }
+    const ms = partidos.filter(p => p.grupo_id===gid && p.ronda===ronda);
+    if (!ms.length) return;
+    setBusy(true);
+    const allPids = [...new Set(ms.flatMap(m=>[m.participante_local_id,m.participante_visitante_id]))];
+    const {data:cls} = await sb.from('clasificacion').select('participante_id,puntos_jornada')
+      .in('participante_id',allPids).eq('jornada',jornada);
+    const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
+    const updates = ms.map(m=>({
+      id:m.id,
+      goles_local:    ptsToGoles(ptsMap[m.participante_local_id]??0, baremo),
+      goles_visitante:ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo),
+    }));
+    await Promise.all(updates.map(u=>sb.from('partidos_competicion').update({goles_local:u.goles_local,goles_visitante:u.goles_visitante}).eq('id',u.id)));
+    setPartidos(p=>p.map(m=>{const u=updates.find(x=>x.id===m.id);return u?{...m,...u}:m;}));
+    flash(`Ronda ${ronda} calculada`);
+    setBusy(false);
+  };
+
+  // ── Calcular resultado de un partido suelto ─────────────────
+  const calcularSuelto = async m => {
+    if (!m.jornada_fantasy) { flash('Asigna una jornada al partido antes de calcular'); return; }
+    setBusy(true);
+    const pids = [m.participante_local_id, m.participante_visitante_id];
+    const {data:cls} = await sb.from('clasificacion').select('participante_id,puntos_jornada')
+      .in('participante_id',pids).eq('jornada',m.jornada_fantasy);
+    const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
+    const gL = ptsToGoles(ptsMap[m.participante_local_id]??0, baremo);
+    const gV = ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo);
+    await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
+    setPartidos(p=>p.map(x=>x.id===m.id?{...x,goles_local:gL,goles_visitante:gV}:x));
+    flash(`Calculado: ${gL} — ${gV}`);
+    setBusy(false);
+  };
+
   const sBtn = { padding:'.22rem .65rem', borderRadius:6, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', cursor:'pointer', fontSize:'.8rem' };
   const dBtn = { padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)', color:'#dc3545', cursor:'pointer', fontSize:'.78rem' };
   const inp  = { padding:'.36rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.82)', fontSize:'.85rem' };
@@ -8188,11 +8229,13 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                               value={jRonda[key]??''} onChange={e=>setJRonda(p=>({...p,[key]:e.target.value}))}
                               style={{...inp, width:55, textAlign:'center', padding:'.3rem .4rem'}} />
                             <button style={{...sBtn, fontSize:'.76rem'}} onClick={()=>asignarJornadaRonda(g.id,r)}>Asignar</button>
+                            <button disabled={busy||!jornadaAsig} style={{...sBtn, fontSize:'.76rem', background:'rgba(15,80,180,0.18)', borderColor:'var(--borde)', opacity:jornadaAsig?1:.45}} onClick={()=>calcularRonda(g.id,r,jornadaAsig)}>▶ Calcular</button>
                           </div>
                         </div>
                         {ms.map(m=>(
                           <div key={m.id} style={{fontSize:'.8rem', color:'var(--texto2)', display:'flex', alignItems:'center', gap:'.5rem', padding:'.1rem 0'}}>
                             <span style={{flex:1}}>{nomMap[m.participante_local_id]||'?'} <span style={{opacity:.5}}>vs</span> {nomMap[m.participante_visitante_id]||'?'}</span>
+                            {m.goles_local!=null && <span style={{fontWeight:700, color:'var(--texto)', fontSize:'.82rem', minWidth:40, textAlign:'center'}}>{m.goles_local}—{m.goles_visitante}</span>}
                             <button style={{...dBtn, fontSize:'.7rem', padding:'.1rem .35rem'}} onClick={()=>borrarPartido(m.id)}>×</button>
                           </div>
                         ))}
@@ -8225,6 +8268,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
             {partidos.length>0&&<thead><tr>
               <th style={{textAlign:'left',padding:'.35rem .5rem',color:'var(--texto2)',fontWeight:600}}>Partido</th>
               <th style={{textAlign:'center',padding:'.35rem .5rem',color:'var(--texto2)',fontWeight:600}}>Jornada</th>
+              <th style={{textAlign:'center',padding:'.35rem .5rem',color:'var(--texto2)',fontWeight:600}}>Resultado</th>
               <th></th>
             </tr></thead>}
             <tbody>
@@ -8240,6 +8284,12 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                     <input type="number" min="1" placeholder="—" defaultValue={m.jornada_fantasy||''}
                       onBlur={e=>actualizarJornadaSuelto(m.id,e.target.value)}
                       style={{...inp,width:65,textAlign:'center',padding:'.28rem .4rem'}} />
+                  </td>
+                  <td style={{textAlign:'center',padding:'.35rem .5rem',whiteSpace:'nowrap'}}>
+                    {m.goles_local!=null
+                      ? <span style={{fontWeight:700,fontSize:'.88rem'}}>{m.goles_local}—{m.goles_visitante}</span>
+                      : <button disabled={busy||!m.jornada_fantasy} style={{...sBtn,fontSize:'.75rem',opacity:m.jornada_fantasy?1:.45}} onClick={()=>calcularSuelto(m)}>▶ Calcular</button>
+                    }
                   </td>
                   <td style={{textAlign:'right',padding:'.35rem .5rem'}}>
                     <button style={dBtn} onClick={()=>borrarPartido(m.id)}>×</button>
@@ -8451,7 +8501,6 @@ function TorneosVista({ federacion, participantes }) {
   const [grupos, setGrupos]     = useState([]);
   const [gMiembros, setGMiembros] = useState({});
   const [partidos, setPartidos] = useState([]);
-  const [clasMap, setClasMap]   = useState({});
   const [cargando, setCargando] = useState(false);
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p]));
@@ -8481,24 +8530,14 @@ function TorneosVista({ federacion, participantes }) {
       setGMiembros(gm);
       const {data:ps} = await sb.from('partidos_competicion').select('*').in('fase_id',faseIds).order('ronda');
       setPartidos(ps||[]);
-      const jornadas = [...new Set((ps||[]).map(p=>p.jornada_fantasy).filter(Boolean))];
-      if (jornadas.length>0) {
-        const allPids = [...new Set([...(ps||[]).map(p=>p.participante_local_id),...(ps||[]).map(p=>p.participante_visitante_id)])];
-        const {data:cls} = await sb.from('clasificacion').select('participante_id,jornada,puntos_jornada')
-          .in('participante_id',allPids).in('jornada',jornadas);
-        const cm = {};
-        (cls||[]).forEach(r=>{if(!cm[r.participante_id])cm[r.participante_id]={};cm[r.participante_id][r.jornada]=r.puntos_jornada??0;});
-        setClasMap(cm);
-      } else setClasMap({});
       setCargando(false);
     })();
   }, [compSel, fedId]);
 
+  // Resultado desde goles almacenados (null si aún no calculado)
   const resPartido = m => {
-    if (!m.jornada_fantasy) return null;
-    const j=m.jornada_fantasy;
-    const pL=(clasMap[m.participante_local_id]||{})[j]??0, pV=(clasMap[m.participante_visitante_id]||{})[j]??0;
-    return {gL:ptsToGoles(pL,baremo), gV:ptsToGoles(pV,baremo), pL, pV};
+    if (m.goles_local == null || m.goles_visitante == null) return null;
+    return { gL: m.goles_local, gV: m.goles_visitante };
   };
 
   const Equipo = ({pid}) => {
@@ -8555,7 +8594,7 @@ function TorneosVista({ federacion, participantes }) {
             const miembros = gMiembros[grupo.id]||[];
             const mG = partidos.filter(p=>p.grupo_id===grupo.id);
             const rondas = [...new Set(mG.map(p=>p.ronda))].sort((a,b)=>a-b);
-            const standings = calcularStandingsGrupo(mG, clasMap, miembros, baremo);
+            const standings = calcularStandingsGrupo(mG, miembros);
             return (
               <div key={grupo.id} className="card" style={{marginBottom:'.5rem'}}>
                 <h2 style={{marginBottom:'.75rem'}}>{grupo.nombre}</h2>
@@ -8618,7 +8657,6 @@ function TorneosVista({ federacion, participantes }) {
                               {res?`${res.gL} — ${res.gV}`:'vs'}
                             </span>
                             <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
-                            {res&&<span style={{fontSize:'.7rem',color:'var(--texto2)',whiteSpace:'nowrap'}}>({res.pL}–{res.pV} pts)</span>}
                           </div>
                         );
                       })}
@@ -8649,7 +8687,6 @@ function TorneosVista({ federacion, participantes }) {
                         {res?`${res.gL} — ${res.gV}`:'vs'}
                       </span>
                       <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
-                      {res&&<span style={{fontSize:'.7rem',color:'var(--texto2)',whiteSpace:'nowrap'}}>({res.pL}–{res.pV} pts)</span>}
                       <span style={{fontSize:'.74rem',fontWeight:700,
                         color:m.jornada_fantasy?'var(--verde)':'var(--texto2)',whiteSpace:'nowrap'}}>
                         {m.jornada_fantasy?`J${m.jornada_fantasy}`:'TBD'}
@@ -9562,15 +9599,15 @@ function generarRoundRobin(equipos) {
   return rondas;
 }
 
-// ── Standings de un grupo (baremo H2H aplicado) ───────────────
-function calcularStandingsGrupo(matches, clasMap, memberIds, baremo) {
+// ── Standings de un grupo (usa goles almacenados, no en tiempo real) ──
+// Solo cuenta partidos con goles_local/goles_visitante calculados por el admin.
+function calcularStandingsGrupo(matches, memberIds) {
   const tabla = {};
   for (const pid of memberIds) tabla[pid] = { pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0 };
   for (const m of matches) {
-    const { participante_local_id: lid, participante_visitante_id: vid, jornada_fantasy: j } = m;
-    if (!j) continue;
-    const pL = (clasMap[lid]||{})[j]??0, pV = (clasMap[vid]||{})[j]??0;
-    const gL = ptsToGoles(pL, baremo),    gV = ptsToGoles(pV, baremo);
+    const { participante_local_id: lid, participante_visitante_id: vid } = m;
+    if (m.goles_local == null || m.goles_visitante == null) continue; // no calculado aún
+    const gL = m.goles_local, gV = m.goles_visitante;
     if (!tabla[lid]) tabla[lid] = { pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0 };
     if (!tabla[vid]) tabla[vid] = { pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0 };
     tabla[lid].pj++; tabla[lid].gf += gL; tabla[lid].gc += gV;
@@ -9584,14 +9621,17 @@ function calcularStandingsGrupo(matches, clasMap, memberIds, baremo) {
     const gdB = b.gf-b.gc, gdA = a.gf-a.gc;
     if (gdB !== gdA) return gdB - gdA;
     if (b.gf !== a.gf) return b.gf - a.gf;
-    const dm = matches.find(m => m.jornada_fantasy && (
-      (m.participante_local_id===a.pid && m.participante_visitante_id===b.pid) ||
-      (m.participante_local_id===b.pid && m.participante_visitante_id===a.pid)
-    ));
+    // Enfrentamiento directo
+    const dm = matches.find(m =>
+      m.goles_local != null && (
+        (m.participante_local_id===a.pid && m.participante_visitante_id===b.pid) ||
+        (m.participante_local_id===b.pid && m.participante_visitante_id===a.pid)
+      )
+    );
     if (dm) {
-      const j = dm.jornada_fantasy;
-      return ptsToGoles((clasMap[b.pid]||{})[j]??0, baremo)
-           - ptsToGoles((clasMap[a.pid]||{})[j]??0, baremo);
+      const gA = dm.participante_local_id===a.pid ? dm.goles_local : dm.goles_visitante;
+      const gB = dm.participante_local_id===b.pid ? dm.goles_local : dm.goles_visitante;
+      return gB - gA;
     }
     return 0;
   });

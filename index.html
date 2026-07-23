@@ -7401,7 +7401,10 @@ function Competiciones({ federacion, participantes }) {
 // ── APP PRINCIPAL ──────────────────────────────────────────────
 
 function App() {
-  const [vista, setVista]                   = useState('Tablón');
+  const VALID_VISTAS = ['Tablón','Mi Plantilla','Alineación','Mercado','Equipos','Competiciones','Ayuda','Admin'];
+  const hashInicial  = decodeURIComponent(window.location.hash.slice(1));
+  const [vista, setVista] = useState(VALID_VISTAS.includes(hashInicial) ? hashInicial : 'Tablón');
+  const navegarA = v => { setVista(v); window.location.hash = encodeURIComponent(v); };
   const [participantes, setParticipantes]   = useState([]);
   const [participanteId, setParticipanteId] = useState('');
   const [federacion, setFederacion]         = useState(null);
@@ -7415,7 +7418,7 @@ function App() {
   const [ofertasBadge,  setOfertasBadge]  = useState(0);
   const [tablonBadge,   setTablonBadge]   = useState(0);
 
-  const seleccionarFederacion = async (part, fed, userOverride) => {
+  const seleccionarFederacion = async (part, fed, userOverride, resetear = true) => {
     const u = userOverride || authUser;
     let esMod = false;
     if (part?.id && part?.federacion_id) {
@@ -7426,7 +7429,7 @@ function App() {
     setFederacion(fed || null);
     setSession({ email: u?.email || '', participante_id: part?.id || null, es_moderador: esMod });
     setVerOnboarding(false);
-    setVista('Tablón');
+    if (resetear) navegarA('Tablón');
     if (part?.id) localStorage.setItem('filfa_part_id', part.id);
   };
 
@@ -7460,11 +7463,11 @@ function App() {
     const saved   = combinado.find(p => p.id === savedId);
 
     if (saved) {
-      await seleccionarFederacion(saved, saved.federacion, user);
+      await seleccionarFederacion(saved, saved.federacion, user, false);
     } else if (combinado.length === 1) {
-      await seleccionarFederacion(combinado[0], combinado[0].federacion, user);
+      await seleccionarFederacion(combinado[0], combinado[0].federacion, user, false);
     } else if (combinado.length === 0 && aFeds.length === 1) {
-      await seleccionarFederacion(null, aFeds[0], user);
+      await seleccionarFederacion(null, aFeds[0], user, false);
     } else {
       // Múltiples federaciones o ninguna → mostrar selector
       setSession({ email: user.email, participante_id: null, es_moderador: false });
@@ -7503,6 +7506,15 @@ function App() {
   };
 
   useEffect(() => { recargarParticipantes(); }, [federacion, session]);
+
+  useEffect(() => {
+    const onHash = () => {
+      const v = decodeURIComponent(window.location.hash.slice(1));
+      if (VALID_VISTAS.includes(v)) setVista(v);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const refrescarTablonBadge = async () => {
     if (!sb || !federacion?.id || !(federacion?.admin_user_id === authUser?.id)) {
@@ -7579,7 +7591,7 @@ function App() {
           }
         </h1>
         {VISTAS.map(v => (
-          <button key={v} className={vista === v ? 'active' : ''} onClick={() => setVista(v)}
+          <button key={v} className={vista === v ? 'active' : ''} onClick={() => navegarA(v)}
                   style={{position:'relative'}}>
             {v}
             {v === 'Tablón' && tablonBadge > 0 && (

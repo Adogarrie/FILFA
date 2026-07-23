@@ -2401,8 +2401,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       const usaBanquillo = new Set((comodinesData || []).filter(c => c.tipo === 'banquillo').map(c => c.participante_id));
       const usaCapitan   = new Set((comodinesData || []).filter(c => c.tipo === 'capitan').map(c => c.participante_id));
       // Scope: comodines solo se aplican al Calendario si su scope es 'calendario'
-      const scopeCapCal = (federacion?.comodin_capitan_scope   ?? 'calendario') === 'calendario';
-      const scopeBanCal = (federacion?.comodin_banquillo_scope ?? 'calendario') === 'calendario';
+      const scopeCapCal = federacion?.comodin_capitan_en_calendario   ?? true;
+      const scopeBanCal = federacion?.comodin_banquillo_en_calendario ?? true;
 
       // Agrupamos alineaciones completas (titulares + suplentes) y solo titulares
       const alisAllByPart = {};
@@ -4637,7 +4637,8 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                     const restantes = max === null ? null : max - comodinesUsados.capitan;
                     const activo = comodinJornada === 'capitan';
                     const agotado = max !== null && comodinesUsados.capitan >= max && !activo;
-                    const scopeLbl = { calendario:'Calendario', h2h:'Liga H2H', torneo:'Torneo', ninguno:'Sin efecto' }[federacion?.comodin_capitan_scope ?? 'calendario'];
+                    const scopeLbls = [federacion?.comodin_capitan_en_calendario&&'Calendario', federacion?.comodin_capitan_en_h2h&&'H2H', federacion?.comodin_capitan_en_torneo&&'Torneo'].filter(Boolean);
+                    const scopeLbl = scopeLbls.length ? scopeLbls.join(', ') : 'Sin efecto';
                     return (
                       <div style={{display:'flex',flexDirection:'column',gap:'.18rem'}}>
                         <button onClick={() => toggleComodin('capitan')}
@@ -4665,7 +4666,8 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                     const restantes = max === null ? null : max - comodinesUsados.banquillo;
                     const activo = comodinJornada === 'banquillo';
                     const agotado = max !== null && comodinesUsados.banquillo >= max && !activo;
-                    const scopeLbl = { calendario:'Calendario', h2h:'Liga H2H', torneo:'Torneo', ninguno:'Sin efecto' }[federacion?.comodin_banquillo_scope ?? 'calendario'];
+                    const scopeLbls = [federacion?.comodin_banquillo_en_calendario&&'Calendario', federacion?.comodin_banquillo_en_h2h&&'H2H', federacion?.comodin_banquillo_en_torneo&&'Torneo'].filter(Boolean);
+                    const scopeLbl = scopeLbls.length ? scopeLbls.join(', ') : 'Sin efecto';
                     return (
                       <div style={{display:'flex',flexDirection:'column',gap:'.18rem'}}>
                         <button onClick={() => toggleComodin('banquillo')}
@@ -5569,8 +5571,16 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [comodinBanquillo, setComodinBanquillo]  = useState(federacion?.comodin_banquillo_habilitado ?? false);
   const [maxCapitan,   setMaxCapitan]    = useState(federacion?.max_comodin_capitan   ?? '');
   const [maxBanquillo, setMaxBanquillo]  = useState(federacion?.max_comodin_banquillo ?? '');
-  const [scopeCapitan,   setScopeCapitan]   = useState(federacion?.comodin_capitan_scope   ?? 'calendario');
-  const [scopeBanquillo, setScopeBanquillo] = useState(federacion?.comodin_banquillo_scope ?? 'calendario');
+  const [scopeCapitan,   setScopeCapitan]   = useState({
+    calendario: federacion?.comodin_capitan_en_calendario   ?? true,
+    h2h:        federacion?.comodin_capitan_en_h2h          ?? false,
+    torneo:     federacion?.comodin_capitan_en_torneo       ?? false,
+  });
+  const [scopeBanquillo, setScopeBanquillo] = useState({
+    calendario: federacion?.comodin_banquillo_en_calendario ?? true,
+    h2h:        federacion?.comodin_banquillo_en_h2h        ?? false,
+    torneo:     federacion?.comodin_banquillo_en_torneo     ?? false,
+  });
   const [torneoCapitan,   setTorneoCapitan]   = useState(federacion?.comodin_capitan_torneo_id   ?? '');
   const [torreoBanquillo, setTorreoBanquillo] = useState(federacion?.comodin_banquillo_torneo_id ?? '');
   const [compsConfig, setCompsConfig] = useState([]);
@@ -5654,7 +5664,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   };
 
   useEffect(() => {
-    if ((scopeCapitan === 'torneo' || scopeBanquillo === 'torneo') && federacion?.id && sb) {
+    if ((scopeCapitan.torneo || scopeBanquillo.torneo) && federacion?.id && sb) {
       sb.from('competiciones').select('id, nombre').eq('federacion_id', federacion.id).order('created_at')
         .then(({ data }) => setCompsConfig(data || []));
     }
@@ -5667,10 +5677,14 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       comodin_banquillo_habilitado: comodinBanquillo,
       max_comodin_capitan:   maxCapitan === '' ? null : Number(maxCapitan),
       max_comodin_banquillo: maxBanquillo === '' ? null : Number(maxBanquillo),
-      comodin_capitan_scope:   scopeCapitan,
-      comodin_banquillo_scope: scopeBanquillo,
-      comodin_capitan_torneo_id:   scopeCapitan   === 'torneo' ? (torneoCapitan   || null) : null,
-      comodin_banquillo_torneo_id: scopeBanquillo === 'torneo' ? (torreoBanquillo || null) : null,
+      comodin_capitan_en_calendario:   scopeCapitan.calendario,
+      comodin_capitan_en_h2h:          scopeCapitan.h2h,
+      comodin_capitan_en_torneo:       scopeCapitan.torneo,
+      comodin_capitan_torneo_id:       scopeCapitan.torneo   ? (torneoCapitan   || null) : null,
+      comodin_banquillo_en_calendario: scopeBanquillo.calendario,
+      comodin_banquillo_en_h2h:        scopeBanquillo.h2h,
+      comodin_banquillo_en_torneo:     scopeBanquillo.torneo,
+      comodin_banquillo_torneo_id:     scopeBanquillo.torneo ? (torreoBanquillo || null) : null,
     };
     const { error, data } = await sb.from('federaciones').update(updates).eq('id', federacion.id).select().single();
     if (error) { alert('Error: ' + error.message); return; }
@@ -5983,7 +5997,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
           </label>
         </div>
         {cm.habilitado && (
-          <div style={{display:'flex', flexWrap:'wrap', gap:'.75rem', marginTop:'.65rem', alignItems:'center'}}>
+          <div style={{display:'flex', flexWrap:'wrap', gap:'.75rem', marginTop:'.65rem', alignItems:'flex-start'}}>
             <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
               <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Usos máximos:</label>
               <select value={cm.max} onChange={e => cm.setMax(e.target.value)}
@@ -5995,26 +6009,30 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
                 <option value="">Ilimitado</option>
               </select>
             </div>
-            <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
-              <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Aplica a:</label>
-              <select value={cm.scope} onChange={e => cm.setScope(e.target.value)}
-                      style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
-                <option value="calendario">Calendario (puntos)</option>
-                <option value="h2h">Liga H2H</option>
-                <option value="torneo">Torneo específico</option>
-                <option value="ninguno">Ninguno</option>
-              </select>
-            </div>
-            {cm.scope === 'torneo' && (
-              <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
-                <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Torneo:</label>
-                <select value={cm.torneo} onChange={e => cm.setTorneo(e.target.value)}
-                        style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
-                  <option value="">— elige —</option>
-                  {compsConfig.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                </select>
+            <div style={{display:'flex', flexDirection:'column', gap:'.3rem'}}>
+              <span style={{fontSize:'.83rem', color:'var(--texto2)'}}>Aplica a (selección múltiple):</span>
+              <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem'}}>
+                {[['calendario','Calendario'], ['h2h','Liga H2H'], ['torneo','Torneo específico']].map(([k, lbl]) => (
+                  <label key={k} style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.84rem', cursor:'pointer',
+                                         padding:'.22rem .55rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                         background: cm.scope[k] ? 'rgba(15,80,180,0.18)' : 'rgba(200,225,255,0.40)'}}>
+                    <input type="checkbox" checked={!!cm.scope[k]}
+                           onChange={e => cm.setScope(prev => ({...prev, [k]: e.target.checked}))} />
+                    {lbl}
+                  </label>
+                ))}
               </div>
-            )}
+              {cm.scope.torneo && (
+                <div style={{display:'flex', alignItems:'center', gap:'.4rem', marginTop:'.2rem'}}>
+                  <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Torneo:</label>
+                  <select value={cm.torneo} onChange={e => cm.setTorneo(e.target.value)}
+                          style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
+                    <option value="">— elige —</option>
+                    {compsConfig.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -8086,8 +8104,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   // ── Calcular resultado de una ronda de grupo ────────────────
   // Helper: aplica comodines con scope='torneo' sobre un ptsMap dado
   const aplicarComoDinesTorneo = async (pidsArray, jornada) => {
-    const scopeCapT = federacion?.comodin_capitan_habilitado   && federacion?.comodin_capitan_scope   === 'torneo' && federacion?.comodin_capitan_torneo_id   === compSel;
-    const scopeBanT = federacion?.comodin_banquillo_habilitado && federacion?.comodin_banquillo_scope === 'torneo' && federacion?.comodin_banquillo_torneo_id === compSel;
+    const scopeCapT = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_torneo   ?? false) && federacion?.comodin_capitan_torneo_id   === compSel;
+    const scopeBanT = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_torneo ?? false) && federacion?.comodin_banquillo_torneo_id === compSel;
     if (!scopeCapT && !scopeBanT) return null; // sin ajuste
     const {data:comsTorn} = await sb.from('comodines_usados')
       .select('participante_id,tipo').eq('jornada',jornada).in('participante_id',pidsArray);
@@ -9892,8 +9910,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     (clsData || []).forEach(r => { ptsMap[r.participante_id] = r.puntos_jornada ?? 0; });
 
     // Aplicar comodines con scope='h2h' si están habilitados
-    const scopeCapH2H = federacion?.comodin_capitan_habilitado   && federacion?.comodin_capitan_scope   === 'h2h';
-    const scopeBanH2H = federacion?.comodin_banquillo_habilitado && federacion?.comodin_banquillo_scope === 'h2h';
+    const scopeCapH2H = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_h2h   ?? false);
+    const scopeBanH2H = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_h2h ?? false);
     if (scopeCapH2H || scopeBanH2H) {
       const { data: comsH2H } = await sb.from('comodines_usados')
         .select('participante_id, tipo').eq('jornada', jornada_fantasy).in('participante_id', partIds);

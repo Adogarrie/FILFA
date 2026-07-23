@@ -1,22 +1,25 @@
 -- ═══════════════════════════════════════════════════════════════
--- FILFA — Scope de comodines por competición
+-- FILFA — Scope de comodines por competición (multi-selección)
 --
--- Cada comodín (capitán doble / banquillo completo) puede
--- configurarse para que solo afecte a una competición concreta:
---   'calendario' → puntuación fantasy por puntos (default)
---   'h2h'        → Liga H2H
---   'torneo'     → Torneo específico (ver comodin_*_torneo_id)
---   'ninguno'    → nunca se aplica (habilitado pero sin efecto)
+-- Cada comodín puede activarse en una o varias competiciones a la
+-- vez: Calendario, Liga H2H, y/o un Torneo específico.
+-- Un booleano por contexto, combinables libremente.
 --
--- Si scope = 'torneo', el comodín solo se aplica en el torneo
--- referenciado por comodin_capitan_torneo_id /
--- comodin_banquillo_torneo_id.
+-- Si comodin_*_en_torneo = true, el torneo referenciado por
+-- comodin_*_torneo_id es el que recibe el bonus.
+--
+-- Si se quiere desactivar el efecto en todos los contextos sin
+-- deshabilitar el comodín, basta con desmarcar todos.
 --
 -- Ejecutar en: Supabase Dashboard → SQL Editor
 -- ═══════════════════════════════════════════════════════════════
 
 alter table federaciones
-  add column if not exists comodin_capitan_scope       text not null default 'calendario',
-  add column if not exists comodin_banquillo_scope     text not null default 'calendario',
-  add column if not exists comodin_capitan_torneo_id   uuid references competiciones(id) on delete set null,
-  add column if not exists comodin_banquillo_torneo_id uuid references competiciones(id) on delete set null;
+  add column if not exists comodin_capitan_en_calendario   bool not null default true,
+  add column if not exists comodin_capitan_en_h2h          bool not null default false,
+  add column if not exists comodin_capitan_en_torneo       bool not null default false,
+  add column if not exists comodin_capitan_torneo_id       uuid references competiciones(id) on delete set null,
+  add column if not exists comodin_banquillo_en_calendario bool not null default true,
+  add column if not exists comodin_banquillo_en_h2h        bool not null default false,
+  add column if not exists comodin_banquillo_en_torneo     bool not null default false,
+  add column if not exists comodin_banquillo_torneo_id     uuid references competiciones(id) on delete set null;

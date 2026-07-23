@@ -4209,13 +4209,13 @@ function AdminPresupuestos({ participantes, federacion, actorNombre }) {
     const ids = participantes.map(p => p.id);
     sb.from('participantes').select('id, presupuesto').in('id', ids).then(({ data }) => {
       const m = {};
-      (data || []).forEach(p => { m[p.id] = String(p.presupuesto ?? 100000000); });
+      (data || []).forEach(p => { m[p.id] = String((p.presupuesto ?? 100000000) / 1_000_000); });
       setValores(m);
     });
   }, [participantes]);
 
   const guardar = async (pid) => {
-    const val = parseFloat(valores[pid]);
+    const val = parseFloat(valores[pid]) * 1_000_000;
     if (isNaN(val)) return;
     const { error } = await sb.from('participantes').update({ presupuesto: val }).eq('id', pid);
     if (error) { alert('Error: ' + error.message); return; }
@@ -4232,7 +4232,7 @@ function AdminPresupuestos({ participantes, federacion, actorNombre }) {
         <thead>
           <tr>
             <th>Equipo</th>
-            <th style={{textAlign:'right'}}>Presupuesto (€)</th>
+            <th style={{textAlign:'right'}}>Presupuesto (M)</th>
             <th></th>
           </tr>
         </thead>
@@ -4756,7 +4756,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
   const [ptsMod,       setPtsMod]       = useState(!!federacion?.puntos_mod_habilitado);
   const [cesiones,     setCesiones]     = useState(federacion?.cesiones_habilitadas ?? true);
   const [duplicados,   setDuplicados]   = useState(!!federacion?.duplicados_habilitado);
-  const [duplValorMin, setDuplValorMin] = useState(federacion?.duplicados_valor_min ?? 0);
+  const [duplValorMin, setDuplValorMin] = useState((federacion?.duplicados_valor_min ?? 0) / 1_000_000);
   const [duplMax,      setDuplMax]      = useState(federacion?.duplicados_max ?? 2);
   const [limpiando,    setLimpiando]    = useState(false);
   const [horaCierre,   setHoraCierre]   = useState(federacion?.hora_cierre_pujas?.slice(0,5) || '');
@@ -4836,7 +4836,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
 
   const guardarDuplicadosCfg = async () => {
     if (!sb || !federacion) return;
-    const vm  = Math.max(0, Number(duplValorMin) || 0);
+    const vm  = Math.max(0, Number(duplValorMin) || 0) * 1_000_000;
     const mx  = Math.max(2, Number(duplMax) || 2);
     const oldVm = federacion.duplicados_valor_min ?? 0;
     const subeUmbral = vm > oldVm;
@@ -4941,7 +4941,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
         <div style={{display:'flex', gap:'1.5rem', padding:'.5rem 0 1rem', flexWrap:'wrap', alignItems:'flex-end', borderBottom:'1px solid var(--borde)'}}>
           <label style={{display:'flex', flexDirection:'column', gap:'.3rem', fontSize:'.9rem'}}>
             <span style={{fontWeight:700}}>Valor mínimo (M€) para duplicar <span style={{fontWeight:400, color:'var(--texto2)'}}>(0 = todos)</span></span>
-            <input type="number" min={0} step={100000} value={duplValorMin}
+            <input type="number" min={0} step={0.01} value={duplValorMin}
                    onChange={e => setDuplValorMin(e.target.value)}
                    style={{width:150, padding:'.4rem .6rem', borderRadius:8,
                            border:'1.5px solid var(--borde)', fontSize:'.9rem', textAlign:'right'}} />
@@ -5002,7 +5002,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
 // ── ADMIN — MI FEDERACIÓN ──────────────────────────────────────
 function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], onParticipantesChange, isModerador, actorNombre }) {
   const [nombre, setNombre]       = useState(federacion?.nombre || '');
-  const [presup, setPresup]       = useState(String(federacion?.presupuesto_inicial ?? 100000000));
+  const [presup, setPresup]       = useState(String((federacion?.presupuesto_inicial ?? 100000000) / 1_000_000));
   const [jornada, setJornada]     = useState(String(federacion?.jornada_actual ?? 1));
   const [maxJug, setMaxJug]       = useState(String(federacion?.max_jugadores ?? 14));
   const [msg, setMsg]             = useState('');
@@ -5078,7 +5078,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const guardar = async () => {
     if (!sb || !federacion) return;
     const nuevoNombre  = nombre.trim() || federacion.nombre;
-    const nuevoPresup  = parseFloat(presup) || federacion.presupuesto_inicial;
+    const nuevoPresup  = parseFloat(presup) * 1_000_000 || federacion.presupuesto_inicial;
     const nuevaJornada = parseInt(jornada) || federacion.jornada_actual;
     const nuevoMaxJug  = Math.max(1, parseInt(maxJug) || federacion.max_jugadores || 14);
     const { error, data } = await sb.from('federaciones')
@@ -5203,7 +5203,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         </div>
         <div style={{minWidth:140}}>
           <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
-            Presupuesto inicial (€)
+            Presupuesto inicial (M)
           </label>
           <input type="number" value={presup} onChange={e => setPresup(e.target.value)}
                  style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
@@ -6226,7 +6226,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
       equipo:        form.equipo.trim(),
       posicion:      form.posicion,
       posicion_alt:  (form.posicion !== 'POR' && form.posicion_alt) ? form.posicion_alt : null,
-      valor_mercado: Number(form.valor),
+      valor_mercado: Number(form.valor) * 1_000_000,
     }).select().single();
     if (errJug) { setMsg('Error: ' + errJug.message); setGuardando(false); return; }
 
@@ -6235,14 +6235,14 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
       const { error: errPl } = await sb.from('plantillas').insert({
         participante_id: form.participante_id,
         jugador_id:      jug.id,
-        precio_compra:   Number(form.valor),
+        precio_compra:   Number(form.valor) * 1_000_000,
       });
       if (errPl) { setMsg('Jugador creado pero error al asignar equipo: ' + errPl.message); setGuardando(false); return; }
 
       // Descontar presupuesto
       const part = participantes.find(p => p.id === form.participante_id);
       if (part) {
-        await sb.from('participantes').update({ presupuesto: part.presupuesto - Number(form.valor) }).eq('id', form.participante_id);
+        await sb.from('participantes').update({ presupuesto: part.presupuesto - Number(form.valor) * 1_000_000 }).eq('id', form.participante_id);
       }
     }
 
@@ -6310,8 +6310,8 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
             </div>
           )}
           <div>
-            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Valor de mercado (€)</label>
-            <input type="number" min="0" value={form.valor} onChange={e => f('valor', e.target.value)} placeholder="Ej: 5000000" style={iS} />
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Valor de mercado (M)</label>
+            <input type="number" min="0" step="0.01" value={form.valor} onChange={e => f('valor', e.target.value)} placeholder="Ej: 5" style={iS} />
           </div>
           <div>
             <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Destino</label>

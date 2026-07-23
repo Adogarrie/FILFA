@@ -9564,7 +9564,30 @@ function LigaH2H({ federacion, participantes }) {
               </div>
               <div className="card">
                 <h2 style={{marginBottom:'.75rem'}}>Jornada {jornada}</h2>
-                {partidos.filter(m => m.jornada === jornada).map(m => <PartidoFila key={m.id} m={m} />)}
+                {(() => {
+                  const msJornada = partidos.filter(m => m.jornada === jornada);
+                  if (!hasDivs) return msJornada.map(m => <PartidoFila key={m.id} m={m} />);
+                  return divIds.slice().sort((a,b) => a - b).map(divId => {
+                    const msDiv = msJornada.filter(m => m.division_id === divId);
+                    if (!msDiv.length) return null;
+                    const divNombre = divisiones.find(d => d.id === divId)?.nombre || `División ${divId}`;
+                    const accentColor = divId === 1 ? 'var(--oro)' : 'var(--borde)';
+                    return (
+                      <div key={divId} style={{marginBottom:'.75rem'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.4rem'}}>
+                          <div style={{flex:1, height:2, borderRadius:1, background:`linear-gradient(90deg, ${accentColor}, transparent)`}} />
+                          <span style={{fontSize:'.72rem', fontWeight:700, letterSpacing:'.06em',
+                                        textTransform:'uppercase', color: divId === 1 ? 'var(--oro)' : 'var(--texto2)',
+                                        whiteSpace:'nowrap', padding:'0 .25rem'}}>
+                            {divNombre}
+                          </span>
+                          <div style={{flex:1, height:2, borderRadius:1, background:`linear-gradient(270deg, ${accentColor}, transparent)`}} />
+                        </div>
+                        {msDiv.map(m => <PartidoFila key={m.id} m={m} />)}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </>
       )}

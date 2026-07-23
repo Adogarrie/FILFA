@@ -5581,8 +5581,8 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     h2h:        federacion?.comodin_banquillo_en_h2h        ?? false,
     torneo:     federacion?.comodin_banquillo_en_torneo     ?? false,
   });
-  const [torneoCapitan,   setTorneoCapitan]   = useState(federacion?.comodin_capitan_torneo_id   ?? '');
-  const [torreoBanquillo, setTorreoBanquillo] = useState(federacion?.comodin_banquillo_torneo_id ?? '');
+  const [torneosCapitan,   setTorneosCapitan]   = useState(federacion?.comodin_capitan_torneo_ids   ?? []);
+  const [torneosBanquillo, setTorneosBanquillo] = useState(federacion?.comodin_banquillo_torneo_ids ?? []);
   const [compsConfig, setCompsConfig] = useState([]);
   const [msgComodin,   setMsgComodin]    = useState('');
 
@@ -5680,11 +5680,11 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       comodin_capitan_en_calendario:   scopeCapitan.calendario,
       comodin_capitan_en_h2h:          scopeCapitan.h2h,
       comodin_capitan_en_torneo:       scopeCapitan.torneo,
-      comodin_capitan_torneo_id:       scopeCapitan.torneo   ? (torneoCapitan   || null) : null,
+      comodin_capitan_torneo_ids:      scopeCapitan.torneo   ? torneosCapitan   : [],
       comodin_banquillo_en_calendario: scopeBanquillo.calendario,
       comodin_banquillo_en_h2h:        scopeBanquillo.h2h,
       comodin_banquillo_en_torneo:     scopeBanquillo.torneo,
-      comodin_banquillo_torneo_id:     scopeBanquillo.torneo ? (torreoBanquillo || null) : null,
+      comodin_banquillo_torneo_ids:    scopeBanquillo.torneo ? torneosBanquillo : [],
     };
     const { error, data } = await sb.from('federaciones').update(updates).eq('id', federacion.id).select().single();
     if (error) { alert('Error: ' + error.message); return; }
@@ -5980,10 +5980,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       {[
         { key:'capitan',   label:'©️ Capitán doble',   desc:'Los puntos del capitán cuentan el doble esa jornada',
           habilitado:comodinCapitan, setHab:setComodinCapitan, max:maxCapitan, setMax:setMaxCapitan,
-          scope:scopeCapitan, setScope:setScopeCapitan, torneo:torneoCapitan, setTorneo:setTorneoCapitan },
+          scope:scopeCapitan, setScope:setScopeCapitan, torneos:torneosCapitan, setTorneos:setTorneosCapitan },
         { key:'banquillo', label:'🔄 Banquillo completo', desc:`Los ${federacion?.max_jugadores??14} jugadores (titulares + suplentes) suman puntos esa jornada`,
           habilitado:comodinBanquillo, setHab:setComodinBanquillo, max:maxBanquillo, setMax:setMaxBanquillo,
-          scope:scopeBanquillo, setScope:setScopeBanquillo, torneo:torreoBanquillo, setTorneo:setTorreoBanquillo },
+          scope:scopeBanquillo, setScope:setScopeBanquillo, torneos:torneosBanquillo, setTorneos:setTorneosBanquillo },
       ].map(cm => (
       <div key={cm.key} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.85rem 1rem', marginBottom:'.75rem'}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
@@ -6023,13 +6023,27 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
                 ))}
               </div>
               {cm.scope.torneo && (
-                <div style={{display:'flex', alignItems:'center', gap:'.4rem', marginTop:'.2rem'}}>
-                  <label style={{fontSize:'.83rem', color:'var(--texto2)'}}>Torneo:</label>
-                  <select value={cm.torneo} onChange={e => cm.setTorneo(e.target.value)}
-                          style={{padding:'.3rem .55rem', borderRadius:7, border:'1.5px solid var(--borde)', fontSize:'.88rem'}}>
-                    <option value="">— elige —</option>
-                    {compsConfig.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                  </select>
+                <div style={{marginTop:'.25rem'}}>
+                  <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>Torneos:</span>
+                  {compsConfig.length === 0
+                    ? <span style={{fontSize:'.8rem', color:'var(--texto2)', marginLeft:'.4rem', fontStyle:'italic'}}>Sin torneos creados aún</span>
+                    : <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem', marginTop:'.25rem'}}>
+                        {compsConfig.map(c => {
+                          const checked = cm.torneos.includes(c.id);
+                          return (
+                            <label key={c.id} style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.83rem', cursor:'pointer',
+                                                       padding:'.22rem .55rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                                       background: checked ? 'rgba(15,80,180,0.18)' : 'rgba(200,225,255,0.40)'}}>
+                              <input type="checkbox" checked={checked}
+                                     onChange={e => cm.setTorneos(prev =>
+                                       e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id)
+                                     )} />
+                              {c.nombre}
+                            </label>
+                          );
+                        })}
+                      </div>
+                  }
                 </div>
               )}
             </div>
@@ -8104,8 +8118,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   // ── Calcular resultado de una ronda de grupo ────────────────
   // Helper: aplica comodines con scope='torneo' sobre un ptsMap dado
   const aplicarComoDinesTorneo = async (pidsArray, jornada) => {
-    const scopeCapT = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_torneo   ?? false) && federacion?.comodin_capitan_torneo_id   === compSel;
-    const scopeBanT = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_torneo ?? false) && federacion?.comodin_banquillo_torneo_id === compSel;
+    const scopeCapT = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_torneo   ?? false) && (federacion?.comodin_capitan_torneo_ids   ?? []).includes(compSel);
+    const scopeBanT = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_torneo ?? false) && (federacion?.comodin_banquillo_torneo_ids ?? []).includes(compSel);
     if (!scopeCapT && !scopeBanT) return null; // sin ajuste
     const {data:comsTorn} = await sb.from('comodines_usados')
       .select('participante_id,tipo').eq('jornada',jornada).in('participante_id',pidsArray);

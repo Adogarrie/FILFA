@@ -7870,6 +7870,410 @@ function AdminMercadoGroup({ participantes, federacion, actorNombre }) {
   );
 }
 
+// ── ADMIN — COMPETICIONES ──────────────────────────────────────
+function AdminCompeticiones({ federacion, participantes, actorNombre }) {
+  const fedId = federacion?.id;
+  const [comps, setComps]         = useState([]);
+  const [fases, setFases]         = useState([]);
+  const [grupos, setGrupos]       = useState([]);
+  const [gMiembros, setGMiembros] = useState({});
+  const [partidos, setPartidos]   = useState([]);
+  const [compSel, setCompSel]     = useState(null);
+  const [faseSel, setFaseSel]     = useState(null);
+  const [showNewComp, setShowNewComp]   = useState(false);
+  const [newCompName, setNewCompName]   = useState('');
+  const [showNewFase, setShowNewFase]   = useState(false);
+  const [newFaseName, setNewFaseName]   = useState('');
+  const [newFaseTipo, setNewFaseTipo]   = useState('grupos');
+  const [showNewGrupo, setShowNewGrupo] = useState(false);
+  const [newGrupoName, setNewGrupoName] = useState('');
+  const [addToGrupo, setAddToGrupo]     = useState(null);
+  const [addPid, setAddPid]             = useState('');
+  const [jRonda, setJRonda]             = useState({});
+  const [sLocal, setSLocal]             = useState('');
+  const [sVisit, setSVisit]             = useState('');
+  const [sNombre, setSNombre]           = useState('');
+  const [sJornada, setSJornada]         = useState('');
+  const [msg, setMsg]   = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const flash  = m => { setMsg(m); setTimeout(() => setMsg(''), 3500); };
+  const nomMap = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
+  const compAct = comps.find(c => c.id === compSel);
+  const faseAct = fases.find(f => f.id === faseSel);
+
+  useEffect(() => { if (fedId) loadComps(); }, [fedId]);
+  useEffect(() => {
+    if (compSel) loadFases(compSel); else { setFases([]); setFaseSel(null); }
+  }, [compSel]);
+  useEffect(() => {
+    if (faseSel) loadFaseDetail(faseSel); else { setGrupos([]); setGMiembros({}); setPartidos([]); }
+  }, [faseSel]);
+
+  const loadComps = async () => {
+    const { data } = await sb.from('competiciones').select('id,nombre,created_at')
+      .eq('federacion_id', fedId).order('created_at');
+    setComps(data || []);
+  };
+  const loadFases = async cid => {
+    const { data } = await sb.from('fases_competicion').select('*')
+      .eq('competicion_id', cid).order('orden');
+    setFases(data || []);
+  };
+  const loadFaseDetail = async fid => {
+    const tipo = fases.find(f => f.id === fid)?.tipo;
+    const [{ data: ps }] = await Promise.all([
+      sb.from('partidos_competicion').select('*').eq('fase_id', fid).order('ronda'),
+    ]);
+    setPartidos(ps || []);
+    if (tipo === 'grupos') {
+      const { data: gs } = await sb.from('grupos_competicion').select('*').eq('fase_id', fid).order('nombre');
+      setGrupos(gs || []);
+      const gids = (gs || []).map(g => g.id);
+      if (gids.length > 0) {
+        const { data: gps } = await sb.from('grupos_participantes').select('grupo_id,participante_id').in('grupo_id', gids);
+        const gm = {};
+        (gps || []).forEach(r => { (gm[r.grupo_id] = gm[r.grupo_id] || []).push(r.participante_id); });
+        setGMiembros(gm);
+      }
+    } else { setGrupos([]); setGMiembros({}); }
+  };
+
+  const crearComp = async () => {
+    if (!newCompName.trim()) return;
+    setBusy(true);
+    const { data, error } = await sb.from('competiciones').insert({
+      federacion_id: fedId, nombre: newCompName.trim(), created_by_nombre: actorNombre,
+    }).select().single();
+    if (!error) {
+      await publicar(fedId, 'admin', `Nueva competición creada: "${newCompName.trim()}"`, actorNombre);
+      setComps(p => [...p, data]); setNewCompName(''); setShowNewComp(false);
+    } else flash('Error: ' + error.message);
+    setBusy(false);
+  };
+  const borrarComp = async id => {
+    if (!confirm('¿Borrar competición y todo su contenido?')) return;
+    await sb.from('competiciones').delete().eq('id', id);
+    setComps(p => p.filter(c => c.id !== id));
+    if (compSel === id) setCompSel(null);
+  };
+  const crearFase = async () => {
+    if (!newFaseName.trim()) return;
+    setBusy(true);
+    const { data, error } = await sb.from('fases_competicion').insert({
+      competicion_id: compSel, federacion_id: fedId,
+      nombre: newFaseName.trim(), tipo: newFaseTipo, orden: fases.length,
+    }).select().single();
+    if (!error) { setFases(p => [...p, data]); setNewFaseName(''); setShowNewFase(false); }
+    else flash('Error: ' + error.message);
+    setBusy(false);
+  };
+  const borrarFase = async id => {
+    if (!confirm('¿Borrar fase y todos sus partidos?')) return;
+    await sb.from('fases_competicion').delete().eq('id', id);
+    setFases(p => p.filter(f => f.id !== id));
+    if (faseSel === id) setFaseSel(null);
+  };
+  const crearGrupo = async () => {
+    if (!newGrupoName.trim()) return;
+    setBusy(true);
+    const { data, error } = await sb.from('grupos_competicion').insert({
+      fase_id: faseSel, federacion_id: fedId, nombre: newGrupoName.trim(),
+    }).select().single();
+    if (!error) { setGrupos(p => [...p, data]); setNewGrupoName(''); setShowNewGrupo(false); }
+    setBusy(false);
+  };
+  const borrarGrupo = async gid => {
+    if (!confirm('¿Borrar grupo y sus partidos?')) return;
+    await sb.from('grupos_competicion').delete().eq('id', gid);
+    setGrupos(p => p.filter(g => g.id !== gid));
+    setGMiembros(p => { const n = {...p}; delete n[gid]; return n; });
+    setPartidos(p => p.filter(m => m.grupo_id !== gid));
+  };
+  const addTeam = async (gid, pid) => {
+    if (!pid) return;
+    const { error } = await sb.from('grupos_participantes').insert({ grupo_id: gid, federacion_id: fedId, participante_id: pid });
+    if (!error) setGMiembros(p => ({ ...p, [gid]: [...(p[gid]||[]), pid] }));
+    else flash('Error al añadir');
+    setAddPid(''); setAddToGrupo(null);
+  };
+  const removeTeam = async (gid, pid) => {
+    await sb.from('grupos_participantes').delete().eq('grupo_id', gid).eq('participante_id', pid);
+    setGMiembros(p => ({ ...p, [gid]: (p[gid]||[]).filter(id => id !== pid) }));
+  };
+  const generarCalendario = async gid => {
+    const miembros = gMiembros[gid] || [];
+    if (miembros.length < 2) { flash('Mínimo 2 equipos'); return; }
+    const exist = partidos.filter(p => p.grupo_id === gid);
+    if (exist.length > 0) {
+      if (!confirm(`Ya hay ${exist.length} partidos. ¿Regenerar? Se borrarán los existentes.`)) return;
+      await sb.from('partidos_competicion').delete().eq('grupo_id', gid);
+      setPartidos(p => p.filter(m => m.grupo_id !== gid));
+    }
+    setBusy(true);
+    const rondas = generarRoundRobin(miembros);
+    const rows = rondas.flatMap(({ ronda, partidos: ps }) =>
+      ps.map(({ localId, visitId }) => ({
+        fase_id: faseSel, federacion_id: fedId, grupo_id: gid,
+        participante_local_id: localId, participante_visitante_id: visitId, ronda,
+      }))
+    );
+    const { data: ins, error } = await sb.from('partidos_competicion').insert(rows).select();
+    if (!error) { setPartidos(p => [...p, ...(ins||[])]); flash(`${rows.length} partidos generados en ${rondas.length} rondas`); }
+    else flash('Error: ' + error.message);
+    setBusy(false);
+  };
+  const asignarJornadaRonda = async (gid, ronda) => {
+    const key = `${gid}_${ronda}`;
+    const j = parseInt(jRonda[key]);
+    if (isNaN(j) || j < 1) { flash('Jornada inválida'); return; }
+    await sb.from('partidos_competicion').update({ jornada_fantasy: j }).eq('grupo_id', gid).eq('ronda', ronda);
+    setPartidos(p => p.map(m => m.grupo_id===gid && m.ronda===ronda ? {...m,jornada_fantasy:j} : m));
+    flash(`J${j} asignada a Ronda ${ronda}`);
+  };
+  const crearSuelto = async () => {
+    if (!sLocal || !sVisit) { flash('Selecciona los dos equipos'); return; }
+    if (sLocal === sVisit) { flash('Los equipos deben ser distintos'); return; }
+    setBusy(true);
+    const nextRonda = partidos.length ? Math.max(...partidos.map(p=>p.ronda))+1 : 1;
+    const { data, error } = await sb.from('partidos_competicion').insert({
+      fase_id: faseSel, federacion_id: fedId, grupo_id: null,
+      participante_local_id: sLocal, participante_visitante_id: sVisit,
+      nombre: sNombre.trim()||null, jornada_fantasy: sJornada ? parseInt(sJornada) : null, ronda: nextRonda,
+    }).select().single();
+    if (!error) { setPartidos(p=>[...p,data]); setSLocal('');setSVisit('');setSNombre('');setSJornada(''); }
+    setBusy(false);
+  };
+  const borrarPartido = async id => {
+    await sb.from('partidos_competicion').delete().eq('id', id);
+    setPartidos(p => p.filter(m => m.id !== id));
+  };
+  const actualizarJornadaSuelto = async (id, val) => {
+    const j = val==='' ? null : parseInt(val)||null;
+    await sb.from('partidos_competicion').update({ jornada_fantasy: j }).eq('id', id);
+    setPartidos(p => p.map(m => m.id===id ? {...m,jornada_fantasy:j} : m));
+  };
+
+  const sBtn = { padding:'.22rem .65rem', borderRadius:6, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', cursor:'pointer', fontSize:'.8rem' };
+  const dBtn = { padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)', color:'#dc3545', cursor:'pointer', fontSize:'.78rem' };
+  const inp  = { padding:'.36rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.82)', fontSize:'.85rem' };
+  const rowB = { display:'flex', alignItems:'center', gap:'.4rem', padding:'.45rem .65rem', borderRadius:7, border:'1.5px solid var(--borde)', marginBottom:'.35rem', background:'rgba(200,225,255,0.40)', flexWrap:'wrap' };
+
+  if (!fedId) return null;
+  return (
+    <div className="card">
+      <div style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'1rem', flexWrap:'wrap'}}>
+        {(compSel||faseSel) && (
+          <button style={sBtn} onClick={() => { if (faseSel) setFaseSel(null); else setCompSel(null); }}>← Volver</button>
+        )}
+        <h2 style={{margin:0, flex:1}}>
+          {!compSel ? 'Torneos' : !faseSel ? compAct?.nombre : `${compAct?.nombre} · ${faseAct?.nombre}`}
+        </h2>
+        {msg && <span style={{fontWeight:600, fontSize:'.85rem', color: msg.startsWith('Error') ? '#dc3545' : 'var(--verde)'}}>{msg}</span>}
+      </div>
+
+      {/* Lista de competiciones */}
+      {!compSel && (<>
+        {comps.length===0 && <p style={{color:'var(--texto2)', marginBottom:'1rem'}}>Sin competiciones.</p>}
+        {comps.map(c => (
+          <div key={c.id} style={rowB}>
+            <span style={{flex:1, fontWeight:600}}>{c.nombre}</span>
+            <button style={sBtn} onClick={() => setCompSel(c.id)}>Gestionar</button>
+            <button style={dBtn} onClick={() => borrarComp(c.id)}>Borrar</button>
+          </div>
+        ))}
+        {showNewComp ? (
+          <div style={{display:'flex', gap:'.4rem', marginTop:'.5rem', flexWrap:'wrap', alignItems:'center'}}>
+            <input placeholder="Nombre de la competición" value={newCompName}
+              onChange={e=>setNewCompName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&crearComp()}
+              style={{...inp, flex:1, minWidth:180}} />
+            <button disabled={busy} className="btn-ok" onClick={crearComp}>Crear</button>
+            <button className="btn-cancel" onClick={()=>{setShowNewComp(false);setNewCompName('');}}>Cancelar</button>
+          </div>
+        ) : (
+          <button style={{...sBtn, marginTop:'.5rem'}} onClick={()=>setShowNewComp(true)}>+ Nueva competición</button>
+        )}
+      </>)}
+
+      {/* Lista de fases */}
+      {compSel && !faseSel && (<>
+        {fases.length===0 && <p style={{color:'var(--texto2)', marginBottom:'1rem'}}>Sin fases. Añade una.</p>}
+        {fases.map(f => (
+          <div key={f.id} style={rowB}>
+            <span style={{flex:1}}>
+              <strong>{f.nombre}</strong>
+              <span style={{marginLeft:'.5rem', fontSize:'.78rem', color:'var(--texto2)'}}>
+                {f.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}
+              </span>
+            </span>
+            <button style={sBtn} onClick={()=>setFaseSel(f.id)}>Gestionar</button>
+            <button style={dBtn} onClick={()=>borrarFase(f.id)}>Borrar</button>
+          </div>
+        ))}
+        {showNewFase ? (
+          <div style={{display:'flex', gap:'.4rem', marginTop:'.5rem', flexWrap:'wrap', alignItems:'center'}}>
+            <input placeholder="Nombre de la fase" value={newFaseName}
+              onChange={e=>setNewFaseName(e.target.value)} style={{...inp, flex:1, minWidth:160}} />
+            <select value={newFaseTipo} onChange={e=>setNewFaseTipo(e.target.value)} style={inp}>
+              <option value="grupos">Fase de grupos</option>
+              <option value="sueltos">Partidos sueltos</option>
+            </select>
+            <button disabled={busy} className="btn-ok" onClick={crearFase}>Añadir</button>
+            <button className="btn-cancel" onClick={()=>{setShowNewFase(false);setNewFaseName('');}}>Cancelar</button>
+          </div>
+        ) : (
+          <button style={{...sBtn, marginTop:'.5rem'}} onClick={()=>setShowNewFase(true)}>+ Añadir fase</button>
+        )}
+      </>)}
+
+      {/* Fase de grupos */}
+      {faseSel && faseAct?.tipo==='grupos' && (<>
+        {grupos.length===0 && <p style={{color:'var(--texto2)', marginBottom:'1rem'}}>Sin grupos. Crea uno primero.</p>}
+        {grupos.map(g => {
+          const miembros = gMiembros[g.id]||[];
+          const mG = partidos.filter(p=>p.grupo_id===g.id);
+          const rondas = [...new Set(mG.map(p=>p.ronda))].sort((a,b)=>a-b);
+          return (
+            <div key={g.id} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.75rem', marginBottom:'.75rem', background:'rgba(200,225,255,0.25)'}}>
+              <div style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.5rem', flexWrap:'wrap'}}>
+                <strong style={{flex:1}}>{g.nombre}</strong>
+                <button style={sBtn} onClick={()=>generarCalendario(g.id)} disabled={busy}>
+                  {mG.length>0 ? '↻ Regenerar' : '⚙ Generar calendario'}
+                </button>
+                <button style={dBtn} onClick={()=>borrarGrupo(g.id)}>Borrar</button>
+              </div>
+              {/* Equipos */}
+              <div style={{marginBottom:'.5rem'}}>
+                <div style={{fontSize:'.78rem', color:'var(--texto2)', fontWeight:600, marginBottom:'.3rem'}}>
+                  Equipos ({miembros.length}){miembros.length>0&&miembros.length%2!==0?' · N impar: habrá bye por ronda':''}
+                </div>
+                <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem', marginBottom:'.4rem'}}>
+                  {miembros.map(pid=>(
+                    <span key={pid} style={{display:'inline-flex', alignItems:'center', gap:'.2rem', padding:'.12rem .4rem', borderRadius:10, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', fontSize:'.78rem'}}>
+                      {nomMap[pid]||pid}
+                      <button onClick={()=>removeTeam(g.id,pid)} style={{border:'none',background:'none',cursor:'pointer',color:'#dc3545',fontWeight:700,fontSize:'.72rem',padding:'0 1px'}}>×</button>
+                    </span>
+                  ))}
+                </div>
+                {addToGrupo===g.id ? (
+                  <div style={{display:'flex', gap:'.3rem', alignItems:'center', flexWrap:'wrap'}}>
+                    <select value={addPid} onChange={e=>setAddPid(e.target.value)} style={{...inp, flex:1, minWidth:140}}>
+                      <option value="">— Selecciona equipo —</option>
+                      {participantes.filter(p=>!miembros.includes(p.id)).map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+                    </select>
+                    <button className="btn-ok" onClick={()=>addTeam(g.id,addPid)}>Añadir</button>
+                    <button className="btn-cancel" onClick={()=>{setAddToGrupo(null);setAddPid('');}}>✕</button>
+                  </div>
+                ) : (
+                  <button style={{...sBtn, fontSize:'.76rem'}} onClick={()=>setAddToGrupo(g.id)}>+ Equipo</button>
+                )}
+              </div>
+              {/* Calendario por rondas */}
+              {rondas.length>0 && (
+                <div style={{marginTop:'.5rem', borderTop:'1px solid var(--borde)', paddingTop:'.5rem'}}>
+                  <div style={{fontSize:'.78rem', color:'var(--texto2)', fontWeight:600, marginBottom:'.35rem'}}>Calendario:</div>
+                  {rondas.map(r => {
+                    const ms = mG.filter(p=>p.ronda===r);
+                    const jornadaAsig = ms[0]?.jornada_fantasy;
+                    const key = `${g.id}_${r}`;
+                    return (
+                      <div key={r} style={{marginBottom:'.45rem', padding:'.4rem .5rem', borderRadius:7, border:'1px solid var(--borde)', background:'rgba(200,225,255,0.18)'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.25rem', flexWrap:'wrap'}}>
+                          <span style={{fontWeight:600, fontSize:'.82rem', minWidth:60}}>Ronda {r}</span>
+                          <span style={{fontSize:'.76rem', color: jornadaAsig ? 'var(--verde)' : 'var(--texto2)'}}>
+                            {jornadaAsig ? `J${jornadaAsig}` : 'Sin jornada'}
+                          </span>
+                          <div style={{display:'flex', gap:'.3rem', marginLeft:'auto', alignItems:'center'}}>
+                            <input type="number" min="1" placeholder="J"
+                              value={jRonda[key]??''} onChange={e=>setJRonda(p=>({...p,[key]:e.target.value}))}
+                              style={{...inp, width:55, textAlign:'center', padding:'.3rem .4rem'}} />
+                            <button style={{...sBtn, fontSize:'.76rem'}} onClick={()=>asignarJornadaRonda(g.id,r)}>Asignar</button>
+                          </div>
+                        </div>
+                        {ms.map(m=>(
+                          <div key={m.id} style={{fontSize:'.8rem', color:'var(--texto2)', display:'flex', alignItems:'center', gap:'.5rem', padding:'.1rem 0'}}>
+                            <span style={{flex:1}}>{nomMap[m.participante_local_id]||'?'} <span style={{opacity:.5}}>vs</span> {nomMap[m.participante_visitante_id]||'?'}</span>
+                            <button style={{...dBtn, fontSize:'.7rem', padding:'.1rem .35rem'}} onClick={()=>borrarPartido(m.id)}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {showNewGrupo ? (
+          <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
+            <input placeholder="Nombre del grupo (ej: Grupo A)" value={newGrupoName}
+              onChange={e=>setNewGrupoName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&crearGrupo()}
+              style={{...inp, flex:1, minWidth:180}} />
+            <button disabled={busy} className="btn-ok" onClick={crearGrupo}>Crear</button>
+            <button className="btn-cancel" onClick={()=>{setShowNewGrupo(false);setNewGrupoName('');}}>Cancelar</button>
+          </div>
+        ) : (
+          <button style={sBtn} onClick={()=>setShowNewGrupo(true)}>+ Nuevo grupo</button>
+        )}
+      </>)}
+
+      {/* Fase de partidos sueltos */}
+      {faseSel && faseAct?.tipo==='sueltos' && (<>
+        {partidos.length===0 && <p style={{color:'var(--texto2)', marginBottom:'.75rem'}}>Sin partidos aún.</p>}
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%', fontSize:'.85rem', borderCollapse:'collapse', marginBottom:'.75rem'}}>
+            {partidos.length>0&&<thead><tr>
+              <th style={{textAlign:'left',padding:'.35rem .5rem',color:'var(--texto2)',fontWeight:600}}>Partido</th>
+              <th style={{textAlign:'center',padding:'.35rem .5rem',color:'var(--texto2)',fontWeight:600}}>Jornada</th>
+              <th></th>
+            </tr></thead>}
+            <tbody>
+              {partidos.map(m=>(
+                <tr key={m.id} style={{borderBottom:'1px solid var(--gris)'}}>
+                  <td style={{padding:'.35rem .5rem'}}>
+                    {m.nombre&&<span style={{fontSize:'.76rem',color:'var(--texto2)',display:'block'}}>{m.nombre}</span>}
+                    <span style={{fontWeight:600}}>{nomMap[m.participante_local_id]}</span>
+                    <span style={{color:'var(--texto2)',margin:'0 .3rem'}}>vs</span>
+                    <span style={{fontWeight:600}}>{nomMap[m.participante_visitante_id]}</span>
+                  </td>
+                  <td style={{textAlign:'center',padding:'.35rem .5rem'}}>
+                    <input type="number" min="1" placeholder="—" defaultValue={m.jornada_fantasy||''}
+                      onBlur={e=>actualizarJornadaSuelto(m.id,e.target.value)}
+                      style={{...inp,width:65,textAlign:'center',padding:'.28rem .4rem'}} />
+                  </td>
+                  <td style={{textAlign:'right',padding:'.35rem .5rem'}}>
+                    <button style={dBtn} onClick={()=>borrarPartido(m.id)}>×</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'flex-end', padding:'.65rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.25)'}}>
+          {[['Local',sLocal,setSLocal],['Visitante',sVisit,setSVisit]].map(([label,val,set])=>(
+            <div key={label} style={{display:'flex',flexDirection:'column',gap:'.18rem',flex:1,minWidth:130}}>
+              <label style={{fontSize:'.76rem',color:'var(--texto2)'}}>{label}</label>
+              <select value={val} onChange={e=>set(e.target.value)} style={inp}>
+                <option value="">—</option>
+                {participantes.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+            </div>
+          ))}
+          <div style={{display:'flex',flexDirection:'column',gap:'.18rem',flex:1,minWidth:110}}>
+            <label style={{fontSize:'.76rem',color:'var(--texto2)'}}>Nombre/fase (opc.)</label>
+            <input placeholder="ej: Final" value={sNombre} onChange={e=>setSNombre(e.target.value)} style={inp} />
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:'.18rem',minWidth:70}}>
+            <label style={{fontSize:'.76rem',color:'var(--texto2)'}}>Jornada</label>
+            <input type="number" min="1" placeholder="—" value={sJornada} onChange={e=>setSJornada(e.target.value)} style={{...inp,width:70}} />
+          </div>
+          <button disabled={busy} className="btn-ok" onClick={crearSuelto} style={{alignSelf:'flex-end'}}>Añadir</button>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador, actorNombre }) {
   const TABS_DEF = [
     ['federacion',   'Mi Federación'],
@@ -7880,6 +8284,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['mercado',      'Mercado'],
     ['jugadores',    'Jugadores'],
     ['h2h',          'Liga H2H'],
+    ['torneos',      'Torneos'],
   ];
   const primera = TABS_DEF[0][0];
   const [subtab, setSubtab] = useState(primera);
@@ -7909,6 +8314,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'mercado'     && <AdminMercadoGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
       {subtab === 'jugadores'   && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
       {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
+      {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
     </div>
   );
 }
@@ -8031,6 +8437,234 @@ function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccion
 }
 
 // ── COMPETICIONES ───────────────────────────────────────────────
+// ── VISTA TORNEOS (usuario) ────────────────────────────────────
+function TorneosVista({ federacion, participantes }) {
+  const fedId  = federacion?.id;
+  const baremo = useMemo(() => {
+    try { return JSON.parse(federacion?.h2h_baremo||'null')||BAREMO_DEFAULT; }
+    catch { return BAREMO_DEFAULT; }
+  }, [federacion?.h2h_baremo]);
+
+  const [comps, setComps]       = useState([]);
+  const [compSel, setCompSel]   = useState(null);
+  const [fases, setFases]       = useState([]);
+  const [grupos, setGrupos]     = useState([]);
+  const [gMiembros, setGMiembros] = useState({});
+  const [partidos, setPartidos] = useState([]);
+  const [clasMap, setClasMap]   = useState({});
+  const [cargando, setCargando] = useState(false);
+
+  const nomMap = Object.fromEntries(participantes.map(p => [p.id, p]));
+
+  useEffect(() => {
+    if (!sb||!fedId) return;
+    sb.from('competiciones').select('id,nombre').eq('federacion_id',fedId).order('created_at')
+      .then(({data})=>setComps(data||[]));
+  }, [fedId]);
+
+  useEffect(() => {
+    if (!compSel||!fedId) return;
+    setCargando(true);
+    (async () => {
+      const {data:fs} = await sb.from('fases_competicion').select('*').eq('competicion_id',compSel).order('orden');
+      setFases(fs||[]);
+      const faseIds = (fs||[]).map(f=>f.id);
+      if (!faseIds.length) { setCargando(false); return; }
+      const {data:gs} = await sb.from('grupos_competicion').select('*').in('fase_id',faseIds).order('nombre');
+      setGrupos(gs||[]);
+      const gids = (gs||[]).map(g=>g.id);
+      let gm = {};
+      if (gids.length>0) {
+        const {data:gps} = await sb.from('grupos_participantes').select('grupo_id,participante_id').in('grupo_id',gids);
+        (gps||[]).forEach(r=>{(gm[r.grupo_id]=gm[r.grupo_id]||[]).push(r.participante_id);});
+      }
+      setGMiembros(gm);
+      const {data:ps} = await sb.from('partidos_competicion').select('*').in('fase_id',faseIds).order('ronda');
+      setPartidos(ps||[]);
+      const jornadas = [...new Set((ps||[]).map(p=>p.jornada_fantasy).filter(Boolean))];
+      if (jornadas.length>0) {
+        const allPids = [...new Set([...(ps||[]).map(p=>p.participante_local_id),...(ps||[]).map(p=>p.participante_visitante_id)])];
+        const {data:cls} = await sb.from('clasificacion').select('participante_id,jornada,puntos_jornada')
+          .in('participante_id',allPids).in('jornada',jornadas);
+        const cm = {};
+        (cls||[]).forEach(r=>{if(!cm[r.participante_id])cm[r.participante_id]={};cm[r.participante_id][r.jornada]=r.puntos_jornada??0;});
+        setClasMap(cm);
+      } else setClasMap({});
+      setCargando(false);
+    })();
+  }, [compSel, fedId]);
+
+  const resPartido = m => {
+    if (!m.jornada_fantasy) return null;
+    const j=m.jornada_fantasy;
+    const pL=(clasMap[m.participante_local_id]||{})[j]??0, pV=(clasMap[m.participante_visitante_id]||{})[j]??0;
+    return {gL:ptsToGoles(pL,baremo), gV:ptsToGoles(pV,baremo), pL, pV};
+  };
+
+  const Equipo = ({pid}) => {
+    const p=nomMap[pid];
+    return (<span style={{display:'inline-flex',alignItems:'center',gap:'.3rem'}}>
+      {p?.escudo_url&&<img src={p.escudo_url} alt="" style={{width:15,height:15,objectFit:'contain'}} />}
+      <span>{p?.nombre||'?'}</span>
+    </span>);
+  };
+
+  if (comps.length===0) return (
+    <div className="card"><h2>Torneos</h2>
+      <p style={{color:'var(--texto2)',marginTop:'.5rem'}}>No hay competiciones creadas aún.</p>
+    </div>
+  );
+
+  if (!compSel) return (
+    <div className="card"><h2>Torneos</h2>
+      <div style={{display:'flex',flexWrap:'wrap',gap:'.5rem',marginTop:'.5rem'}}>
+        {comps.map(c=>(
+          <button key={c.id} onClick={()=>setCompSel(c.id)}
+            style={{padding:'.5rem 1.1rem',borderRadius:8,border:'1.5px solid var(--borde)',
+              background:'rgba(200,225,255,0.85)',cursor:'pointer',fontWeight:600,fontSize:'.9rem'}}>
+            {c.nombre}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const compNombre = comps.find(c=>c.id===compSel)?.nombre;
+  return (
+    <div>
+      <div style={{marginBottom:'.5rem'}}>
+        <button onClick={()=>{setCompSel(null);setFases([]);setGrupos([]);setPartidos([]);}}
+          style={{padding:'.28rem .7rem',borderRadius:7,border:'1.5px solid var(--borde)',
+            background:'rgba(200,225,255,0.85)',cursor:'pointer',fontSize:'.82rem'}}>
+          ← Torneos
+        </button>
+      </div>
+      <div className="card" style={{marginBottom:'.5rem'}}><h2>{compNombre}</h2></div>
+      {cargando ? <div className="loading">Cargando...</div> : fases.map(fase=>(
+        <div key={fase.id}>
+          <div style={{fontWeight:700,fontSize:'.9rem',margin:'.75rem 0 .4rem',padding:'.4rem .75rem',
+            borderRadius:7,background:'rgba(15,32,68,.09)',borderLeft:'3px solid var(--verde)'}}>
+            {fase.nombre}
+            <span style={{marginLeft:'.5rem',fontSize:'.74rem',color:'var(--texto2)',fontWeight:400}}>
+              {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}
+            </span>
+          </div>
+
+          {/* Grupos */}
+          {fase.tipo==='grupos' && grupos.filter(g=>g.fase_id===fase.id).map(grupo=>{
+            const miembros = gMiembros[grupo.id]||[];
+            const mG = partidos.filter(p=>p.grupo_id===grupo.id);
+            const rondas = [...new Set(mG.map(p=>p.ronda))].sort((a,b)=>a-b);
+            const standings = calcularStandingsGrupo(mG, clasMap, miembros, baremo);
+            return (
+              <div key={grupo.id} className="card" style={{marginBottom:'.5rem'}}>
+                <h2 style={{marginBottom:'.75rem'}}>{grupo.nombre}</h2>
+                {/* Tabla de clasificación */}
+                <div style={{overflowX:'auto',marginBottom:'1rem'}}>
+                  <table style={{fontSize:'.82rem',borderCollapse:'collapse',minWidth:360}}>
+                    <thead><tr>
+                      <th style={{textAlign:'left',padding:'.38rem .5rem',color:'var(--texto2)'}}>Equipo</th>
+                      {['PJ','G','E','P','GF','GC','Dif','Pts'].map(h=>(
+                        <th key={h} style={{textAlign:'right',padding:'.38rem .5rem',color:'var(--texto2)'}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {standings.map((row,i)=>{
+                        const p=nomMap[row.pid];
+                        const gd=row.gf-row.gc;
+                        return (
+                          <tr key={row.pid} style={{borderTop:'1px solid var(--gris)',background:i===0?'rgba(15,32,68,.04)':undefined}}>
+                            <td style={{padding:'.38rem .5rem',fontWeight:i===0?700:400}}>
+                              <span style={{display:'inline-flex',alignItems:'center',gap:'.35rem'}}>
+                                {p?.escudo_url&&<img src={p.escudo_url} alt="" style={{width:15,height:15,objectFit:'contain'}} />}
+                                {p?.nombre||row.pid}
+                              </span>
+                            </td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem',color:'var(--texto2)'}}>{row.pj}</td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.g}</td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.e}</td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.p}</td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.gf}</td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.gc}</td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem',
+                              color:gd>=0?'var(--verde)':'#dc3545',fontWeight:600}}>
+                              {gd>=0?'+':''}{gd}
+                            </td>
+                            <td style={{textAlign:'right',padding:'.38rem .5rem',fontWeight:800,fontSize:'.98rem'}}>{row.pts}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Partidos por ronda */}
+                {rondas.map(r=>{
+                  const ms=mG.filter(p=>p.ronda===r);
+                  const jornada=ms[0]?.jornada_fantasy;
+                  return (
+                    <div key={r} style={{marginBottom:'.5rem'}}>
+                      <div style={{fontSize:'.76rem',fontWeight:700,color:'var(--texto2)',marginBottom:'.2rem'}}>
+                        Ronda {r}{jornada?` · J${jornada}`:' · Jornada TBD'}
+                      </div>
+                      {ms.map(m=>{
+                        const res=resPartido(m);
+                        return (
+                          <div key={m.id} style={{display:'flex',alignItems:'center',gap:'.4rem',
+                            padding:'.28rem .4rem',borderRadius:6,marginBottom:'.18rem',fontSize:'.83rem',
+                            background:res?'rgba(200,225,255,0.40)':'rgba(200,225,255,0.18)'}}>
+                            <span style={{flex:1,textAlign:'right',fontWeight:600}}><Equipo pid={m.participante_local_id} /></span>
+                            <span style={{minWidth:55,textAlign:'center',fontWeight:800,
+                              fontSize:res?'.92rem':'.82rem',color:res?'var(--texto)':'var(--texto2)'}}>
+                              {res?`${res.gL} — ${res.gV}`:'vs'}
+                            </span>
+                            <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
+                            {res&&<span style={{fontSize:'.7rem',color:'var(--texto2)',whiteSpace:'nowrap'}}>({res.pL}–{res.pV} pts)</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                {rondas.length===0&&<p style={{color:'var(--texto2)',fontSize:'.85rem'}}>Calendario pendiente.</p>}
+              </div>
+            );
+          })}
+
+          {/* Partidos sueltos */}
+          {fase.tipo==='sueltos' && (
+            <div className="card" style={{marginBottom:'.5rem'}}>
+              {partidos.filter(p=>p.fase_id===fase.id).length===0
+                ? <p style={{color:'var(--texto2)',fontSize:'.85rem'}}>Sin partidos.</p>
+                : partidos.filter(p=>p.fase_id===fase.id).map(m=>{
+                  const res=resPartido(m);
+                  return (
+                    <div key={m.id} style={{display:'flex',alignItems:'center',gap:'.4rem',
+                      padding:'.38rem .5rem',borderRadius:7,border:'1px solid var(--gris)',
+                      marginBottom:'.3rem',fontSize:'.85rem',
+                      background:res?'rgba(200,225,255,0.40)':'rgba(200,225,255,0.18)'}}>
+                      {m.nombre&&<span style={{fontSize:'.74rem',color:'var(--texto2)',minWidth:70,flexShrink:0}}>{m.nombre}</span>}
+                      <span style={{flex:1,textAlign:'right',fontWeight:600}}><Equipo pid={m.participante_local_id} /></span>
+                      <span style={{fontWeight:800,fontSize:res?'.92rem':'.85rem',minWidth:60,textAlign:'center',
+                        color:res?'var(--texto)':'var(--texto2)'}}>
+                        {res?`${res.gL} — ${res.gV}`:'vs'}
+                      </span>
+                      <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
+                      {res&&<span style={{fontSize:'.7rem',color:'var(--texto2)',whiteSpace:'nowrap'}}>({res.pL}–{res.pV} pts)</span>}
+                      <span style={{fontSize:'.74rem',fontWeight:700,
+                        color:m.jornada_fantasy?'var(--verde)':'var(--texto2)',whiteSpace:'nowrap'}}>
+                        {m.jornada_fantasy?`J${m.jornada_fantasy}`:'TBD'}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Competiciones({ federacion, participantes }) {
   const [tab, setTab] = useState('calendario');
   return (
@@ -8040,12 +8674,17 @@ function Competiciones({ federacion, participantes }) {
                 onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='h2h'?'active':''}`}
                 onClick={() => setTab('h2h')}>Liga H2H</button>
+        <button className={`tab ${tab==='torneos'?'active':''}`}
+                onClick={() => setTab('torneos')}>Torneos</button>
       </div>
       {tab === 'calendario' && (
         <CalendarioFantasy participantes={participantes} federacion={federacion} />
       )}
       {tab === 'h2h' && (
         <LigaH2H federacion={federacion} participantes={participantes} />
+      )}
+      {tab === 'torneos' && (
+        <TorneosVista federacion={federacion} participantes={participantes} />
       )}
     </div>
   );
@@ -8903,6 +9542,59 @@ function ptsToGoles(pts, baremo) {
     if (pts >= min && (pts <= max || i === baremo.length - 1)) return g;
   }
   return 0;
+}
+
+// ── Round-robin con bye si N es impar ─────────────────────────
+function generarRoundRobin(equipos) {
+  const hasBye = equipos.length % 2 !== 0;
+  const lista  = hasBye ? [...equipos, null] : [...equipos];
+  const N = lista.length;
+  const rondas = [];
+  for (let r = 0; r < N - 1; r++) {
+    const ps = [];
+    for (let i = 0; i < N / 2; i++) {
+      const l = lista[i], v = lista[N - 1 - i];
+      if (l !== null && v !== null) ps.push({ localId: l, visitId: v });
+    }
+    rondas.push({ ronda: r + 1, partidos: ps });
+    lista.splice(1, 0, lista.pop()); // rotar manteniendo el primero fijo
+  }
+  return rondas;
+}
+
+// ── Standings de un grupo (baremo H2H aplicado) ───────────────
+function calcularStandingsGrupo(matches, clasMap, memberIds, baremo) {
+  const tabla = {};
+  for (const pid of memberIds) tabla[pid] = { pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0 };
+  for (const m of matches) {
+    const { participante_local_id: lid, participante_visitante_id: vid, jornada_fantasy: j } = m;
+    if (!j) continue;
+    const pL = (clasMap[lid]||{})[j]??0, pV = (clasMap[vid]||{})[j]??0;
+    const gL = ptsToGoles(pL, baremo),    gV = ptsToGoles(pV, baremo);
+    if (!tabla[lid]) tabla[lid] = { pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0 };
+    if (!tabla[vid]) tabla[vid] = { pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0 };
+    tabla[lid].pj++; tabla[lid].gf += gL; tabla[lid].gc += gV;
+    tabla[vid].pj++; tabla[vid].gf += gV; tabla[vid].gc += gL;
+    if      (gL > gV) { tabla[lid].g++; tabla[lid].pts+=3; tabla[vid].p++; }
+    else if (gV > gL) { tabla[vid].g++; tabla[vid].pts+=3; tabla[lid].p++; }
+    else              { tabla[lid].e++; tabla[lid].pts++;   tabla[vid].e++; tabla[vid].pts++; }
+  }
+  return Object.entries(tabla).map(([pid, s]) => ({ pid, ...s })).sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    const gdB = b.gf-b.gc, gdA = a.gf-a.gc;
+    if (gdB !== gdA) return gdB - gdA;
+    if (b.gf !== a.gf) return b.gf - a.gf;
+    const dm = matches.find(m => m.jornada_fantasy && (
+      (m.participante_local_id===a.pid && m.participante_visitante_id===b.pid) ||
+      (m.participante_local_id===b.pid && m.participante_visitante_id===a.pid)
+    ));
+    if (dm) {
+      const j = dm.jornada_fantasy;
+      return ptsToGoles((clasMap[b.pid]||{})[j]??0, baremo)
+           - ptsToGoles((clasMap[a.pid]||{})[j]??0, baremo);
+    }
+    return 0;
+  });
 }
 
 // Determina a qué vuelta pertenece una jornada y sus puntos de local.

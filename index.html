@@ -3238,6 +3238,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange })
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
     admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
+    nuevo_miembro: '🎉',
   };
 
   const fmtFecha = ts => {
@@ -3647,7 +3648,7 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
     });
     setCargando(false);
     if (errPart) { setError('Error al crear el equipo: ' + errPart.message); return; }
-    publicar(fedActual.id, 'admin', `${nombreEquipo.trim()} se une a la federación`);
+    publicar(fedActual.id, 'nuevo_miembro', `¡${nombreEquipo.trim()} se ha unido a la federación!`);
     onDone();
   };
 

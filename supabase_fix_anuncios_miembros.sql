@@ -25,7 +25,7 @@ create policy "Insertar anuncios"
      ))
     or
     -- Miembros: notificaciones automáticas de sus propias acciones
-    (tipo in ('fichaje', 'venta', 'alineacion', 'oferta', 'traspaso')
+    (tipo in ('fichaje', 'venta', 'alineacion', 'oferta', 'traspaso', 'nuevo_miembro')
      and federacion_id in (
        select federacion_id from participantes where user_id = auth.uid()
      ))

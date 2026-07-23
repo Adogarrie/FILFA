@@ -209,7 +209,7 @@ if (!esDemo) {
 }
 
 // ── UTILIDADES ─────────────────────────────────────────────────
-const fmt = n => new Intl.NumberFormat('es-ES').format(n) + ' €';
+const fmt = n => new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(n / 1_000_000) + 'M';
 const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
 
 // ── Tamaño global de escudos (px) — editar aquí para cambiar todos a la vez

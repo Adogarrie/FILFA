@@ -11052,7 +11052,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
         ['Límite de jugadores', `Cada equipo puede tener como máximo ${maxJugadores} jugadores en su plantilla activa. Si ya tienes ${maxJugadores} y fichas uno nuevo, el jugador queda en "Fichajes pendientes" hasta que liberes un hueco.`],
         ['Presupuesto', 'Cada equipo dispone de un presupuesto inicial fijado por el admin. Cada fichaje descuenta su precio de tu presupuesto. Si vendes o liberas un jugador, recuperas su valor de mercado actual.'],
         ['Liberar jugadores', 'Puedes vender un jugador desde Mi Plantilla. Recibirás su valor de mercado actual (no necesariamente lo que pagaste por él).'],
-        ['Escudo del equipo', 'Puedes subir una imagen como escudo del equipo desde Equipos → Editar perfil. El escudo aparece en el calendario, clasificaciones y en la vista de tu equipo.'],
+        ['Perfil del equipo', 'Puedes editar el nombre de tu equipo, el nombre del entrenador y el nombre del estadio desde Equipos → Editar perfil. También puedes subir una imagen como escudo. Todos estos cambios quedan reflejados automáticamente en el tablón de anuncios.'],
       ]
     },
     {
@@ -11097,6 +11097,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
         ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
         ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al primer suplente cuya posición sea compatible con alguna de las formaciones permitidas. Se da prioridad a los suplentes que hayan jugado algún minuto. Si el suplente tiene doble posición, puede entrar en cualquiera de sus dos posiciones siempre que una encaje con la formación. Los porteros no participan en este mecanismo.'],
+        ['Partidos aplazados', 'Si el partido de un equipo real queda aplazado, el admin lo marca y los jugadores afectados muestran el indicador ⏸ APL en tu alineación. Puedes cambiar esos jugadores aunque la jornada ya esté cerrada.'],
       ]
     },
     {
@@ -11115,6 +11116,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       contenido: [
         ['Enviar una oferta', 'Desde Equipos → ficha de otro equipo, pulsa el botón de oferta junto a cualquiera de sus jugadores e introduce el importe. La oferta llega al equipo propietario.'],
         ['Recibir y gestionar', 'En Mercado → Ofertas verás las ofertas recibidas. Puedes aceptarlas o rechazarlas. Al aceptar, el jugador pasa a fichajes pendientes del comprador y el dinero se transfiere inmediatamente.'],
+        ['Rechazar una oferta', 'Al rechazar una oferta, el hecho queda registrado automáticamente en el tablón para que todos los equipos lo vean.'],
         ['Editar o retirar', 'En Mercado → Ofertas → Enviadas puedes editar el importe o retirar una oferta que aún esté pendiente.'],
         ['Mercado cerrado', 'El admin puede deshabilitar las ventas. Con el mercado cerrado no se pueden enviar ni aceptar ofertas.'],
       ]
@@ -11124,7 +11126,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       titulo: '🔄 Cesiones',
       contenido: [
         ['¿Qué es una cesión?', 'Permite solicitar el préstamo temporal de un jugador libre del mercado (sin equipo fantasy) para una jornada concreta. Los puntos cuentan al 100 % a tu favor.'],
-        ['Cómo solicitarla', 'Desde Mi Plantilla → Cesiones, elige la jornada y el jugador libre que quieres. La solicitud queda pendiente de aprobación del administrador.'],
+        ['Cómo solicitarla', 'Desde Mi Plantilla → Cesiones, elige la jornada y el jugador libre que quieres. La solicitud queda pendiente de aprobación del administrador y aparece automáticamente en el tablón.'],
         ['Aprobación', 'Solo el admin puede aprobar o rechazar cada solicitud. Recibirás una notificación en el tablón cuando se resuelva.'],
         ['Condición', 'Solo puedes ceder jugadores que no pertenezcan a ningún equipo fantasy en el momento de la solicitud. Si el jugador es fichado antes de que el admin la apruebe, la cesión puede quedar sin efecto.'],
         ['Habilitación', 'El admin puede activar o desactivar las cesiones. Con esta opción desactivada no se pueden enviar nuevas solicitudes, aunque las ya aprobadas siguen siendo válidas.'],
@@ -11153,30 +11155,49 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       ]
     },
     {
+      id: 'competiciones',
+      titulo: '🏆 Competiciones',
+      contenido: [
+        ['Secciones disponibles', 'La pestaña Competiciones agrupa tres ligas: Liga Fantástica (puntuaciones fantasy acumuladas), Liga FILFA (enfrentamientos H2H entre equipos) y Torneos (fases de grupos y eliminatorias).'],
+        ['Liga Fantástica — Clasificación', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. La pestaña se abre en esta vista por defecto.'],
+        ['Liga Fantástica — Clasificación Por Jornada', 'Muestra el ranking de equipos para una jornada individual. Pulsa cualquier equipo para ver los jugadores que alineó esa jornada y los puntos de cada uno.'],
+        ['Liga Fantástica — Estadísticas', 'Recoge métricas avanzadas por equipo: media de puntos, máximo y mínimo histórico, jornadas ganadas, desviación típica y contador de jornadas liderando la clasificación o en el podio.'],
+        ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
+        ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],
+        ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
+        ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
+      ]
+    },
+    {
       id: 'tablon',
       titulo: '📣 Tablón de anuncios',
       contenido: [
-        ['¿Qué aparece?', 'El tablón recoge automáticamente los eventos importantes de la federación: fichajes, traspasos, cambios de nombre, entrenadores, resultados de pujas, etc.'],
+        ['¿Qué aparece?', 'El tablón recoge automáticamente los eventos importantes de la federación: fichajes, traspasos, resultados de pujas, cambios de perfil de equipo (nombre, entrenador, estadio, escudo), solicitudes de cesión, rechazos de oferta y comunicados del admin.'],
+        ['Cambios de perfil', 'Cada vez que un equipo cambia su nombre, entrenador o estadio, o sube un nuevo escudo, el evento queda registrado automáticamente en el tablón.'],
+        ['Cesiones y ofertas', 'Al enviar una solicitud de cesión o rechazar una oferta, el hecho aparece en el tablón para que toda la federación esté informada.'],
         ['Anuncios del admin', 'El admin puede publicar mensajes personalizados en el tablón para comunicar noticias a todos los equipos.'],
-        ['Información de la federación', 'La pestaña "Información" dentro del Tablón permite al admin publicar contenido fijo: bloques de texto (reglamento, normas), enlaces externos y imágenes. Los bloques se pueden reordenar, editar y eliminar en cualquier momento.'],
+        ['Información de la federación', 'La pestaña "Información" dentro del Tablón permite al admin publicar contenido fijo: bloques de texto (reglamento, normas), enlaces externos e imágenes. Los bloques se pueden reordenar, editar y eliminar en cualquier momento.'],
       ]
     },
     {
       id: 'admin',
       titulo: '🛠 Rol del Admin',
       contenido: [
-        ['Panel de administración', 'El panel admin está organizado en pestañas principales: Mi Federación, Equipos, Pts Jugadores, Presupuestos, Ajustes Generales, Mercado, Jugadores y Liga FILFA. Algunas pestañas agrupan sub-pestañas relacionadas para mantener el panel ordenado.'],
+        ['Panel de administración', 'El panel admin está organizado en pestañas: Mi Federación, Equipos, Pts Jugadores, Presupuestos, Ajustes Generales, Mercado, Jugadores, Liga FILFA y Torneos.'],
         ['Gestión de la federación', 'Desde Admin → Mi Federación el admin configura el nombre, logo, presupuesto inicial, jornada actual, hora de cierre de pujas y el número máximo de jugadores por plantilla.'],
+        ['Colores de clasificación', 'El admin puede asignar colores de fondo y texto a cada puesto de la clasificación desde Admin → Mi Federación → Colores de clasificación. Los colores se configuran de forma independiente para Liga Fantástica, Liga FILFA y fases de grupos, y se aplican a todos los usuarios de la federación.'],
         ['Máx. jugadores por plantilla', `El límite de jugadores por equipo (por defecto ${maxJugadores}) es configurable por el admin desde Mi Federación. Los equipos que ya superan el nuevo límite conservan sus jugadores; simplemente no podrán fichar más hasta que bajen de él.`],
         ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno. Esta opción está en Admin → Ajustes Generales.'],
         ['Cierres de pujas', 'La hora de cierre automático y la ejecución manual del cierre están en Admin → Ajustes Generales → Cierres.'],
         ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos desde Admin → Equipos.'],
         ['Gestión de jugadores', 'Desde Admin → Jugadores el admin puede añadir, eliminar y marcar como lesionado a cualquier jugador. También puede asignar o quitar la posición alternativa (doble posición) de jugadores no porteros.'],
         ['Doble posición', 'El admin (y los moderadores) pueden asignar una posición alternativa a cualquier jugador no portero desde Admin → Jugadores. Los jugadores con doble posición pueden ser alineados en cualquiera de sus dos posiciones por su equipo fantasy.'],
-        ['Introducir puntuaciones', 'Desde Admin → Pts Jugadores el admin introduce los puntos de cada jugador por jornada. La sub-pestaña "No Jugaron" permite marcar quién no disputó minutos para aplicar las sustituciones automáticas y recalcular la clasificación.'],
+        ['Introducir puntuaciones', 'Desde Admin → Pts Jugadores el admin introduce los puntos de cada jugador por jornada. Los partidos aplazados se marcan por equipo real: al pulsar "⏸ Aplazar" en la cabecera de un equipo, todos sus jugadores quedan marcados como aplazados y los usuarios pueden modificar su alineación aunque la jornada esté cerrada.'],
         ['Pujas, fichajes y cesiones', 'Todas las operaciones de mercado están agrupadas en Admin → Mercado: sub-pestañas Pujas (ver y resolver adjudicaciones), Fich. Pendientes (activar o descartar fichajes en espera) y Cesiones (aprobar o rechazar solicitudes de préstamo).'],
         ['Sorteo', 'Solo el admin puede lanzar el sorteo aleatorio de jugadores (Admin → Ajustes Generales).'],
         ['Jugadores duplicados', 'El admin puede permitir que un mismo jugador (no porteros) pertenezca a varios equipos a la vez. Configura el valor mínimo de mercado y el número máximo de copias. Al desactivar o subir el umbral, el sistema elimina las copias extra con reembolso automático.'],
+        ['Liga FILFA — plantillas para copiar', 'Desde Admin → Liga FILFA → Resultados, cada jornada dispone de tres botones para copiar al portapapeles: "Copiar plantilla En Directo" (resultado en vivo), "Copiar plantilla Partido" (solo los emparejamientos) y "Copiar plantilla Resultados" (resultado final con goles y puntos fantasy).'],
+        ['Descargar Excel', 'El admin puede descargar los datos de cada competición en formato Excel (.xlsx) usando el botón ⬇ Excel de las pestañas de Liga Fantástica, Liga FILFA y Torneos. Cada archivo incluye varias hojas: clasificación, estadísticas, calendario y —en Liga Fantástica— también la clasificación por jornada.'],
       ]
     },
     {
@@ -11184,7 +11205,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       titulo: '👮 Rol del Moderador',
       contenido: [
         ['¿Qué es un moderador?', 'El admin puede otorgar permisos de moderador a un equipo. El moderador tiene acceso al panel de administración con capacidades reducidas.'],
-        ['Permisos', 'El moderador puede introducir puntuaciones de jugadores, gestionar la sub-pestaña "No Jugaron", y asignar o quitar la posición alternativa de jugadores desde Admin → Jugadores. No puede modificar la configuración general de la federación, eliminar equipos ni ejecutar el sorteo.'],
+        ['Permisos', 'El moderador puede introducir puntuaciones de jugadores, gestionar la sub-pestaña "No Jugaron", marcar partidos como aplazados por equipo y asignar o quitar la posición alternativa de jugadores desde Admin → Jugadores. No puede modificar la configuración general de la federación, eliminar equipos ni ejecutar el sorteo.'],
       ]
     },
   ];

@@ -1290,6 +1290,49 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       cupoMax[pos]    = Math.max(0, MAX_POS[pos] - (conteo[pos]||0));
     }
 
+    // Fetch fresco de BD para construir el pool sin datos obsoletos del estado React
+    const fedPartIds = (participantes || []).map(p => p.id);
+    const miDiv = participantes.find(p => p.id === participanteId)?.division_id;
+    let plantsFreshPool = [], pendsFreshPool = [];
+    if (fedPartIds.length > 0) {
+      const [{ data: pf }, { data: pe }] = await Promise.all([
+        sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', fedPartIds),
+        sb.from('fichajes_pendientes').select('jugador_id, participante_id').in('participante_id', fedPartIds),
+      ]);
+      plantsFreshPool = pf || [];
+      pendsFreshPool  = pe || [];
+    }
+    const misJugFrescos = new Set();
+    const porteriasBloq = new Set();
+    const conteosPool   = {};
+    for (const p of [...plantsFreshPool, ...pendsFreshPool]) {
+      const jug = jugadoresMap.get(p.jugador_id);
+      if (!jug) continue;
+      if (p.participante_id === participanteId) misJugFrescos.add(p.jugador_id);
+      if (jug.posicion === 'POR') {
+        const fantasia = participantes.find(x => x.id === p.participante_id);
+        if (fantasia?.division_id === miDiv) porteriasBloq.add(jug.equipo);
+      } else {
+        conteosPool[p.jugador_id] = (conteosPool[p.jugador_id] || 0) + 1;
+      }
+    }
+    const porEquipoPool = {}, restoPool = [];
+    for (const j of (jugadores || [])) {
+      if (misJugFrescos.has(j.id)) continue;
+      if (j.posicion === 'POR') {
+        if (porteriasBloq.has(j.equipo)) continue;
+        const vm = j.valor_mercado || 0;
+        if (!porEquipoPool[j.equipo] || vm > (porEquipoPool[j.equipo].valor_mercado || 0))
+          porEquipoPool[j.equipo] = j;
+      } else {
+        const cnt = conteosPool[j.id] || 0;
+        if (!esDuplicable(j) && cnt > 0) continue;
+        if (esDuplicable(j) && cnt >= duplMax) continue;
+        restoPool.push(j);
+      }
+    }
+    const jugadoresPool = [...Object.values(porEquipoPool), ...restoPool];
+
     // Pool por posición mezclado aleatoriamente
     const shuffle = arr => {
       const a = [...arr];
@@ -1301,7 +1344,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     };
     const poolPOS = {};
     for (const pos of ['POR','DEF','MED','DEL']) {
-      poolPOS[pos] = shuffle(lista.filter(j => j.posicion === pos));
+      poolPOS[pos] = shuffle(jugadoresPool.filter(j => j.posicion === pos));
     }
 
     // Coste mínimo para rellenar `n` huecos más dado el estado actual de cupos y pools
@@ -1378,21 +1421,28 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       setSorteando(false); setModalSorteo(false); return;
     }
 
-    // Verificación fresca contra BD antes de insertar — detecta fichajes ocurridos
-    // desde que se cargó el pool (datos obsoletos o carrera entre sorteos simultáneos)
-    const fedPartIds = (participantes || []).map(p => p.id);
+    // Verificación final contra BD (segunda consulta) — captura cambios entre
+    // construcción del pool e insert, incluyendo porteros por división
     if (fedPartIds.length > 0) {
       const [{ data: plantsFrescas }, { data: pendsFrescos }] = await Promise.all([
         sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', fedPartIds),
         sb.from('fichajes_pendientes').select('jugador_id, participante_id').in('participante_id', fedPartIds),
       ]);
       const tomadosCnt = {};
+      const porteriasTomadas = new Set();
       for (const p of [...(plantsFrescas||[]), ...(pendsFrescos||[])]) {
-        if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR')
+        const jug = jugadoresMap.get(p.jugador_id);
+        if (!jug) continue;
+        if (jug.posicion === 'POR') {
+          if (p.participante_id === participanteId) continue;
+          const fantasia = participantes.find(x => x.id === p.participante_id);
+          if (fantasia?.division_id === miDiv) porteriasTomadas.add(jug.equipo);
+        } else {
           tomadosCnt[p.jugador_id] = (tomadosCnt[p.jugador_id]||0) + 1;
+        }
       }
       const conflictos = elegidos.filter(j => {
-        if (j.posicion === 'POR') return false;
+        if (j.posicion === 'POR') return porteriasTomadas.has(j.equipo);
         const cnt = tomadosCnt[j.id] || 0;
         if (!esDuplicable(j) && cnt > 0) return true;
         if (esDuplicable(j) && cnt >= duplMax) return true;

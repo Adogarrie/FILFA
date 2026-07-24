@@ -14,6 +14,7 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
@@ -2030,6 +2031,37 @@ function CalendarioFantasy({ participantes, federacion }) {
         <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Clasificación</button>
         <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Clasificación Por Jornada</button>
         <button className={`tab ${vista==='estadisticas'?'active':''}`} onClick={() => setVista('estadisticas')}>Estadísticas</button>
+        <button onClick={() => {
+          const sheetClasif = [
+            ['Pos', 'Equipo', 'Total pts', 'Jornadas', 'Media'],
+            ...filasAcum.map((e, i) => [
+              i + 1, e.nombre, e.total, e.jornadas,
+              e.jornadas > 0 ? parseFloat((e.total / e.jornadas).toFixed(1)) : '',
+            ]),
+          ];
+          const sheetStats = [
+            ['Equipo', 'J. jugadas', 'Media', 'Desv. típ.', 'Máx', 'J. máx', 'Mín', 'J. 1º', 'J. 2º', 'J. 3º', 'J. como 1º (acum)', 'J. en podio (acum)'],
+            ...filasEstadisticas.map(e => [
+              e.nombre, e.n, parseFloat(e.media.toFixed(1)), parseFloat(e.stddev.toFixed(1)),
+              e.maxPts, e.jornadaMax ? `J${e.jornadaMax}` : '', e.minPts,
+              e.j1, e.j2, e.j3, e.acumPrimer, e.acumPodium,
+            ]),
+          ];
+          const sheetTop = [
+            ['#', 'Equipo', 'Jornada', 'Puntos'],
+            ...topPuntuaciones.map((r, i) => [i + 1, r.nombre, `J${r.jornada}`, r.puntos_jornada]),
+          ];
+          descargarExcel('Liga Fantástica', [
+            { nombre: 'Clasificación', datos: sheetClasif },
+            { nombre: 'Estadísticas', datos: sheetStats },
+            { nombre: 'Top puntuaciones', datos: sheetTop },
+          ]);
+        }}
+        style={{marginLeft:'auto', padding:'.28rem .85rem', borderRadius:7, fontSize:'.82rem',
+                border:'1.5px solid #1d6f42', background:'#e8f5e9',
+                color:'#1d6f42', cursor:'pointer', fontWeight:600}}>
+          ⬇ Excel
+        </button>
       </div>
 
       {vista === 'jornada' && (
@@ -3237,6 +3269,16 @@ async function publicar(federacionId, tipo, texto, actorNombre) {
   if (!sb || !federacionId) return;
   const { error } = await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null });
   if (error) console.error('[Tablón] Error al publicar:', error.message, { tipo, texto });
+}
+
+function descargarExcel(nombreArchivo, hojas) {
+  if (!window.XLSX) { alert('La librería de Excel aún no ha cargado. Intenta de nuevo en un momento.'); return; }
+  const wb = XLSX.utils.book_new();
+  hojas.forEach(({ nombre, datos }) => {
+    const ws = XLSX.utils.aoa_to_sheet(datos);
+    XLSX.utils.book_append_sheet(wb, ws, nombre.slice(0, 31));
+  });
+  XLSX.writeFile(wb, `${nombreArchivo}.xlsx`);
 }
 
 // ── INFORMACIÓN DE LA FEDERACIÓN ──────────────────────────────
@@ -8726,11 +8768,74 @@ function TorneosVista({ federacion, participantes }) {
   const compNombre = comps.find(c=>c.id===compSel)?.nombre;
   return (
     <div>
-      <div style={{marginBottom:'.5rem'}}>
+      <div style={{marginBottom:'.5rem', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
         <button onClick={()=>{setCompSel(null);setFases([]);setGrupos([]);setPartidos([]);}}
           style={{padding:'.28rem .7rem',borderRadius:7,border:'1.5px solid var(--borde)',
             background:'rgba(200,225,255,0.85)',cursor:'pointer',fontSize:'.82rem'}}>
           ← Torneos
+        </button>
+        <button onClick={() => {
+          // ── Hoja Calendario ──
+          const calHeader = ['Fase', 'Grupo', 'Ronda', 'J. Fantasy', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante'];
+          const calRows = [];
+          fases.forEach(fase => {
+            if (fase.tipo === 'grupos') {
+              grupos.filter(g => g.fase_id === fase.id).forEach(grupo => {
+                partidos.filter(p => p.grupo_id === grupo.id)
+                  .sort((a, b) => a.ronda - b.ronda)
+                  .forEach(m => {
+                    calRows.push([
+                      fase.nombre, grupo.nombre, m.ronda, m.jornada_fantasy || '',
+                      nomMap[m.participante_local_id]?.nombre || '?',
+                      m.goles_local ?? '', m.goles_visitante ?? '',
+                      nomMap[m.participante_visitante_id]?.nombre || '?',
+                    ]);
+                  });
+              });
+            } else {
+              partidos.filter(p => p.fase_id === fase.id).forEach(m => {
+                calRows.push([
+                  fase.nombre, '', m.ronda, m.jornada_fantasy || '',
+                  nomMap[m.participante_local_id]?.nombre || '?',
+                  m.goles_local ?? '', m.goles_visitante ?? '',
+                  nomMap[m.participante_visitante_id]?.nombre || '?',
+                ]);
+              });
+            }
+          });
+          const sheetCalendario = [calHeader, ...calRows];
+
+          // ── Hoja Clasificación (solo fases de grupos) ──
+          const sheetClasif = [];
+          const clasHeader = ['Grupo', 'Pos', 'Equipo', 'PJ', 'G', 'E', 'P', 'GF', 'GC', 'DIF', 'PTS'];
+          sheetClasif.push(clasHeader);
+          fases.forEach(fase => {
+            if (fase.tipo !== 'grupos') return;
+            grupos.filter(g => g.fase_id === fase.id).forEach(grupo => {
+              sheetClasif.push([]);
+              sheetClasif.push([`${fase.nombre} — ${grupo.nombre}`]);
+              sheetClasif.push(clasHeader);
+              const mG = partidos.filter(p => p.grupo_id === grupo.id);
+              const miembros = gMiembros[grupo.id] || [];
+              calcularStandingsGrupo(mG, miembros).forEach((row, i) => {
+                const gd = row.gf - row.gc;
+                sheetClasif.push([
+                  grupo.nombre, i + 1, nomMap[row.pid]?.nombre || row.pid,
+                  row.pj, row.g, row.e, row.p, row.gf, row.gc, gd, row.pts,
+                ]);
+              });
+            });
+          });
+
+          descargarExcel(compNombre || 'Torneo', [
+            { nombre: 'Calendario', datos: sheetCalendario },
+            { nombre: 'Clasificación', datos: sheetClasif },
+          ]);
+        }}
+        style={{padding:'.28rem .85rem',borderRadius:7,fontSize:'.82rem',
+                border:'1.5px solid #1d6f42',background:'#e8f5e9',
+                color:'#1d6f42',cursor:'pointer',fontWeight:600}}>
+          ⬇ Excel
         </button>
       </div>
       <div className="card" style={{marginBottom:'.5rem'}}><h2>{compNombre}</h2></div>
@@ -9578,6 +9683,72 @@ function LigaH2H({ federacion, participantes }) {
         <button className={`tab ${tab==='clasificacion'?'active':''}`} onClick={() => setTab('clasificacion')}>Clasificación H2H</button>
         <button className={`tab ${tab==='calendario'?'active':''}`}    onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='estadisticas'?'active':''}`}  onClick={() => setTab('estadisticas')}>Estadísticas</button>
+        <button onClick={() => {
+          // ── Hoja Calendario ──
+          const calHeader = ['Jornada', 'División', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante', 'Pts Fantasy Local', 'Pts Fantasy Visitante'];
+          const calRows = [...partidos].sort((a, b) => a.jornada - b.jornada).map(m => [
+            m.jornada,
+            divisiones.find(d => d.id === m.division_id)?.nombre || '',
+            nomMap[m.local_id]?.nombre || '—',
+            m.pts_local ?? '',
+            m.pts_visitante ?? '',
+            nomMap[m.visitante_id]?.nombre || '—',
+            m.fantasy_local != null ? Math.round(m.fantasy_local) : '',
+            m.fantasy_visitante != null ? Math.round(m.fantasy_visitante) : '',
+          ]);
+          const sheetCalendario = [calHeader, ...calRows];
+
+          // ── Hoja Clasificación ──
+          const clasHeader = ['Pos', 'Equipo', 'PJ', 'PG', 'PE', 'PP', 'GF', 'GC', 'DIF', 'PTS', 'PF', 'PC'];
+          const sheetClasif = [];
+          if (hasDivs) {
+            divIds.slice().sort((a, b) => a - b).forEach((divId, idx) => {
+              if (idx > 0) sheetClasif.push([]);
+              sheetClasif.push([divisiones.find(d => d.id === divId)?.nombre || `División ${divId}`]);
+              sheetClasif.push(clasHeader);
+              computeClasif(divId).forEach((e, i) => {
+                sheetClasif.push([i + 1, e.nombre, e.pj, e.pg, e.pe, e.pp, e.gf, e.gc, e.gf - e.gc, e.pts,
+                                  e.pf || 0, e.pc || 0]);
+              });
+            });
+          } else {
+            sheetClasif.push(clasHeader);
+            computeClasif(null).forEach((e, i) => {
+              sheetClasif.push([i + 1, e.nombre, e.pj, e.pg, e.pe, e.pp, e.gf, e.gc, e.gf - e.gc, e.pts,
+                                e.pf || 0, e.pc || 0]);
+            });
+          }
+
+          // ── Hoja Estadísticas ──
+          const statHeader = ['Equipo', 'J. como 1º', 'J. en podio', 'J. en último', 'J. en últ. 3'];
+          const sheetStats = [];
+          if (hasDivs) {
+            divIds.slice().sort((a, b) => a - b).forEach((divId, idx) => {
+              if (idx > 0) sheetStats.push([]);
+              sheetStats.push([divisiones.find(d => d.id === divId)?.nombre || `División ${divId}`]);
+              sheetStats.push(statHeader);
+              computePosHistorial(divId).forEach(e => {
+                sheetStats.push([e.nombre, e.j1, e.jpodio, e.jult, e.jult3]);
+              });
+            });
+          } else {
+            sheetStats.push(statHeader);
+            computePosHistorial(null).forEach(e => {
+              sheetStats.push([e.nombre, e.j1, e.jpodio, e.jult, e.jult3]);
+            });
+          }
+
+          descargarExcel('Liga FILFA', [
+            { nombre: 'Calendario', datos: sheetCalendario },
+            { nombre: 'Clasificación', datos: sheetClasif },
+            { nombre: 'Estadísticas', datos: sheetStats },
+          ]);
+        }}
+        style={{marginLeft:'auto', padding:'.28rem .85rem', borderRadius:7, fontSize:'.82rem',
+                border:'1.5px solid #1d6f42', background:'#e8f5e9',
+                color:'#1d6f42', cursor:'pointer', fontWeight:600}}>
+          ⬇ Excel
+        </button>
       </div>
 
       {tab === 'calendario' && (

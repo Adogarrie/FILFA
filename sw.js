@@ -1,4 +1,4 @@
-const CACHE = 'filfa-v14';
+const CACHE = 'filfa-v15';
 const SHELL = ['/index.html', '/'];
 
 // Instalar: pre-cachear el shell de la app

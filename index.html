@@ -552,7 +552,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                 onClick={() => setSubtabPlantilla('cesiones')}>Cesiones</button>
       </div>
       {subtabPlantilla === 'cesiones' && (
-        <Cesiones federacion={federacion} miParticipanteId={participanteId} />
+        <Cesiones federacion={federacion} miParticipanteId={participanteId} miNombre={participanteNombre} />
       )}
       {subtabPlantilla === 'plantilla' && <>
       <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'center'}}>
@@ -2881,6 +2881,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
     await sb.from('participantes').update({ escudo_url: publicUrl }).eq('id', equipoId);
     setEditForm(f => ({ ...f, escudo_url: publicUrl }));
+    publicar(federacion?.id, 'perfil', `${equipo?.nombre || 'Un equipo'} estrena nuevo escudo.`, equipo?.nombre);
     setSubiendoEscudo(false);
     onParticipantesChange && onParticipantesChange();
   };
@@ -2891,18 +2892,27 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     const newEnt  = editForm.entrenador.trim();
     const oldNom  = equipo?.nombre?.trim() || '';
     const newNom  = editForm.nombre.trim();
+    const oldEst  = equipo?.estadio?.trim() || '';
+    const newEst  = editForm.estadio.trim();
     const { data, error } = await sb.from('participantes')
-      .update({ nombre: newNom, estadio: editForm.estadio.trim(), entrenador: newEnt, escudo_url: editForm.escudo_url.trim() })
+      .update({ nombre: newNom, estadio: newEst, entrenador: newEnt, escudo_url: editForm.escudo_url.trim() })
       .eq('id', equipoId).select().single();
     if (error) { setEditMsg('Error: ' + error.message); return; }
     onParticipantesChange && onParticipantesChange();
+    const nomEquipo = newNom || oldNom;
     if (newEnt && newEnt !== oldEnt)
-      publicar(federacion?.id, 'admin', oldEnt
-        ? `ÚLTIMA HORA: ${newNom || oldNom} despide al entrenador ${oldEnt} y nombra nuevo entrenador: ${newEnt}. Deseamos a ${newEnt} suerte en esta nueva aventura.`
-        : `ÚLTIMA HORA: ${newNom || oldNom} nombra nuevo entrenador: ${newEnt}. Deseamos a ${newEnt} suerte en esta nueva aventura.`
-      , actorNombre);
+      publicar(federacion?.id, 'perfil', oldEnt
+        ? `ÚLTIMA HORA: ${nomEquipo} despide al entrenador ${oldEnt} y nombra nuevo entrenador: ${newEnt}. Deseamos a ${newEnt} suerte en esta nueva aventura.`
+        : `ÚLTIMA HORA: ${nomEquipo} nombra nuevo entrenador: ${newEnt}. Deseamos a ${newEnt} suerte en esta nueva aventura.`
+      , nomEquipo);
+    if (newEst && newEst !== oldEst)
+      publicar(federacion?.id, 'perfil',
+        oldEst
+          ? `${nomEquipo} cambia de estadio: ahora juega en ${newEst}.`
+          : `${nomEquipo} fija su estadio: ${newEst}.`
+      , nomEquipo);
     if (newNom && newNom !== oldNom)
-      publicar(federacion?.id, 'admin', `REBRANDING. El equipo "${oldNom}" pasa a llamarse "${newNom}". ¿Os gusta el cambio de nombre?`, actorNombre);
+      publicar(federacion?.id, 'perfil', `REBRANDING. El equipo "${oldNom}" pasa a llamarse "${newNom}". ¿Os gusta el cambio de nombre?`, nomEquipo);
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
   };
@@ -3590,7 +3600,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange })
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
     admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
-    nuevo_miembro: '🎉',
+    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝',
   };
 
   const fmtFecha = ts => {
@@ -5756,6 +5766,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       .eq('id', federacion.id).select().single();
     if (error) { alert('Error: ' + error.message); setSubiendo(false); return; }
     onFederacionUpdate(data);
+    publicar(federacion.id, 'admin', 'El logo de la federación ha sido actualizado.', actorNombre);
     setSubiendo(false);
     setMsg('Logo actualizado');
     setTimeout(() => setMsg(''), 3000);
@@ -5768,6 +5779,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       .eq('id', federacion.id).select().single();
     if (error) { alert('Error: ' + error.message); return; }
     onFederacionUpdate(data);
+    publicar(federacion.id, 'admin', 'El logo de la federación ha sido eliminado.', actorNombre);
     setMsg('Logo eliminado');
     setTimeout(() => setMsg(''), 3000);
   };
@@ -6229,8 +6241,14 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
   }, []);
 
   const cambiarDivision = async (nuevoId) => {
+    const equipo    = participantes.find(p => p.id === selId);
+    const nomEquipo = equipo?.nombre || 'Un equipo';
+    const oldDivId  = equipo?.division_id ?? 999;
+    const nuevaDivNom = divisiones.find(d => d.id === Number(nuevoId))?.nombre || `División ${nuevoId}`;
+    const verbo = Number(nuevoId) < oldDivId ? 'asciende' : 'desciende';
     await sb.from('participantes').update({ division_id: Number(nuevoId) }).eq('id', selId);
     onParticipantesChange?.();
+    publicar(federacion?.id, 'admin', `${nomEquipo} ${verbo} a ${nuevaDivNom}.`, actorNombre);
     flash('División actualizada');
   };
 
@@ -6575,6 +6593,11 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
     await sb.from('ofertas_jugadores')
       .update({ estado: 'rechazada', mensaje: msgRechazo.trim() || null })
       .eq('id', rechazModal.id);
+    const nomJugRec = rechazModal.jugadores?.posicion === 'POR'
+      ? `Portería ${rechazModal.jugadores?.equipo}`
+      : rechazModal.jugadores?.nombre;
+    const miNomRec = participantes.find(p => p.id === miParticipanteId)?.nombre || 'Un equipo';
+    publicar(federacion?.id, 'oferta', `${miNomRec} ha rechazado una oferta de ${rechazModal.ofertante?.nombre} por ${nomJugRec}.`);
     setProcesando(null);
     setRechazModal(null); setMsgRechazo('');
     cargar();
@@ -6960,7 +6983,9 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     if (error) { alert('Error: ' + error.message); return; }
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
     publicar(federacion?.id, 'admin',
-      val ? `${nomJug}: posición alternativa → ${val}` : `${nomJug}: posición alternativa eliminada`,
+      val
+        ? `${nomJug} (${j.posicion}) pasa a tener posición alternativa: ${val}.`
+        : `${nomJug}: posición alternativa eliminada.`,
       actorNombre);
     setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, posicion_alt: val } : p));
   };
@@ -7183,7 +7208,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
 }
 
 // ── CESIONES (usuario) ─────────────────────────────────────────
-function Cesiones({ federacion, miParticipanteId }) {
+function Cesiones({ federacion, miParticipanteId, miNombre }) {
   const federacionId = federacion?.id;
   const [solicitudes, setSolicitudes]   = useState([]);
   const [cargando, setCargando]         = useState(true);
@@ -7243,6 +7268,9 @@ function Cesiones({ federacion, miParticipanteId }) {
     });
     setEnviando(false);
     if (error) { setMsg('Error: ' + error.message); return; }
+    const jugCes = jugadoresLibres.find(j => j.id === fJugador);
+    const nomJugCes = jugCes?.posicion === 'POR' ? `Portería ${jugCes?.equipo}` : (jugCes?.nombre || 'Jugador');
+    publicar(federacionId, 'cesion', `${miNombre || 'Un equipo'} solicita la cesión de ${nomJugCes} (J${fJornada}). Pendiente de aprobación.`);
     setMsg('Solicitud enviada. Pendiente de aprobación del admin.');
     setFormAbierto(false); setFJugador('');
     cargar();
@@ -8009,9 +8037,11 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   };
   const borrarComp = async id => {
     if (!confirm('¿Borrar competición y todo su contenido?')) return;
+    const compNom = comps.find(c => c.id === id)?.nombre || 'Competición';
     await sb.from('competiciones').delete().eq('id', id);
     setComps(p => p.filter(c => c.id !== id));
     if (compSel === id) setCompSel(null);
+    publicar(fedId, 'admin', `Competición eliminada: "${compNom}".`, actorNombre);
   };
   const crearFase = async () => {
     if (!newFaseName.trim()) return;
@@ -8170,6 +8200,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     }));
     await Promise.all(updates.map(u=>sb.from('partidos_competicion').update({goles_local:u.goles_local,goles_visitante:u.goles_visitante}).eq('id',u.id)));
     setPartidos(p=>p.map(m=>{const u=updates.find(x=>x.id===m.id);return u?{...m,...u}:m;}));
+    const grupoNom = grupos.find(g => g.id === gid)?.nombre || `Grupo ${gid}`;
+    publicar(fedId, 'admin', `Resultados calculados — ${compAct?.nombre || 'Competición'}, ${grupoNom}, Ronda ${ronda}.`, actorNombre);
     flash(`Ronda ${ronda} calculada`);
     setBusy(false);
   };
@@ -8189,6 +8221,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const gV = ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo);
     await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
     setPartidos(p=>p.map(x=>x.id===m.id?{...x,goles_local:gL,goles_visitante:gV}:x));
+    const nomL = nomMap[m.participante_local_id] || 'Local';
+    const nomV = nomMap[m.participante_visitante_id] || 'Visitante';
+    const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomL} vs ${nomV}`;
+    publicar(fedId, 'admin', `Resultado calculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}.`, actorNombre);
     flash(`Calculado: ${gL} — ${gV}`);
     setBusy(false);
   };
@@ -9914,6 +9950,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       setMsgCfg('Error al insertar partidos: ' + errP.message); return;
     }
 
+    publicar(federacion?.id, 'admin', `Vuelta extra H2H añadida: Vuelta ${nuevaVuelta} (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`, actorNombre);
     setMsgCfg(`Vuelta ${nuevaVuelta} añadida (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`);
     setTimeout(() => setMsgCfg(''), 3500);
     await cargar(); await cargarConfig();
@@ -9952,6 +9989,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       .update({ h2h_baremo: JSON.stringify(baremo) }).eq('id', federacion.id);
     if (error) { setMsgCfg('Error: ' + error.message); return; }
     onFederacionUpdate({ ...federacion, h2h_baremo: JSON.stringify(baremo) });
+    const baremoTexto = Object.entries(baremo).sort(([a],[b])=>Number(a)-Number(b)).map(([k,v])=>`≥${k}pts→${v}gol`).join(', ');
+    publicar(federacion?.id, 'admin', `Baremo H2H actualizado: ${baremoTexto}.`, actorNombre);
     setMsgCfg('Baremo guardado');
     setTimeout(() => setMsgCfg(''), 2500);
   };
@@ -10132,6 +10171,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     onFederacionUpdate({ ...federacion, h2h_jornadas_base: maxJornada });
     setVueltasExtra([]);
 
+    publicar(federacion?.id, 'admin', `Calendario H2H generado: ${rows.length} partidos en ${maxJornada} jornadas. ¡Revisa tus próximos enfrentamientos!`, actorNombre);
     setMsg(`¡Calendario generado! ${rows.length} partidos en ${maxJornada} jornadas.`);
     cargar();
     return true;

@@ -1378,6 +1378,37 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       setSorteando(false); setModalSorteo(false); return;
     }
 
+    // Verificación fresca contra BD antes de insertar — detecta fichajes ocurridos
+    // desde que se cargó el pool (datos obsoletos o carrera entre sorteos simultáneos)
+    const fedPartIds = (participantes || []).map(p => p.id);
+    if (fedPartIds.length > 0) {
+      const [{ data: plantsFrescas }, { data: pendsFrescos }] = await Promise.all([
+        sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', fedPartIds),
+        sb.from('fichajes_pendientes').select('jugador_id, participante_id').in('participante_id', fedPartIds),
+      ]);
+      const tomadosCnt = {};
+      for (const p of [...(plantsFrescas||[]), ...(pendsFrescos||[])]) {
+        if (jugadoresMap.get(p.jugador_id)?.posicion !== 'POR')
+          tomadosCnt[p.jugador_id] = (tomadosCnt[p.jugador_id]||0) + 1;
+      }
+      const conflictos = elegidos.filter(j => {
+        if (j.posicion === 'POR') return false;
+        const cnt = tomadosCnt[j.id] || 0;
+        if (!esDuplicable(j) && cnt > 0) return true;
+        if (esDuplicable(j) && cnt >= duplMax) return true;
+        return false;
+      });
+      if (conflictos.length > 0) {
+        alert(
+          `Algunos jugadores han sido fichados por otro equipo mientras preparabas el sorteo:\n` +
+          conflictos.map(j => `• ${j.nombre} (${j.equipo})`).join('\n') +
+          `\n\nVuelve a intentarlo.`
+        );
+        cargar();
+        setSorteando(false); setModalSorteo(false); return;
+      }
+    }
+
     const { error } = await sb.from('plantillas').insert(
       elegidos.map(j => ({
         participante_id: participanteId,

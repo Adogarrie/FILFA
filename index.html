@@ -11,6 +11,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="FILFAPP" />
   <link rel="apple-touch-icon" href="icons/icon.png" />
+  <script>(function(){var t=localStorage.getItem('filfa-tema');if(t&&t!=='clasico')document.documentElement.dataset.tema=t;}());</script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -18,24 +19,66 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
-      --verde:   #0f2044;
-      --verde2:  #1a3a6e;
-      --gris:    #a8c8ee;
-      --borde:   #4d84c4;
-      --texto:   #0a1a38;
-      --texto2:  #1e4578;
-      --oro:     #f5a623;
-      --plata:   #a8a9ad;
-      --bronce:  #cd7f32;
+      --verde:     #0f2044;
+      --verde2:    #1a3a6e;
+      --gris:      #a8c8ee;
+      --borde:     #4d84c4;
+      --texto:     #0a1a38;
+      --texto2:    #1e4578;
+      --oro:       #f5a623;
+      --plata:     #a8a9ad;
+      --bronce:    #cd7f32;
+      /* Tema: Clásico (por defecto) */
+      --bg-html:   #182d64;
+      --bg-body:   linear-gradient(155deg,#1c3370 0%,#2a4a96 40%,#1f3a80 70%,#182d64 100%);
+      --card-bg:   rgba(210,232,255,0.86);
+      --modal-bg:  rgba(210,232,255,0.97);
+      --tab-bg:    rgba(210,232,255,0.40);
+      --fondo-alt: rgba(200,225,255,0.85);
+      --fondo-med: rgba(200,225,255,0.40);
+      --fondo-sub: rgba(200,225,255,0.22);
     }
+
+    /* ── Tema Claro ─────────────────────────────────────────────── */
+    html[data-tema="claro"] {
+      --bg-html:   #eef2f7;
+      --bg-body:   #eef2f7;
+      --card-bg:   rgba(255,255,255,0.97);
+      --modal-bg:  #ffffff;
+      --tab-bg:    rgba(210,222,242,0.60);
+      --fondo-alt: rgba(220,230,245,0.80);
+      --fondo-med: rgba(210,222,240,0.55);
+      --fondo-sub: rgba(200,214,235,0.35);
+      --gris:      #c0cede;
+      --borde:     #4d84c4;
+      --texto:     #0a1a38;
+      --texto2:    #1e4578;
+    }
+
+    /* ── Tema Nocturno ──────────────────────────────────────────── */
+    html[data-tema="nocturno"] {
+      --bg-html:   #0d1117;
+      --bg-body:   #0d1117;
+      --card-bg:   rgba(20,32,58,0.96);
+      --modal-bg:  #141f38;
+      --tab-bg:    rgba(28,46,82,0.60);
+      --fondo-alt: rgba(28,44,80,0.88);
+      --fondo-med: rgba(255,255,255,0.07);
+      --fondo-sub: rgba(255,255,255,0.04);
+      --gris:      #1e2d48;
+      --borde:     #2a4070;
+      --texto:     #c8d8f0;
+      --texto2:    #7aaad4;
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { background: #182d64; }
+    html { background: var(--bg-html); }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           background: linear-gradient(155deg, #1c3370 0%, #2a4a96 40%, #1f3a80 70%, #182d64 100%);
+           background: var(--bg-body);
            background-attachment: fixed; min-height: 100vh; color: var(--texto); }
 
-    /* Nav */
-    nav { background: var(--verde); color: #fff; display: flex; flex-wrap: wrap;
+    /* Nav — siempre azul oscuro independientemente del tema */
+    nav { background: #0f2044; color: #fff; display: flex; flex-wrap: wrap;
           align-items: center; padding: 0 1.25rem; min-height: 56px; gap: .25rem;
           box-shadow: 0 2px 8px rgba(0,0,0,.25); position: sticky; top: 0; z-index: 100; }
     nav h1 { font-size: 1.05rem; font-weight: 700; flex: 1; padding: .5rem 0; }
@@ -49,31 +92,33 @@
     .nav-selector select { background: rgba(255,255,255,.15); border: 1.5px solid rgba(255,255,255,.4);
                            color: #fff; padding: .3rem .6rem; border-radius: 8px;
                            font-size: .82rem; cursor: pointer; max-width: 140px; }
-    .nav-selector select option { background: var(--verde); color: #fff; }
+    .nav-selector select option { background: #0f2044; color: #fff; }
 
     /* Layout */
     main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
 
     /* Tarjeta */
-    .card { background: rgba(210,232,255,0.86); backdrop-filter: blur(16px);
+    .card { background: var(--card-bg); backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             border-radius: 12px; border: 1px solid rgba(80,140,215,0.40);
             box-shadow: 0 4px 24px rgba(6,22,70,.22);
             padding: 1.25rem; margin-bottom: 1rem;
             overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--verde); }
+    html[data-tema="nocturno"] .card h2 { color: #7aaad4; }
 
     /* Tabs */
     .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
     .tab  { padding: .4rem 1.1rem; border-radius: 20px; border: 1.5px solid rgba(80,140,215,0.55);
-            background: rgba(210,232,255,0.40); cursor: pointer; font-size: .85rem; transition: all .15s; }
-    .tab.active { background: var(--verde); color: #fff; border-color: var(--verde); }
+            background: var(--tab-bg); cursor: pointer; font-size: .85rem; transition: all .15s;
+            color: var(--texto); }
+    .tab.active { background: #0f2044; color: #fff; border-color: #0f2044; }
 
     /* Tabla */
     table { width: 100%; border-collapse: collapse; font-size: .88rem; }
     th    { text-align: left; padding: .6rem .75rem; border-bottom: 2px solid var(--borde);
             color: var(--texto2); font-weight: 600; font-size: .8rem; text-transform: uppercase; }
-    td    { padding: .6rem .75rem; border-bottom: 1px solid var(--gris); }
+    td    { padding: .6rem .75rem; border-bottom: 1px solid var(--gris); color: var(--texto); }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: var(--gris); }
 
@@ -84,35 +129,40 @@
     .DEF { background: #d1e7dd; color: #0a3622; }
     .MED { background: #cfe2ff; color: #0a3276; }
     .DEL { background: #f8d7da; color: #58151c; }
+    html[data-tema="nocturno"] .POR { background: #3a2c00; color: #ffd060; }
+    html[data-tema="nocturno"] .DEF { background: #003a1a; color: #5dde86; }
+    html[data-tema="nocturno"] .MED { background: #001a3a; color: #60b0ff; }
+    html[data-tema="nocturno"] .DEL { background: #3a0008; color: #ff8088; }
 
     /* Mercado */
     .filtros { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
     .filtros input  { flex: 1; min-width: 180px; padding: .45rem .8rem;
                       border: 1.5px solid var(--borde); border-radius: 8px; font-size: .88rem;
-                      background: rgba(200,225,255,0.80); }
+                      background: var(--fondo-alt); color: var(--texto); }
     .filtros select { padding: .45rem .8rem; border: 1.5px solid var(--borde);
-                      border-radius: 8px; font-size: .88rem; background: rgba(200,225,255,0.80); }
-    .btn-fichar { background: var(--verde); color: #fff; border: none; padding: .35rem .8rem;
+                      border-radius: 8px; font-size: .88rem; background: var(--fondo-alt);
+                      color: var(--texto); }
+    .btn-fichar { background: #0f2044; color: #fff; border: none; padding: .35rem .8rem;
                   border-radius: 8px; cursor: pointer; font-size: .82rem; font-weight: 600; }
-    .btn-fichar:hover { background: var(--verde2); }
+    .btn-fichar:hover { background: #1a3a6e; }
     .btn-fichar:disabled { background: #adb5bd; cursor: not-allowed; opacity: .7; }
 
     /* Modal */
     .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5);
                display: flex; align-items: center; justify-content: center; z-index: 200; }
-    .modal   { background: rgba(210,232,255,0.97); backdrop-filter: blur(18px);
+    .modal   { background: var(--modal-bg); backdrop-filter: blur(18px);
                -webkit-backdrop-filter: blur(18px);
                border-radius: 14px; padding: 1.75rem;
                max-width: 380px; width: 90%;
                box-shadow: 0 12px 48px rgba(6,20,70,.30);
                border: 1px solid rgba(80,140,215,0.45); }
-    .modal h3  { margin-bottom: .75rem; }
+    .modal h3  { margin-bottom: .75rem; color: var(--texto); }
     .modal p   { color: var(--texto2); font-size: .9rem; margin-bottom: 1.25rem; }
     .modal-btns { display: flex; gap: .75rem; justify-content: flex-end; }
     .btn-cancel { padding: .45rem 1rem; border-radius: 8px; border: 1.5px solid var(--borde);
-                  background: rgba(200,225,255,0.82); cursor: pointer; }
+                  background: var(--fondo-alt); color: var(--texto); cursor: pointer; }
     .btn-ok     { padding: .45rem 1rem; border-radius: 8px; border: none;
-                  background: var(--verde); color: #fff; cursor: pointer; font-weight: 600; }
+                  background: #0f2044; color: #fff; cursor: pointer; font-weight: 600; }
 
     /* Medallas */
     .medalla-1 { color: var(--oro); }
@@ -122,6 +172,8 @@
     /* Valores */
     .valor-positivo { color: #1a7f37; font-weight: 600; }
     .valor-negativo { color: #d93025; font-weight: 600; }
+    html[data-tema="nocturno"] .valor-positivo { color: #4ade80; }
+    html[data-tema="nocturno"] .valor-negativo { color: #f87171; }
 
     /* Estados */
     .loading { text-align: center; padding: 2.5rem; color: var(--texto2); font-size: .9rem; }
@@ -131,26 +183,28 @@
 
     /* Login */
     .login-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; }
-    .login-card { background:rgba(210,232,255,0.92); backdrop-filter:blur(16px);
+    .login-card { background: var(--modal-bg); backdrop-filter:blur(16px);
                   -webkit-backdrop-filter:blur(16px);
                   border-radius:16px; border:1px solid rgba(80,140,215,0.42);
                   padding:2.5rem 2rem; width:100%; max-width:360px;
                   box-shadow:0 10px 40px rgba(6,20,70,.28); }
     .login-logo { text-align:center; margin-bottom:1.75rem; }
     .login-logo h1 { color:var(--verde); font-size:1.65rem; margin-bottom:.25rem; }
+    html[data-tema="nocturno"] .login-logo h1 { color:#7aaad4; }
     .login-logo p  { color:var(--texto2); font-size:.88rem; }
     .campo { margin-bottom:1rem; }
     .campo label { display:block; font-size:.82rem; font-weight:600;
                    color:var(--texto2); margin-bottom:.3rem; }
     .campo input  { width:100%; padding:.55rem .85rem; border:1.5px solid var(--borde);
-                    border-radius:8px; font-size:.95rem; background: rgba(200,225,255,0.85); }
-    .campo input:focus { outline:none; border-color:var(--verde); }
+                    border-radius:8px; font-size:.95rem; background: var(--fondo-alt);
+                    color: var(--texto); }
+    .campo input:focus { outline:none; border-color:#0f2044; }
     .login-error  { background:#fde8e8; color:#d93025; padding:.5rem .85rem;
                     border-radius:8px; font-size:.84rem; margin-bottom:1rem; }
-    .btn-full { width:100%; padding:.7rem; background:var(--verde); color:#fff;
+    .btn-full { width:100%; padding:.7rem; background:#0f2044; color:#fff;
                 border:none; border-radius:10px; font-size:1rem; font-weight:700;
                 cursor:pointer; margin-top:.25rem; }
-    .btn-full:hover    { background:var(--verde2); }
+    .btn-full:hover    { background:#1a3a6e; }
     .btn-full:disabled { opacity:.6; cursor:wait; }
 
     /* Nav — usuario y logout */
@@ -203,7 +257,7 @@ class ErrorBoundary extends React.Component {
           <strong>Error inesperado:</strong> {this.state.error.message}
           <br />
           <button style={{marginTop:'.75rem', padding:'.35rem .8rem', borderRadius:7,
-                          border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)', color:'#dc3545',
+                          border:'1.5px solid #dc3545', background:'var(--fondo-alt)', color:'#dc3545',
                           cursor:'pointer', fontWeight:600}}
                   onClick={() => this.setState({error:null})}>
             Reintentar
@@ -1491,7 +1545,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                   {(isAdmin || isModerador) && (
                     <button onClick={() => anularFichaje(f.id)}
                             style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid #dc3545',
-                                    background:'rgba(200,225,255,0.85)', color:'#dc3545', cursor:'pointer',
+                                    background:'var(--fondo-alt)', color:'#dc3545', cursor:'pointer',
                                     fontSize:'.82rem', fontWeight:600}}>
                       Anular
                     </button>
@@ -1607,13 +1661,13 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                             </span>
                             <button onClick={() => { setModalPuja(j); setCantidadPuja(String((miPuja.cantidad || 0) / 1_000_000)); }}
                                     style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
-                                            border:'1.5px solid #198754', background:'rgba(200,225,255,0.85)',
+                                            border:'1.5px solid #198754', background:'var(--fondo-alt)',
                                             color:'#198754', cursor:'pointer'}}>
                               Editar
                             </button>
                             <button onClick={() => cancelarPuja(j.id)}
                                     style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
-                                            border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)',
+                                            border:'1.5px solid #dc3545', background:'var(--fondo-alt)',
                                             color:'#dc3545', cursor:'pointer'}}>
                               ✕
                             </button>
@@ -1639,7 +1693,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                           </span>
                           <button onClick={() => cancelarPuja(j.id)}
                                   style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
-                                          border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)',
+                                          border:'1.5px solid #dc3545', background:'var(--fondo-alt)',
                                           color:'#dc3545', cursor:'pointer'}}>
                             ✕
                           </button>
@@ -1661,13 +1715,13 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                         </span>
                         <button onClick={() => { setModalPuja(j); setCantidadPuja(String((miPuja.cantidad || 0) / 1_000_000)); }}
                                 style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
-                                        border:'1.5px solid #198754', background:'rgba(200,225,255,0.85)',
+                                        border:'1.5px solid #198754', background:'var(--fondo-alt)',
                                         color:'#198754', cursor:'pointer'}}>
                           Editar
                         </button>
                         <button onClick={() => cancelarPuja(j.id)}
                                 style={{padding:'.2rem .5rem', fontSize:'.75rem', borderRadius:6,
-                                        border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)',
+                                        border:'1.5px solid #dc3545', background:'var(--fondo-alt)',
                                         color:'#dc3545', cursor:'pointer'}}>
                           ✕
                         </button>
@@ -2097,7 +2151,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                     <tr onClick={() => abrirEquipo(e.id)}
                         style={{cursor:'pointer',
                                 ...(abierto===e.id
-                                  ? {background:'#eff6ff', borderBottom:'none'}
+                                  ? {background:'var(--fondo-med)', borderBottom:'none'}
                                   : getClasifColor(federacion?.clasif_colores?.fantasia, i + 1))}}>
                       <td><Medalla pos={i + 1} /></td>
                       <td style={{fontWeight:600}}>
@@ -2676,7 +2730,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
         </div>
         <button onClick={() => { setListado(''); generarYCopiarListado(); }}
                 style={{marginLeft:'auto', padding:'.32rem .75rem', borderRadius:7,
-                        border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)',
+                        border:'1.5px solid var(--borde)', background:'var(--fondo-alt)',
                         cursor:'pointer', fontWeight:600, fontSize:'.83rem', whiteSpace:'nowrap'}}>
           Copiar alineaciones J{jornada}
         </button>
@@ -2755,7 +2809,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
               <div style={{display:'flex', gap:'.75rem', flexWrap:'wrap'}}>
                 <button className="btn-ok" onClick={guardarEdicion} disabled={guardandoEdit}>{guardandoEdit ? 'Guardando…' : 'Guardar cambios'}</button>
                 <button onClick={() => setSnapshotEditPid(null)}
-                        style={{padding:'.45rem 1rem', borderRadius:9, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', cursor:'pointer'}}>
+                        style={{padding:'.45rem 1rem', borderRadius:9, border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer'}}>
                   Cancelar
                 </button>
               </div>
@@ -2772,7 +2826,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
                       <td style={{textAlign:'right', fontWeight:700}}>{snap ? snap.puntos_totales : <span style={{color:'var(--texto2)', fontSize:'.8rem'}}>—</span>}</td>
                       <td style={{textAlign:'right'}}>
                         {snap && <button onClick={() => iniciarEdicion(p.id)}
-                                         style={{padding:'.22rem .55rem', borderRadius:6, fontSize:'.8rem', border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', cursor:'pointer'}}>Editar</button>}
+                                         style={{padding:'.22rem .55rem', borderRadius:6, fontSize:'.8rem', border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer'}}>Editar</button>}
                       </td>
                     </tr>
                   );
@@ -3381,7 +3435,7 @@ function FederacionInfo({ federacionId, isAdmin, isModerador }) {
   };
 
   const btnSm = (extra) => ({
-    padding:'.28rem .65rem', borderRadius:7, background:'rgba(200,225,255,0.85)',
+    padding:'.28rem .65rem', borderRadius:7, background:'var(--fondo-alt)',
     border:'1.5px solid var(--borde)', cursor:'pointer', fontSize:'.8rem',
     ...extra,
   });
@@ -3471,7 +3525,7 @@ function FederacionInfo({ federacionId, isAdmin, isModerador }) {
             <button key={t}
                     onClick={() => setFormModal({tipo:t, titulo:'', contenido:'', url:''})}
                     style={{padding:'.38rem .9rem', borderRadius:8, fontSize:'.85rem',
-                            border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)',
+                            border:'1.5px solid var(--borde)', background:'var(--fondo-alt)',
                             cursor:'pointer'}}>
               + {t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
@@ -3802,7 +3856,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange })
           <h2 style={{margin:0}}>Tablón de anuncios</h2>
           <button onClick={() => { setPagina(0); setAnuncios(null); }}
                   style={{padding:'.3rem .8rem', borderRadius:6, border:'1.5px solid var(--borde)',
-                          background:'rgba(200,225,255,0.85)', cursor:'pointer', fontSize:'.85rem'}}>
+                          background:'var(--fondo-alt)', cursor:'pointer', fontSize:'.85rem'}}>
             Actualizar
           </button>
         </div>
@@ -3855,7 +3909,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange })
               <button onClick={() => setPagina(p => p + 1)}
                       style={{marginTop:'.9rem', width:'100%', padding:'.5rem',
                               borderRadius:8, border:'1.5px solid var(--borde)',
-                              background:'rgba(200,225,255,0.85)', cursor:'pointer', fontSize:'.85rem'}}>
+                              background:'var(--fondo-alt)', cursor:'pointer', fontSize:'.85rem'}}>
                 Cargar más
               </button>
             </>
@@ -3960,7 +4014,7 @@ function Login({ onLogin }) {
 
         <button type="button" onClick={conGoogle}
                 style={{width:'100%', padding:'.65rem', marginBottom:'1.1rem',
-                        background:'rgba(200,225,255,0.85)', color:'var(--texto)', fontWeight:600,
+                        background:'var(--fondo-alt)', color:'var(--texto)', fontWeight:600,
                         border:'1.5px solid var(--borde)', borderRadius:10, cursor:'pointer'}}>
           Continuar con Google
         </button>
@@ -4184,7 +4238,7 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
               </span>
               <button onClick={copiarCodigo}
                       style={{padding:'.3rem .7rem', borderRadius:6, border:'1.5px solid var(--verde)',
-                              background:'rgba(200,225,255,0.85)', color:'var(--verde)', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+                              background:'var(--fondo-alt)', color:'var(--verde)', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
                 Copiar
               </button>
             </div>
@@ -4730,13 +4784,13 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                                               style={{marginLeft:3, padding:'.2rem .45rem', fontSize:'.75rem',
                                                       border:'1.5px solid var(--borde)', borderRadius:6,
                                                       cursor: ordenSup[j.id] === 1 ? 'default' : 'pointer',
-                                                      background:'rgba(200,225,255,0.85)', opacity: ordenSup[j.id] === 1 ? .35 : 1}}>▲</button>
+                                                      background:'var(--fondo-alt)', opacity: ordenSup[j.id] === 1 ? .35 : 1}}>▲</button>
                                       <button onClick={() => moverSuplente(j.id, +1)}
                                               disabled={ordenSup[j.id] === nS}
                                               style={{marginLeft:2, padding:'.2rem .45rem', fontSize:'.75rem',
                                                       border:'1.5px solid var(--borde)', borderRadius:6,
                                                       cursor: ordenSup[j.id] === nS ? 'default' : 'pointer',
-                                                      background:'rgba(200,225,255,0.85)', opacity: ordenSup[j.id] === nS ? .35 : 1}}>▼</button>
+                                                      background:'var(--fondo-alt)', opacity: ordenSup[j.id] === nS ? .35 : 1}}>▼</button>
                                     </>
                                   )}
                                   {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
@@ -4783,7 +4837,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                                 style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.38rem .75rem',
                                         borderRadius:8, border:'2px solid', fontSize:'.85rem', fontWeight:700, cursor: (agotado || comodinJornada==='banquillo') ? 'not-allowed' : 'pointer',
                                         borderColor: activo ? '#c0392b' : 'var(--borde)',
-                                        background: activo ? '#c0392b' : 'rgba(200,225,255,0.85)',
+                                        background: activo ? '#c0392b' : 'var(--fondo-alt)',
                                         color: activo ? '#fff' : agotado ? 'var(--texto2)' : 'var(--texto)',
                                         opacity: (agotado || comodinJornada==='banquillo') ? .45 : 1}}>
                           <span>©️</span>
@@ -4812,7 +4866,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                                 style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.38rem .75rem',
                                         borderRadius:8, border:'2px solid', fontSize:'.85rem', fontWeight:700, cursor: (agotado || comodinJornada==='capitan') ? 'not-allowed' : 'pointer',
                                         borderColor: activo ? '#0d6efd' : 'var(--borde)',
-                                        background: activo ? '#0d6efd' : 'rgba(200,225,255,0.85)',
+                                        background: activo ? '#0d6efd' : 'var(--fondo-alt)',
                                         color: activo ? '#fff' : agotado ? 'var(--texto2)' : 'var(--texto)',
                                         opacity: (agotado || comodinJornada==='capitan') ? .45 : 1}}>
                           <span>🔄</span>
@@ -5255,7 +5309,7 @@ function AdminPujas({ participantes, federacion, actorNombre }) {
         <h2 style={{margin:0}}>Pujas pendientes</h2>
         <div style={{display:'flex', gap:'.5rem'}}>
           <button onClick={cargar} style={{padding:'.3rem .8rem', borderRadius:6,
-                  border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', cursor:'pointer', fontSize:'.85rem'}}>
+                  border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer', fontSize:'.85rem'}}>
             Actualizar
           </button>
           <button onClick={() => { setVerHistorial(v => !v); if (!verHistorial) cargarHistorial(); }}
@@ -5901,14 +5955,14 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
           {federacion?.logo_url
             ? <img src={federacion.logo_url} alt="Logo"
                    style={{height:56, maxWidth:120, objectFit:'contain',
-                           border:'1.5px solid var(--borde)', borderRadius:8, padding:4, background:'rgba(200,225,255,0.85)'}} />
+                           border:'1.5px solid var(--borde)', borderRadius:8, padding:4, background:'var(--fondo-alt)'}} />
             : <div style={{height:56, width:56, borderRadius:8, border:'1.5px dashed var(--borde)',
                            display:'flex', alignItems:'center', justifyContent:'center',
                            fontSize:'.75rem', color:'var(--texto2)'}}>Sin logo</div>
           }
           <div style={{display:'flex', flexDirection:'column', gap:'.4rem'}}>
             <label style={{display:'inline-block', padding:'.35rem .9rem', borderRadius:8,
-                           border:'1.5px solid var(--verde)', background:'rgba(200,225,255,0.85)', color:'var(--verde)',
+                           border:'1.5px solid var(--verde)', background:'var(--fondo-alt)', color:'var(--verde)',
                            cursor: subiendo ? 'wait' : 'pointer', fontWeight:600, fontSize:'.85rem',
                            opacity: subiendo ? .6 : 1}}>
               {subiendo ? 'Subiendo…' : 'Subir imagen'}
@@ -5918,7 +5972,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             {federacion?.logo_url && (
               <button onClick={quitarLogo}
                       style={{padding:'.3rem .75rem', borderRadius:8, border:'1.5px solid #d93025',
-                              background:'rgba(200,225,255,0.85)', color:'#d93025', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+                              background:'var(--fondo-alt)', color:'#d93025', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
                 Quitar logo
               </button>
             )}
@@ -5940,7 +5994,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
           </span>
           <button onClick={copiar}
                   style={{padding:'.35rem .9rem', borderRadius:8, border:'1.5px solid var(--verde)',
-                          background:'rgba(200,225,255,0.85)', color:'var(--verde)', cursor:'pointer', fontWeight:600, fontSize:'.85rem'}}>
+                          background:'var(--fondo-alt)', color:'var(--verde)', cursor:'pointer', fontWeight:600, fontSize:'.85rem'}}>
             {copiado ? '✓ Copiado' : 'Copiar'}
           </button>
         </div>
@@ -6176,7 +6230,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
                 {[['calendario','Liga Fantástica'], ['h2h','Liga FILFA'], ['torneo','Torneo específico']].map(([k, lbl]) => (
                   <label key={k} style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.84rem', cursor:'pointer',
                                          padding:'.22rem .55rem', borderRadius:6, border:'1.5px solid var(--borde)',
-                                         background: cm.scope[k] ? 'rgba(15,80,180,0.18)' : 'rgba(200,225,255,0.40)'}}>
+                                         background: cm.scope[k] ? 'rgba(15,80,180,0.18)' : 'var(--fondo-med)'}}>
                     <input type="checkbox" checked={!!cm.scope[k]}
                            onChange={e => cm.setScope(prev => ({...prev, [k]: e.target.checked}))} />
                     {lbl}
@@ -6194,7 +6248,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
                           return (
                             <label key={c.id} style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.83rem', cursor:'pointer',
                                                        padding:'.22rem .55rem', borderRadius:6, border:'1.5px solid var(--borde)',
-                                                       background: checked ? 'rgba(15,80,180,0.18)' : 'rgba(200,225,255,0.40)'}}>
+                                                       background: checked ? 'rgba(15,80,180,0.18)' : 'var(--fondo-med)'}}>
                               <input type="checkbox" checked={checked}
                                      onChange={e => cm.setTorneos(prev =>
                                        e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id)
@@ -6617,7 +6671,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
                         </td>
                         <td>
                           <button onClick={() => liberarJugador(r.id, r.jugadores?.posicion === 'POR' ? r.jugadores?.equipo : r.jugadores?.nombre)}
-                                  style={{padding:'.25rem .6rem', borderRadius:6, border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>
+                                  style={{padding:'.25rem .6rem', borderRadius:6, border:'1.5px solid #dc3545', background:'var(--fondo-alt)', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>
                             Liberar
                           </button>
                         </td>
@@ -6660,7 +6714,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
                       <td style={{textAlign:'right', fontWeight:600}}>{r.puntos_jornada}</td>
                       <td>
                         <button onClick={() => borrarPts(r.jornada)}
-                                style={{padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>
+                                style={{padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'var(--fondo-alt)', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>
                           Borrar
                         </button>
                       </td>
@@ -8438,10 +8492,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     setBusy(false);
   };
 
-  const sBtn = { padding:'.22rem .65rem', borderRadius:6, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', cursor:'pointer', fontSize:'.8rem' };
-  const dBtn = { padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'rgba(200,225,255,0.85)', color:'#dc3545', cursor:'pointer', fontSize:'.78rem' };
-  const inp  = { padding:'.36rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.82)', fontSize:'.85rem' };
-  const rowB = { display:'flex', alignItems:'center', gap:'.4rem', padding:'.45rem .65rem', borderRadius:7, border:'1.5px solid var(--borde)', marginBottom:'.35rem', background:'rgba(200,225,255,0.40)', flexWrap:'wrap' };
+  const sBtn = { padding:'.22rem .65rem', borderRadius:6, border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer', fontSize:'.8rem' };
+  const dBtn = { padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'var(--fondo-alt)', color:'#dc3545', cursor:'pointer', fontSize:'.78rem' };
+  const inp  = { padding:'.36rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', fontSize:'.85rem' };
+  const rowB = { display:'flex', alignItems:'center', gap:'.4rem', padding:'.45rem .65rem', borderRadius:7, border:'1.5px solid var(--borde)', marginBottom:'.35rem', background:'var(--fondo-med)', flexWrap:'wrap' };
 
   if (!fedId) return null;
   return (
@@ -8513,13 +8567,13 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
       {/* Ventaja local — común a grupos y sueltos */}
       {faseSel && (
         <div style={{display:'flex', alignItems:'center', gap:'.6rem', padding:'.55rem .75rem',
-                     borderRadius:8, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.25)',
+                     borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)',
                      marginBottom:'.75rem', flexWrap:'wrap'}}>
           <span style={{fontSize:'.85rem', fontWeight:600}}>Ventaja local:</span>
           <input type="number" min="0" max="100" value={ptsLocalFase}
                  onChange={e => setPtsLocalFase(e.target.value)}
                  style={{width:65, padding:'.28rem .4rem', borderRadius:6,
-                         border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.82)',
+                         border:'1.5px solid var(--borde)', background:'var(--fondo-alt)',
                          fontSize:'.88rem', textAlign:'center'}} />
           <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>pts sumados al local antes del baremo</span>
           <button style={{...sBtn, marginLeft:'auto'}} onClick={guardarPtsLocal}>Guardar</button>
@@ -8539,7 +8593,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
           const mG = partidos.filter(p=>p.grupo_id===g.id);
           const rondas = [...new Set(mG.map(p=>p.ronda))].sort((a,b)=>a-b);
           return (
-            <div key={g.id} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.75rem', marginBottom:'.75rem', background:'rgba(200,225,255,0.25)'}}>
+            <div key={g.id} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.75rem', marginBottom:'.75rem', background:'var(--fondo-sub)'}}>
               <div style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.5rem', flexWrap:'wrap'}}>
                 <strong style={{flex:1}}>{g.nombre}</strong>
                 <button style={sBtn} onClick={()=>generarCalendario(g.id)} disabled={busy}>
@@ -8554,7 +8608,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                 </div>
                 <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem', marginBottom:'.4rem'}}>
                   {miembros.map(pid=>(
-                    <span key={pid} style={{display:'inline-flex', alignItems:'center', gap:'.2rem', padding:'.12rem .4rem', borderRadius:10, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.85)', fontSize:'.78rem'}}>
+                    <span key={pid} style={{display:'inline-flex', alignItems:'center', gap:'.2rem', padding:'.12rem .4rem', borderRadius:10, border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', fontSize:'.78rem'}}>
                       {nomMap[pid]||pid}
                       <button onClick={()=>removeTeam(g.id,pid)} style={{border:'none',background:'none',cursor:'pointer',color:'#dc3545',fontWeight:700,fontSize:'.72rem',padding:'0 1px'}}>×</button>
                     </span>
@@ -8582,7 +8636,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                     const jornadaAsig = ms[0]?.jornada_fantasy;
                     const key = `${g.id}_${r}`;
                     return (
-                      <div key={r} style={{marginBottom:'.45rem', padding:'.4rem .5rem', borderRadius:7, border:'1px solid var(--borde)', background:'rgba(200,225,255,0.18)'}}>
+                      <div key={r} style={{marginBottom:'.45rem', padding:'.4rem .5rem', borderRadius:7, border:'1px solid var(--borde)', background:'var(--fondo-sub)'}}>
                         <div style={{display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.25rem', flexWrap:'wrap'}}>
                           <span style={{fontWeight:600, fontSize:'.82rem', minWidth:60}}>Ronda {r}</span>
                           <span style={{fontSize:'.76rem', color: jornadaAsig ? 'var(--verde)' : 'var(--texto2)'}}>
@@ -8663,7 +8717,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
             </tbody>
           </table>
         </div>
-        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'flex-end', padding:'.65rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'rgba(200,225,255,0.25)'}}>
+        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'flex-end', padding:'.65rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)'}}>
           {[['Local',sLocal,setSLocal],['Visitante',sVisit,setSVisit]].map(([label,val,set])=>(
             <div key={label} style={{display:'flex',flexDirection:'column',gap:'.18rem',flex:1,minWidth:130}}>
               <label style={{fontSize:'.76rem',color:'var(--texto2)'}}>{label}</label>
@@ -8924,7 +8978,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
         {comps.map(c=>(
           <button key={c.id} onClick={()=>setCompSel(c.id)}
             style={{padding:'.5rem 1.1rem',borderRadius:8,border:'1.5px solid var(--borde)',
-              background:'rgba(200,225,255,0.85)',cursor:'pointer',fontWeight:600,fontSize:'.9rem'}}>
+              background:'var(--fondo-alt)',cursor:'pointer',fontWeight:600,fontSize:'.9rem'}}>
             {c.nombre}
           </button>
         ))}
@@ -8938,7 +8992,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
       <div style={{marginBottom:'.5rem', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
         <button onClick={()=>{setCompSel(null);setFases([]);setGrupos([]);setPartidos([]);}}
           style={{padding:'.28rem .7rem',borderRadius:7,border:'1.5px solid var(--borde)',
-            background:'rgba(200,225,255,0.85)',cursor:'pointer',fontSize:'.82rem'}}>
+            background:'var(--fondo-alt)',cursor:'pointer',fontSize:'.82rem'}}>
           ← Torneos
         </button>
         {isAdmin && <button onClick={() => {
@@ -9085,7 +9139,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                         return (
                           <div key={m.id} style={{display:'flex',alignItems:'center',gap:'.4rem',
                             padding:'.28rem .4rem',borderRadius:6,marginBottom:'.18rem',fontSize:'.83rem',
-                            background:res?'rgba(200,225,255,0.40)':'rgba(200,225,255,0.18)'}}>
+                            background:res?'var(--fondo-med)':'var(--fondo-sub)'}}>
                             <span style={{flex:1,textAlign:'right',fontWeight:600}}><Equipo pid={m.participante_local_id} /></span>
                             <span style={{minWidth:55,textAlign:'center',fontWeight:800,
                               fontSize:res?'.92rem':'.82rem',color:res?'var(--texto)':'var(--texto2)'}}>
@@ -9114,7 +9168,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                     <div key={m.id} style={{display:'flex',alignItems:'center',gap:'.4rem',
                       padding:'.38rem .5rem',borderRadius:7,border:'1px solid var(--gris)',
                       marginBottom:'.3rem',fontSize:'.85rem',
-                      background:res?'rgba(200,225,255,0.40)':'rgba(200,225,255,0.18)'}}>
+                      background:res?'var(--fondo-med)':'var(--fondo-sub)'}}>
                       {m.nombre&&<span style={{fontSize:'.74rem',color:'var(--texto2)',minWidth:70,flexShrink:0}}>{m.nombre}</span>}
                       <span style={{flex:1,textAlign:'right',fontWeight:600}}><Equipo pid={m.participante_local_id} /></span>
                       <span style={{fontWeight:800,fontSize:res?'.92rem':'.85rem',minWidth:60,textAlign:'center',
@@ -9181,6 +9235,13 @@ function App() {
   const [sesionLista, setSesionLista] = useState(false);
   const [ofertasBadge,  setOfertasBadge]  = useState(0);
   const [tablonBadge,   setTablonBadge]   = useState(0);
+  const [tema, setTema] = useState(() => localStorage.getItem('filfa-tema') || 'clasico');
+  useEffect(() => {
+    const html = document.documentElement;
+    if (tema === 'clasico') delete html.dataset.tema;
+    else html.dataset.tema = tema;
+    localStorage.setItem('filfa-tema', tema);
+  }, [tema]);
 
   const seleccionarFederacion = async (part, fed, userOverride, resetear = true) => {
     const u = userOverride || authUser;
@@ -9396,6 +9457,15 @@ function App() {
                 </span>
               </div>
         )}
+
+        <div className="nav-selector">
+          <label>Tema:</label>
+          <select value={tema} onChange={e => setTema(e.target.value)}>
+            <option value="clasico">Clásico</option>
+            <option value="claro">Claro</option>
+            <option value="nocturno">Nocturno</option>
+          </select>
+        </div>
 
         <div className="nav-user">
           <span>{isAdmin ? '⚙ Admin' : isModerador ? '⚙ Mod' : session.email}</span>
@@ -10977,7 +11047,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
                     <button onClick={() => calcularDesdeFantasy(j)}
                             disabled={calculando === j}
                             style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
-                                    border:'1.5px solid #3b82f6', background: calculando===j ? '#eff6ff' : '#eff6ff',
+                                    border:'1.5px solid #3b82f6', background: 'var(--fondo-med)',
                                     color:'#1d4ed8', cursor:'pointer', fontWeight:600}}>
                       {calculando === j ? 'Calculando…' : '⚡ Calcular'}
                     </button>

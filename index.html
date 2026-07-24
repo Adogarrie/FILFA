@@ -8047,19 +8047,30 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
       if (error) { alert('Error al guardar sustituciones: ' + error.message); setGuardando(false); return; }
     }
 
-    // 3. Recalcular clasificacion con sustituciones aplicadas
-    const { data: ptsData } = await sb.from('puntos_jugador')
-      .select('jugador_id, pts')
-      .eq('federacion_id', federacionId)
-      .eq('jornada', jornada);
+    // 3. Recalcular clasificacion con sustituciones, capitán y comodines aplicados
+    const [{ data: ptsData }, { data: capitanesData }, { data: comodinesData }] = await Promise.all([
+      sb.from('puntos_jugador').select('jugador_id, pts').eq('federacion_id', federacionId).eq('jornada', jornada),
+      sb.from('capitanes').select('participante_id, jugador_id').eq('jornada', jornada).in('participante_id', partIds),
+      sb.from('comodines_usados').select('participante_id, tipo').eq('jornada', jornada).in('participante_id', partIds),
+    ]);
 
     if (ptsData && ptsData.length > 0) {
-      const ptsMapa = Object.fromEntries(ptsData.map(r => [r.jugador_id, r.pts]));
-      const alisPorPart = {};
+      const ptsMapa      = Object.fromEntries(ptsData.map(r => [r.jugador_id, r.pts]));
+      const capitanMap   = Object.fromEntries((capitanesData || []).map(c => [c.participante_id, c.jugador_id]));
+      const usaBanquillo = new Set((comodinesData || []).filter(c => c.tipo === 'banquillo').map(c => c.participante_id));
+      const usaCapitan   = new Set((comodinesData || []).filter(c => c.tipo === 'capitan').map(c => c.participante_id));
+      const scopeCapCal  = federacion?.comodin_capitan_en_calendario   ?? true;
+      const scopeBanCal  = federacion?.comodin_banquillo_en_calendario ?? true;
+
+      const alisAllByPart = {};
+      const alisTitByPart = {};
       for (const a of alisData) {
-        if (!a.es_titular) continue;
-        if (!alisPorPart[a.participante_id]) alisPorPart[a.participante_id] = [];
-        alisPorPart[a.participante_id].push(a.jugador_id);
+        if (!alisAllByPart[a.participante_id]) alisAllByPart[a.participante_id] = [];
+        alisAllByPart[a.participante_id].push(a.jugador_id);
+        if (a.es_titular) {
+          if (!alisTitByPart[a.participante_id]) alisTitByPart[a.participante_id] = [];
+          alisTitByPart[a.participante_id].push(a.jugador_id);
+        }
       }
       const subsPorPart = {};
       for (const s of subsPreview) {
@@ -8067,11 +8078,21 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
         subsPorPart[s.participante_id].push(s);
       }
       const clasRows = participantes.map(p => {
-        let jids = alisPorPart[p.id] || [];
-        for (const s of (subsPorPart[p.id] || [])) {
-          jids = jids.map(jid => jid === s.jugador_sale_id ? s.jugador_entra_id : jid);
+        let pts = 0;
+        if (federacion?.comodin_banquillo_habilitado && scopeBanCal && usaBanquillo.has(p.id)) {
+          pts = (alisAllByPart[p.id] || []).reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0);
+        } else {
+          let jids = alisTitByPart[p.id] || [];
+          for (const s of (subsPorPart[p.id] || [])) {
+            jids = jids.map(jid => jid === s.jugador_sale_id ? s.jugador_entra_id : jid);
+          }
+          pts = jids.reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0);
         }
-        return { participante_id: p.id, jornada, puntos_jornada: jids.reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0) };
+        if (federacion?.comodin_capitan_habilitado && scopeCapCal && usaCapitan.has(p.id)) {
+          const cap = capitanMap[p.id];
+          if (cap) pts += ptsMapa[cap] ?? 0;
+        }
+        return { participante_id: p.id, jornada, puntos_jornada: pts };
       });
       await sb.from('clasificacion').upsert(clasRows, { onConflict: 'participante_id,jornada' });
     }

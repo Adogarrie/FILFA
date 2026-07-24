@@ -10242,9 +10242,15 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
   const jornadas = [...new Set(partidos.map(p => p.jornada))].sort((a, b) => a - b);
-  const [copiadoJ, setCopiadoJ] = useState(null);
+  const [copiado, setCopiado] = useState(null); // { j, tipo }
 
-  const generarPlantillaH2H = (j) => {
+  const copiar = (j, tipo, texto) => {
+    navigator.clipboard.writeText(texto).catch(() => {});
+    setCopiado({ j, tipo });
+    setTimeout(() => setCopiado(c => c?.j === j && c?.tipo === tipo ? null : c), 2000);
+  };
+
+  const generarPlantillaEnDirecto = (j) => {
     const { ptsLocal: ptsL } = getVueltaInfo(j, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, vueltasExtra);
     const ms = partidos.filter(p => p.jornada === j);
     const lineas = [`EN DIRECTO J${j}`];
@@ -10254,11 +10260,26 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     return lineas.join('\n');
   };
 
-  const copiarPlantilla = (j) => {
-    const texto = generarPlantillaH2H(j);
-    navigator.clipboard.writeText(texto).catch(() => {});
-    setCopiadoJ(j);
-    setTimeout(() => setCopiadoJ(c => c === j ? null : c), 2000);
+  const generarPlantillaPartido = (j) => {
+    const ms = partidos.filter(p => p.jornada === j);
+    const lineas = [`JORNADA ${j}`];
+    ms.forEach((m, i) => {
+      lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} - ${nomMap[m.visitante_id] || '—'}`);
+    });
+    return lineas.join('\n');
+  };
+
+  const generarPlantillaResultados = (j) => {
+    const ms = partidos.filter(p => p.jornada === j);
+    const lineas = [`RESULTADOS JORNADA ${j}`];
+    ms.forEach((m, i) => {
+      const gL  = m.pts_local      ?? '?';
+      const gV  = m.pts_visitante  ?? '?';
+      const pL  = m.fantasy_local    != null ? Math.round(m.fantasy_local)    : '?';
+      const pV  = m.fantasy_visitante != null ? Math.round(m.fantasy_visitante) : '?';
+      lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} ${gL} (${pL}) - ${gV} (${pV}) ${nomMap[m.visitante_id] || '—'}`);
+    });
+    return lineas.join('\n');
   };
 
   const Opcion = ({ label, desc, activo, onToggle }) => (
@@ -10623,11 +10644,23 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
                       {calculando === j ? 'Calculando…' : '⚡ Calcular'}
                     </button>
                   )}
-                  <button onClick={() => copiarPlantilla(j)}
+                  <button onClick={() => copiar(j, 'directo', generarPlantillaEnDirecto(j))}
                           style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
                                   border:'1.5px solid var(--borde)', background:'var(--fondo)',
                                   cursor:'pointer', fontWeight:600}}>
-                    {copiadoJ === j ? '¡Copiado!' : 'Copiar plantilla'}
+                    {copiado?.j === j && copiado?.tipo === 'directo' ? '¡Copiado!' : 'Copiar plantilla En Directo'}
+                  </button>
+                  <button onClick={() => copiar(j, 'partido', generarPlantillaPartido(j))}
+                          style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
+                                  border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                  cursor:'pointer', fontWeight:600}}>
+                    {copiado?.j === j && copiado?.tipo === 'partido' ? '¡Copiado!' : 'Copiar plantilla Partido'}
+                  </button>
+                  <button onClick={() => copiar(j, 'resultados', generarPlantillaResultados(j))}
+                          style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',
+                                  border:'1.5px solid var(--borde)', background:'var(--fondo)',
+                                  cursor:'pointer', fontWeight:600}}>
+                    {copiado?.j === j && copiado?.tipo === 'resultados' ? '¡Copiado!' : 'Copiar plantilla Resultados'}
                   </button>
                 </div>
                 {ms.map(m => {

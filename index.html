@@ -1810,7 +1810,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 }
 
 // ── CALENDARIO FANTASY ─────────────────────────────────────────
-function CalendarioFantasy({ participantes, federacion }) {
+function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [clas, setClas]               = useState([]);
   const [vista, setVista]             = useState('acumulado');
   const [jornada, setJornada]         = useState(1);
@@ -2031,12 +2031,22 @@ function CalendarioFantasy({ participantes, federacion }) {
         <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Clasificación</button>
         <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Clasificación Por Jornada</button>
         <button className={`tab ${vista==='estadisticas'?'active':''}`} onClick={() => setVista('estadisticas')}>Estadísticas</button>
-        <button onClick={() => {
+        {isAdmin && <button onClick={() => {
           const sheetClasif = [
             ['Pos', 'Equipo', 'Total pts', 'Jornadas', 'Media'],
             ...filasAcum.map((e, i) => [
               i + 1, e.nombre, e.total, e.jornadas,
               e.jornadas > 0 ? parseFloat((e.total / e.jornadas).toFixed(1)) : '',
+            ]),
+          ];
+          const sheetPorJornada = [
+            ['Equipo', ...allJornadas.map(j => `J${j}`)],
+            ...filasAcum.map(e => [
+              e.nombre,
+              ...allJornadas.map(j => {
+                const r = clas.find(c => c.participante_id === e.id && c.jornada === j);
+                return r ? r.puntos_jornada : '';
+              }),
             ]),
           ];
           const sheetStats = [
@@ -2053,6 +2063,7 @@ function CalendarioFantasy({ participantes, federacion }) {
           ];
           descargarExcel('Liga Fantástica', [
             { nombre: 'Clasificación', datos: sheetClasif },
+            { nombre: 'Claf. Por Jornada', datos: sheetPorJornada },
             { nombre: 'Estadísticas', datos: sheetStats },
             { nombre: 'Top puntuaciones', datos: sheetTop },
           ]);
@@ -2061,7 +2072,7 @@ function CalendarioFantasy({ participantes, federacion }) {
                 border:'1.5px solid #1d6f42', background:'#e8f5e9',
                 color:'#1d6f42', cursor:'pointer', fontWeight:600}}>
           ⬇ Excel
-        </button>
+        </button>}
       </div>
 
       {vista === 'jornada' && (
@@ -8685,7 +8696,7 @@ function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccion
 
 // ── COMPETICIONES ───────────────────────────────────────────────
 // ── VISTA TORNEOS (usuario) ────────────────────────────────────
-function TorneosVista({ federacion, participantes }) {
+function TorneosVista({ federacion, participantes, isAdmin }) {
   const fedId  = federacion?.id;
   const baremo = useMemo(() => {
     try { return JSON.parse(federacion?.h2h_baremo||'null')||BAREMO_DEFAULT; }
@@ -8774,7 +8785,7 @@ function TorneosVista({ federacion, participantes }) {
             background:'rgba(200,225,255,0.85)',cursor:'pointer',fontSize:'.82rem'}}>
           ← Torneos
         </button>
-        <button onClick={() => {
+        {isAdmin && <button onClick={() => {
           // ── Hoja Calendario ──
           const calHeader = ['Fase', 'Grupo', 'Ronda', 'J. Fantasy', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante'];
           const calRows = [];
@@ -8836,7 +8847,7 @@ function TorneosVista({ federacion, participantes }) {
                 border:'1.5px solid #1d6f42',background:'#e8f5e9',
                 color:'#1d6f42',cursor:'pointer',fontWeight:600}}>
           ⬇ Excel
-        </button>
+        </button>}
       </div>
       <div className="card" style={{marginBottom:'.5rem'}}><h2>{compNombre}</h2></div>
       {cargando ? <div className="loading">Cargando...</div> : fases.map(fase=>(
@@ -8970,7 +8981,7 @@ function TorneosVista({ federacion, participantes }) {
   );
 }
 
-function Competiciones({ federacion, participantes }) {
+function Competiciones({ federacion, participantes, isAdmin }) {
   const [tab, setTab] = useState('calendario');
   return (
     <div>
@@ -8983,13 +8994,13 @@ function Competiciones({ federacion, participantes }) {
                 onClick={() => setTab('torneos')}>Torneos</button>
       </div>
       {tab === 'calendario' && (
-        <CalendarioFantasy participantes={participantes} federacion={federacion} />
+        <CalendarioFantasy participantes={participantes} federacion={federacion} isAdmin={isAdmin} />
       )}
       {tab === 'h2h' && (
-        <LigaH2H federacion={federacion} participantes={participantes} />
+        <LigaH2H federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
       )}
       {tab === 'torneos' && (
-        <TorneosVista federacion={federacion} participantes={participantes} />
+        <TorneosVista federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
       )}
     </div>
   );
@@ -9281,7 +9292,7 @@ function App() {
                    onOfertaEnviada={refrescarBadge} />
         )}
         {vista === 'Competiciones' && (
-          <Competiciones federacion={federacion} participantes={participantes} />
+          <Competiciones federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
         )}
         {vista === 'Ayuda' && (
           <Ayuda isAdmin={isAdmin} maxJugadores={federacion?.max_jugadores ?? 14} />
@@ -9348,7 +9359,7 @@ function PosHistorialTable({ rows }) {
 }
 
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
-function LigaH2H({ federacion, participantes }) {
+function LigaH2H({ federacion, participantes, isAdmin }) {
   const [tab,              setTab]             = useState('clasificacion');
   const [subTabClasif,     setSubTabClasif]     = useState('general');
   const [partidos,         setPartidos]         = useState([]);
@@ -9683,7 +9694,7 @@ function LigaH2H({ federacion, participantes }) {
         <button className={`tab ${tab==='clasificacion'?'active':''}`} onClick={() => setTab('clasificacion')}>Clasificación H2H</button>
         <button className={`tab ${tab==='calendario'?'active':''}`}    onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='estadisticas'?'active':''}`}  onClick={() => setTab('estadisticas')}>Estadísticas</button>
-        <button onClick={() => {
+        {isAdmin && <button onClick={() => {
           // ── Hoja Calendario ──
           const calHeader = ['Jornada', 'División', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante', 'Pts Fantasy Local', 'Pts Fantasy Visitante'];
           const calRows = [...partidos].sort((a, b) => a.jornada - b.jornada).map(m => [
@@ -9748,7 +9759,7 @@ function LigaH2H({ federacion, participantes }) {
                 border:'1.5px solid #1d6f42', background:'#e8f5e9',
                 color:'#1d6f42', cursor:'pointer', fontWeight:600}}>
           ⬇ Excel
-        </button>
+        </button>}
       </div>
 
       {tab === 'calendario' && (

@@ -1811,7 +1811,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 // ── CALENDARIO FANTASY ─────────────────────────────────────────
 function CalendarioFantasy({ participantes, federacion }) {
   const [clas, setClas]               = useState([]);
-  const [vista, setVista]             = useState('jornada');
+  const [vista, setVista]             = useState('acumulado');
   const [jornada, setJornada]         = useState(1);
   const [jugadores, setJugadores]     = useState([]);
   const [abierto, setAbierto]         = useState(null);
@@ -2027,8 +2027,8 @@ function CalendarioFantasy({ participantes, federacion }) {
   return (
     <div>
       <div className="tabs">
-        <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Por jornada</button>
-        <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Acumulado</button>
+        <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Clasificación</button>
+        <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Clasificación Por Jornada</button>
         <button className={`tab ${vista==='estadisticas'?'active':''}`} onClick={() => setVista('estadisticas')}>Estadísticas</button>
       </div>
 
@@ -2078,7 +2078,7 @@ function CalendarioFantasy({ participantes, federacion }) {
       {vista === 'acumulado' && (() => {
         const clasFiltradas = jornadaAcum !== null ? clas.filter(r => r.jornada <= jornadaAcum) : clas;
         const filas = jornadaAcum !== null ? computeAcumRows(clasFiltradas) : filasAcum;
-        const titulo = jornadaAcum !== null ? `Clasificación hasta J${jornadaAcum}` : 'Clasificación acumulada';
+        const titulo = jornadaAcum !== null ? `Clasificación hasta J${jornadaAcum}` : 'Clasificación';
         return (
           <>
             <div className="card" style={{paddingBottom:'.6rem'}}>
@@ -2195,7 +2195,7 @@ function CalendarioFantasy({ participantes, federacion }) {
 
               {/* ── Podio en la clasificación acumulada ── */}
               <div className="card" style={{marginBottom:'.75rem'}}>
-                <h2 style={{marginBottom:'.75rem'}}>Podio en la clasificación acumulada</h2>
+                <h2 style={{marginBottom:'.75rem'}}>Podio en la clasificación</h2>
                 <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
                   Tras cada jornada se computa el acumulado. Se cuenta cuántas veces cada equipo lideró la clasificación (1º) o estuvo en el podio (top 3).
                 </p>
@@ -4693,7 +4693,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                     const restantes = max === null ? null : max - comodinesUsados.capitan;
                     const activo = comodinJornada === 'capitan';
                     const agotado = max !== null && comodinesUsados.capitan >= max && !activo;
-                    const scopeLbls = [federacion?.comodin_capitan_en_calendario&&'Calendario', federacion?.comodin_capitan_en_h2h&&'H2H', federacion?.comodin_capitan_en_torneo&&'Torneo'].filter(Boolean);
+                    const scopeLbls = [federacion?.comodin_capitan_en_calendario&&'Liga Fantástica', federacion?.comodin_capitan_en_h2h&&'Liga FILFA', federacion?.comodin_capitan_en_torneo&&'Torneo'].filter(Boolean);
                     const scopeLbl = scopeLbls.length ? scopeLbls.join(', ') : 'Sin efecto';
                     return (
                       <div style={{display:'flex',flexDirection:'column',gap:'.18rem'}}>
@@ -4722,7 +4722,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                     const restantes = max === null ? null : max - comodinesUsados.banquillo;
                     const activo = comodinJornada === 'banquillo';
                     const agotado = max !== null && comodinesUsados.banquillo >= max && !activo;
-                    const scopeLbls = [federacion?.comodin_banquillo_en_calendario&&'Calendario', federacion?.comodin_banquillo_en_h2h&&'H2H', federacion?.comodin_banquillo_en_torneo&&'Torneo'].filter(Boolean);
+                    const scopeLbls = [federacion?.comodin_banquillo_en_calendario&&'Liga Fantástica', federacion?.comodin_banquillo_en_h2h&&'Liga FILFA', federacion?.comodin_banquillo_en_torneo&&'Torneo'].filter(Boolean);
                     const scopeLbl = scopeLbls.length ? scopeLbls.join(', ') : 'Sin efecto';
                     return (
                       <div style={{display:'flex',flexDirection:'column',gap:'.18rem'}}>
@@ -6070,7 +6070,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             <div style={{display:'flex', flexDirection:'column', gap:'.3rem'}}>
               <span style={{fontSize:'.83rem', color:'var(--texto2)'}}>Aplica a (selección múltiple):</span>
               <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem'}}>
-                {[['calendario','Calendario'], ['h2h','Liga H2H'], ['torneo','Torneo específico']].map(([k, lbl]) => (
+                {[['calendario','Liga Fantástica'], ['h2h','Liga FILFA'], ['torneo','Torneo específico']].map(([k, lbl]) => (
                   <label key={k} style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.84rem', cursor:'pointer',
                                          padding:'.22rem .55rem', borderRadius:6, border:'1.5px solid var(--borde)',
                                          background: cm.scope[k] ? 'rgba(15,80,180,0.18)' : 'rgba(200,225,255,0.40)'}}>
@@ -8488,7 +8488,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['ajustes',      'Ajustes Generales'],
     ['mercado',      'Mercado'],
     ['jugadores',    'Jugadores'],
-    ['h2h',          'Liga H2H'],
+    ['h2h',          'Liga FILFA'],
     ['torneos',      'Torneos'],
   ];
   const primera = TABS_DEF[0][0];
@@ -8871,9 +8871,9 @@ function Competiciones({ federacion, participantes }) {
     <div>
       <div className="tabs" style={{marginBottom:'1rem'}}>
         <button className={`tab ${tab==='calendario'?'active':''}`}
-                onClick={() => setTab('calendario')}>Calendario</button>
+                onClick={() => setTab('calendario')}>Liga Fantástica</button>
         <button className={`tab ${tab==='h2h'?'active':''}`}
-                onClick={() => setTab('h2h')}>Liga H2H</button>
+                onClick={() => setTab('h2h')}>Liga FILFA</button>
         <button className={`tab ${tab==='torneos'?'active':''}`}
                 onClick={() => setTab('torneos')}>Torneos</button>
       </div>
@@ -9244,7 +9244,7 @@ function PosHistorialTable({ rows }) {
 
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes }) {
-  const [tab,              setTab]             = useState('calendario');
+  const [tab,              setTab]             = useState('clasificacion');
   const [subTabClasif,     setSubTabClasif]     = useState('general');
   const [partidos,         setPartidos]         = useState([]);
   const [jornada,          setJornada]          = useState(1);
@@ -9277,8 +9277,8 @@ function LigaH2H({ federacion, participantes }) {
   if (!federacion?.h2h_habilitado) {
     return (
       <div className="card">
-        <h2>Liga H2H</h2>
-        <p style={{color:'var(--texto2)', marginTop:'.5rem'}}>Liga H2H no activada.</p>
+        <h2>Liga FILFA</h2>
+        <p style={{color:'var(--texto2)', marginTop:'.5rem'}}>Liga FILFA no activada.</p>
       </div>
     );
   }
@@ -9575,8 +9575,8 @@ function LigaH2H({ federacion, participantes }) {
   return (
     <div>
       <div className="tabs">
-        <button className={`tab ${tab==='calendario'?'active':''}`}    onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='clasificacion'?'active':''}`} onClick={() => setTab('clasificacion')}>Clasificación H2H</button>
+        <button className={`tab ${tab==='calendario'?'active':''}`}    onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='estadisticas'?'active':''}`}  onClick={() => setTab('estadisticas')}>Estadísticas</button>
       </div>
 
@@ -10088,7 +10088,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     await sb.from('federaciones').update({ h2h_habilitado: val }).eq('id', federacion.id);
     setH2hOn(val);
     onFederacionUpdate({ ...federacion, h2h_habilitado: val });
-    setMsg(val ? 'Liga H2H activada' : 'Liga H2H desactivada');
+    setMsg(val ? 'Liga FILFA activada' : 'Liga FILFA desactivada');
     setTimeout(() => setMsg(''), 2500);
   };
 
@@ -10234,7 +10234,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       return sb.from('h2h_partidos').update({ pts_local: gl, pts_visitante: gv }).eq('id', m.id);
     }));
     setGuardando(false);
-    publicar(federacion?.id, 'admin', 'Resultados de Liga H2H guardados', actorNombre);
+    publicar(federacion?.id, 'admin', 'Resultados de Liga FILFA guardados', actorNombre);
     setMsg('Resultados guardados');
     setTimeout(() => setMsg(''), 2500);
     cargar();
@@ -10284,14 +10284,14 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     <div>
       <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.25rem'}}>
-          <h2 style={{margin:0}}>Liga H2H</h2>
+          <h2 style={{margin:0}}>Liga FILFA</h2>
           {msg && <span style={{color: msg.startsWith('Error') || msg.startsWith('Faltan') || msg.startsWith('Hay') ? '#dc3545' : 'var(--verde)',
                                 fontWeight:600, fontSize:'.88rem'}}>{msg}</span>}
         </div>
 
         <Opcion
-          label="Liga H2H"
-          desc="Activa la liga cabeza a cabeza para esta federación. Los equipos podrán ver el calendario y la clasificación H2H."
+          label="Liga FILFA"
+          desc="Activa la Liga FILFA (cabeza a cabeza) para esta federación. Los equipos podrán ver el calendario y la clasificación."
           activo={h2hOn}
           onToggle={toggleH2H}
         />
@@ -10794,7 +10794,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       id: 'admin',
       titulo: '🛠 Rol del Admin',
       contenido: [
-        ['Panel de administración', 'El panel admin está organizado en pestañas principales: Mi Federación, Equipos, Pts Jugadores, Presupuestos, Ajustes Generales, Mercado, Jugadores y Liga H2H. Algunas pestañas agrupan sub-pestañas relacionadas para mantener el panel ordenado.'],
+        ['Panel de administración', 'El panel admin está organizado en pestañas principales: Mi Federación, Equipos, Pts Jugadores, Presupuestos, Ajustes Generales, Mercado, Jugadores y Liga FILFA. Algunas pestañas agrupan sub-pestañas relacionadas para mantener el panel ordenado.'],
         ['Gestión de la federación', 'Desde Admin → Mi Federación el admin configura el nombre, logo, presupuesto inicial, jornada actual, hora de cierre de pujas y el número máximo de jugadores por plantilla.'],
         ['Máx. jugadores por plantilla', `El límite de jugadores por equipo (por defecto ${maxJugadores}) es configurable por el admin desde Mi Federación. Los equipos que ya superan el nuevo límite conservan sus jugadores; simplemente no podrán fichar más hasta que bajen de él.`],
         ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno. Esta opción está en Admin → Ajustes Generales.'],

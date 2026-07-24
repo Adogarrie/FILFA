@@ -2095,8 +2095,10 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                 {filasJornada.map((e, i) => (
                   <React.Fragment key={e.id}>
                     <tr onClick={() => abrirEquipo(e.id)}
-                        style={{cursor:'pointer', background: abierto===e.id ? '#eff6ff' : i===0 ? 'rgba(26,127,55,.05)' : undefined,
-                                borderBottom: abierto===e.id ? 'none' : undefined}}>
+                        style={{cursor:'pointer',
+                                ...(abierto===e.id
+                                  ? {background:'#eff6ff', borderBottom:'none'}
+                                  : getClasifColor(federacion?.clasif_colores?.fantasia, i + 1))}}>
                       <td><Medalla pos={i + 1} /></td>
                       <td style={{fontWeight:600}}>
                         <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
@@ -2161,7 +2163,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                     </thead>
                     <tbody>
                       {filas.map((e, i) => (
-                        <tr key={e.id} style={{background: i===0?'rgba(26,127,55,.06)':undefined}}>
+                        <tr key={e.id} style={getClasifColor(federacion?.clasif_colores?.fantasia, i + 1)}>
                           <td><Medalla pos={i + 1} /></td>
                           <td style={{fontWeight:600}}>
                             <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
@@ -2211,7 +2213,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                     </thead>
                     <tbody>
                       {filasEstadisticas.map((e, i) => (
-                        <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.06)' : undefined}}>
+                        <tr key={e.id}>
                           <td style={{fontWeight:600}}>
                             <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
                               {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
@@ -2255,7 +2257,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                       {[...filasEstadisticas]
                         .sort((a, b) => b.acumPrimer - a.acumPrimer || b.acumPodium - a.acumPodium)
                         .map((e, i) => (
-                          <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.06)' : undefined}}>
+                          <tr key={e.id}>
                             <td style={{fontWeight:600}}>
                               <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
                                 {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
@@ -2298,8 +2300,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                         const esPrimero = i === 0;
                         const esMismosPts = i > 0 && r.puntos_jornada === topPuntuaciones[i-1].puntos_jornada;
                         return (
-                          <tr key={`${r.participante_id}_${r.jornada}`}
-                              style={{background: esPrimero ? 'rgba(26,127,55,.06)' : undefined}}>
+                          <tr key={`${r.participante_id}_${r.jornada}`}>
                             <td style={{color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>
                               {esMismosPts ? '=' : i + 1}
                             </td>
@@ -3280,6 +3281,16 @@ async function publicar(federacionId, tipo, texto, actorNombre) {
   if (!sb || !federacionId) return;
   const { error } = await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null });
   if (error) console.error('[Tablón] Error al publicar:', error.message, { tipo, texto });
+}
+
+function getClasifColor(reglas, pos) {
+  if (!reglas || !reglas.length) return {};
+  const r = reglas.find(r => r.pos === pos);
+  if (!r) return {};
+  const s = {};
+  if (r.bg)   s.background = r.bg;
+  if (r.text) s.color      = r.text;
+  return s;
 }
 
 function descargarExcel(nombreArchivo, hojas) {
@@ -5695,6 +5706,29 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [compsConfig, setCompsConfig] = useState([]);
   const [msgComodin,   setMsgComodin]    = useState('');
 
+  const [colores, setColores] = useState(() => {
+    const c = federacion?.clasif_colores || {};
+    return { fantasia: c.fantasia || [], h2h: c.h2h || [], grupos: c.grupos || [] };
+  });
+  const [tabColores, setTabColores] = useState('fantasia');
+  const [msgColores, setMsgColores] = useState('');
+
+  const addRegla    = (tipo) => setColores(c => ({ ...c, [tipo]: [...c[tipo], {
+    pos: c[tipo].length ? Math.max(...c[tipo].map(r => r.pos)) + 1 : 1, bg: '', text: '',
+  }]}));
+  const delRegla    = (tipo, idx) => setColores(c => ({ ...c, [tipo]: c[tipo].filter((_, i) => i !== idx) }));
+  const updateRegla = (tipo, idx, campo, val) => setColores(c => ({
+    ...c, [tipo]: c[tipo].map((r, i) => i === idx ? { ...r, [campo]: val } : r),
+  }));
+  const guardarColores = async () => {
+    const { error, data } = await sb.from('federaciones')
+      .update({ clasif_colores: colores }).eq('id', federacion.id).select().single();
+    if (error) { setMsgColores('Error: ' + error.message); return; }
+    onFederacionUpdate(data);
+    setMsgColores('Guardado correctamente');
+    setTimeout(() => setMsgColores(''), 3000);
+  };
+
   const cargarMods = async () => {
     if (!federacion) return;
     const { data } = await sb.from('moderadores').select('id, participante_id')
@@ -6167,6 +6201,112 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
         {msgComodin && <span style={{color:'var(--verde)', fontWeight:600, fontSize:'.9rem'}}>{msgComodin}</span>}
       </div>
     </div>
+
+    {/* ── COLORES DE CLASIFICACIÓN ── */}
+    {!isModerador && (
+    <div className="card">
+      <h2 style={{marginBottom:'.5rem'}}>Colores de clasificación</h2>
+      <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.85rem'}}>
+        Asigna color de fondo y/o texto a cada puesto. Las reglas de Liga Fantástica, Liga FILFA y Grupos son independientes.
+      </p>
+      <div style={{display:'flex', gap:'.4rem', marginBottom:'1rem', flexWrap:'wrap'}}>
+        {[['fantasia','Liga Fantástica'],['h2h','Liga FILFA'],['grupos','Grupos (Torneos)']].map(([k,l]) => (
+          <button key={k} onClick={() => setTabColores(k)}
+                  style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem', cursor:'pointer',
+                          fontWeight: tabColores===k ? 700 : 400,
+                          border: '1.5px solid ' + (tabColores===k ? 'var(--verde)' : 'var(--borde)'),
+                          background: tabColores===k ? 'var(--verde)' : 'var(--fondo)',
+                          color: tabColores===k ? '#fff' : 'var(--texto)'}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {colores[tabColores].length === 0 && (
+        <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.75rem', fontStyle:'italic'}}>
+          Sin reglas configuradas.
+        </p>
+      )}
+
+      {colores[tabColores].map((r, idx) => (
+        <div key={idx} style={{display:'flex', gap:'.6rem', alignItems:'flex-end', flexWrap:'wrap',
+                               padding:'.45rem .6rem', borderRadius:7, border:'1px solid var(--borde)',
+                               background:'var(--gris)', marginBottom:'.35rem'}}>
+          <div style={{display:'flex', flexDirection:'column', gap:'.15rem'}}>
+            <label style={{fontSize:'.72rem', color:'var(--texto2)'}}>Puesto</label>
+            <input type="number" min="1" value={r.pos}
+                   onChange={e => updateRegla(tabColores, idx, 'pos', Math.max(1, parseInt(e.target.value) || 1))}
+                   style={{width:58, padding:'.28rem .4rem', borderRadius:5,
+                           border:'1.5px solid var(--borde)', fontSize:'.88rem', textAlign:'center',
+                           background:'var(--fondo)', color:'var(--texto)'}} />
+          </div>
+
+          <div style={{display:'flex', flexDirection:'column', gap:'.15rem'}}>
+            <label style={{fontSize:'.72rem', color:'var(--texto2)'}}>Fondo</label>
+            <div style={{display:'flex', alignItems:'center', gap:'.3rem'}}>
+              <input type="color" value={r.bg || '#ffffff'}
+                     onChange={e => updateRegla(tabColores, idx, 'bg', e.target.value)}
+                     style={{width:34, height:28, padding:2, borderRadius:5,
+                             border:'1.5px solid var(--borde)', cursor:'pointer'}} />
+              {r.bg
+                ? <button onClick={() => updateRegla(tabColores, idx, 'bg', '')}
+                          style={{padding:'.12rem .4rem', fontSize:'.72rem', borderRadius:5,
+                                  border:'1px solid var(--borde)', background:'none',
+                                  cursor:'pointer', color:'var(--texto2)'}}>× quitar</button>
+                : <span style={{fontSize:'.72rem', color:'var(--texto2)', fontStyle:'italic'}}>sin fondo</span>
+              }
+            </div>
+          </div>
+
+          <div style={{display:'flex', flexDirection:'column', gap:'.15rem'}}>
+            <label style={{fontSize:'.72rem', color:'var(--texto2)'}}>Texto</label>
+            <div style={{display:'flex', alignItems:'center', gap:'.3rem'}}>
+              <input type="color" value={r.text || '#000000'}
+                     onChange={e => updateRegla(tabColores, idx, 'text', e.target.value)}
+                     style={{width:34, height:28, padding:2, borderRadius:5,
+                             border:'1.5px solid var(--borde)', cursor:'pointer'}} />
+              {r.text
+                ? <button onClick={() => updateRegla(tabColores, idx, 'text', '')}
+                          style={{padding:'.12rem .4rem', fontSize:'.72rem', borderRadius:5,
+                                  border:'1px solid var(--borde)', background:'none',
+                                  cursor:'pointer', color:'var(--texto2)'}}>× quitar</button>
+                : <span style={{fontSize:'.72rem', color:'var(--texto2)', fontStyle:'italic'}}>sin color</span>
+              }
+            </div>
+          </div>
+
+          {(r.bg || r.text) && (
+            <div style={{display:'flex', flexDirection:'column', gap:'.15rem'}}>
+              <label style={{fontSize:'.72rem', color:'var(--texto2)'}}>Vista previa</label>
+              <div style={{padding:'.28rem .65rem', borderRadius:5, border:'1px solid var(--borde)',
+                           background: r.bg || 'transparent', color: r.text || 'inherit',
+                           fontSize:'.82rem', fontWeight:600}}>
+                {r.pos}º puesto
+              </div>
+            </div>
+          )}
+
+          <button onClick={() => delRegla(tabColores, idx)}
+                  style={{marginLeft:'auto', padding:'.28rem .55rem', borderRadius:5,
+                          border:'1.5px solid #dc3545', background:'none',
+                          color:'#dc3545', cursor:'pointer', fontWeight:700, alignSelf:'center'}}>
+            ×
+          </button>
+        </div>
+      ))}
+
+      <div style={{display:'flex', gap:'.5rem', alignItems:'center', marginTop:'.75rem', flexWrap:'wrap'}}>
+        <button onClick={() => addRegla(tabColores)}
+                style={{padding:'.32rem .85rem', borderRadius:7, fontSize:'.82rem',
+                        border:'1.5px solid var(--verde)', background:'none',
+                        color:'var(--verde)', cursor:'pointer', fontWeight:600}}>
+          + Añadir puesto
+        </button>
+        <button onClick={guardarColores} className="btn-ok">Guardar colores</button>
+        {msgColores && <span style={{fontSize:'.82rem', color:'var(--verde)'}}>{msgColores}</span>}
+      </div>
+    </div>
+    )}
 
     {/* ── REINICIO DE TEMPORADA ── */}
     {!isModerador && (
@@ -8891,7 +9031,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                         const p=nomMap[row.pid];
                         const gd=row.gf-row.gc;
                         return (
-                          <tr key={row.pid} style={{borderTop:'1px solid var(--gris)',background:i===0?'rgba(15,32,68,.04)':undefined}}>
+                          <tr key={row.pid} style={{borderTop:'1px solid var(--gris)', ...getClasifColor(federacion?.clasif_colores?.grupos, i + 1)}}>
                             <td style={{padding:'.38rem .5rem',fontWeight:i===0?700:400}}>
                               <span style={{display:'inline-flex',alignItems:'center',gap:'.35rem'}}>
                                 {p?.escudo_url&&<img src={p.escudo_url} alt="" style={{width:15,height:15,objectFit:'contain'}} />}
@@ -9339,7 +9479,7 @@ function PosHistorialTable({ rows }) {
         </thead>
         <tbody>
           {rows.map((e, i) => (
-            <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.05)' : undefined}}>
+            <tr key={e.id}>
               <td style={{fontWeight:600}}>
                 <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
                   {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
@@ -9654,7 +9794,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
           </thead>
           <tbody>
             {rows.map((e, i) => (
-              <tr key={e.id} style={{background: i===0 ? 'rgba(26,127,55,.06)' : undefined}}>
+              <tr key={e.id} style={getClasifColor(federacion?.clasif_colores?.h2h, i + 1)}>
                 <td><Medalla pos={i + 1} /></td>
                 <td style={{fontWeight:600}}>
                   <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>

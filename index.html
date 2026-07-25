@@ -6128,13 +6128,17 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
                  style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
                          border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
         </div>
-        <div style={{minWidth:100}}>
+        <div style={{minWidth:110}}>
           <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
             Jornada actual
           </label>
-          <input type="number" min="1" max="38" value={jornada} onChange={e => setJornada(e.target.value)}
-                 style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
-                         border:'1.5px solid var(--borde)', fontSize:'.95rem'}} />
+          <select value={jornada} onChange={e => setJornada(e.target.value)}
+                  style={{width:'100%', padding:'.45rem .7rem', borderRadius:8,
+                          border:'1.5px solid var(--borde)', fontSize:'.95rem',
+                          background:'var(--fondo)', color:'var(--texto)'}}>
+            {Array.from({length:38}, (_, i) => i + 1).map(j =>
+              <option key={j} value={String(j)}>J{j}</option>)}
+          </select>
         </div>
         <div style={{minWidth:90}}>
           <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>
@@ -7634,6 +7638,7 @@ function Cesiones({ federacion, miParticipanteId, miNombre }) {
     }
     const { data: jugs } = await sb.from('jugadores')
       .select('id, nombre, equipo, posicion, valor_mercado')
+      .eq('activo', true)
       .order('nombre');
     setJugadoresLibres((jugs || []).filter(j => !ocupados.has(j.id)));
     setCargandoMercado(false);
@@ -9720,8 +9725,8 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
   const [tab,              setTab]             = useState('clasificacion');
   const [subTabClasif,     setSubTabClasif]     = useState('general');
   const [partidos,         setPartidos]         = useState([]);
-  const [jornada,          setJornada]          = useState(1);
-  const [jornadaHistorial, setJornadaHistorial] = useState(1);
+  const [jornada,          setJornada]          = useState(federacion?.jornada_h2h_actual || 1);
+  const [jornadaHistorial, setJornadaHistorial] = useState(federacion?.jornada_h2h_actual || 1);
   const [divisiones,       setDivisiones]       = useState([]);
   const [vueltasExtra,     setVueltasExtra]     = useState([]);
 
@@ -9743,7 +9748,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     ]).then(([{ data: p }, { data: ve }]) => {
       setPartidos(p || []);
       setVueltasExtra(ve || []);
-      if ((p || []).length > 0) setJornada(1);
+      if ((p || []).length > 0) setJornada(federacion?.jornada_h2h_actual || 1);
     });
   }, [federacion?.id, federacion?.h2h_habilitado]);
 
@@ -10407,6 +10412,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   const [ptsLocalV2,    setPtsLocalV2]    = useState(federacion?.h2h_pts_local_v2 ?? 5);
   const [calculando,    setCalculando]    = useState(null);
   const [msgCfg,        setMsgCfg]        = useState('');
+  const [jornadaH2HAct, setJornadaH2HAct] = useState(federacion?.jornada_h2h_actual || 1);
   // Vueltas extra
   const [vueltasExtra,  setVueltasExtra]  = useState([]);
   const [nuevaBase,     setNuevaBase]     = useState(1);   // 1 o 2
@@ -10612,6 +10618,15 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     if (ni < 0 || ni >= arr.length) return;
     [arr[idx], arr[ni]] = [arr[ni], arr[idx]];
     setDesempateOrden(arr);
+  };
+
+  const guardarJornadaH2H = async () => {
+    const { error } = await sb.from('federaciones')
+      .update({ jornada_h2h_actual: jornadaH2HAct }).eq('id', federacion.id);
+    if (error) { setMsgCfg('Error: ' + error.message); return; }
+    onFederacionUpdate({ ...federacion, jornada_h2h_actual: jornadaH2HAct });
+    setMsgCfg(`Jornada H2H actual → J${jornadaH2HAct}`);
+    setTimeout(() => setMsgCfg(''), 2500);
   };
 
   const guardarDesempate = async () => {
@@ -10855,6 +10870,34 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
           activo={h2hOn}
           onToggle={toggleH2H}
         />
+
+        {/* ── Jornada H2H actual ── */}
+        <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+          <div style={{fontWeight:700, marginBottom:'.2rem'}}>Jornada actual de Liga FILFA</div>
+          <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+            Jornada que se muestra por defecto al abrir el Calendario y la Clasificación por Jornada.
+            Los usuarios pueden seguir navegando a otras jornadas desde esas vistas.
+          </div>
+          <div style={{display:'flex', gap:'1rem', alignItems:'flex-end', flexWrap:'wrap'}}>
+            {partidos.length === 0
+              ? <span style={{fontSize:'.88rem', color:'var(--texto2)'}}>Genera el calendario primero para configurar la jornada actual.</span>
+              : <>
+                  <div>
+                    <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem'}}>Jornada</label>
+                    <select value={jornadaH2HAct} onChange={e => setJornadaH2HAct(Number(e.target.value))}
+                            style={{padding:'.4rem .7rem', borderRadius:8, border:'1.5px solid var(--borde)',
+                                    fontSize:'.95rem', background:'var(--fondo)', color:'var(--texto)'}}>
+                      {[...new Set(partidos.map(p => p.jornada))].sort((a,b) => a-b).map(j =>
+                        <option key={j} value={j}>J{j}</option>)}
+                    </select>
+                  </div>
+                  <button className="btn-ok" onClick={guardarJornadaH2H}>Guardar</button>
+                </>
+            }
+            {msgCfg && <span style={{color: msgCfg.startsWith('Error') ? '#dc3545' : 'var(--verde)',
+                                     fontWeight:600, fontSize:'.88rem'}}>{msgCfg}</span>}
+          </div>
+        </div>
 
         {/* ── Criterios de desempate ── */}
         <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>

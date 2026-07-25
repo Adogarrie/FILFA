@@ -1053,12 +1053,18 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         alert('Ya tienes a este jugador en tu equipo.');
         setModalPuja(null); cargar(); return;
       }
-      const totalCount = todosRows.length;
-      if (totalCount > 0) {
-        if (modalPuja.posicion === 'POR') {
-          alert('Este jugador ya ha sido fichado por otro equipo.');
+      if (modalPuja.posicion === 'POR') {
+        const miDiv = participantes.find(p => p.id === participanteId)?.division_id;
+        const divPartIds = new Set(
+          participantes.filter(p => p.division_id === miDiv).map(p => p.id)
+        );
+        if (todosRows.some(r => divPartIds.has(r.participante_id))) {
+          alert('Este portero ya ha sido fichado por otro equipo de tu división.');
           setModalPuja(null); cargar(); return;
         }
+      }
+      const totalCount = todosRows.length;
+      if (totalCount > 0) {
         const isDupl = duplHabilitado &&
           (duplValorMin === 0 || (modalPuja.valor_mercado || 0) >= duplValorMin);
         if (!isDupl) {

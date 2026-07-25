@@ -575,9 +575,14 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         )}
         <div>
           <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
-          <div style={{fontSize:'1.4rem', fontWeight:800, color:'var(--verde)'}}>
+          <div style={{fontSize:'1.4rem', fontWeight:800, color: presupuestoDisplay < 0 ? '#dc3545' : 'var(--verde)'}}>
             {presupuestoDisplay !== null ? fmt(presupuestoDisplay) : '…'}
           </div>
+          {presupuestoDisplay < 0 && (
+            <div style={{fontSize:'.75rem', color:'#dc3545', fontWeight:600, marginTop:'.15rem'}}>
+              ⚠ En deuda — no puntúas si empiezas jornada en negativo
+            </div>
+          )}
         </div>
         <div>
           <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Jugadores fichados</div>
@@ -873,6 +878,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
   const [sustLesion, setSustLesion]         = useState(0);
+  const [presupuesto, setPresupuesto]       = useState(null);
+  const [misOfertas, setMisOfertas]         = useState([]);
 
   // Ref siempre apunta a la cargar más reciente (evita stale closures en el intervalo)
   const cargarRef = useRef(null);
@@ -905,10 +912,10 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   }, [federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
 
   const cargar = async () => {
-    if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); return; }
+    if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); setPresupuesto(null); setMisOfertas([]); return; }
 
     const partIds = participantes.map(p => p.id);
-    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }] = await Promise.all([
+    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }] = await Promise.all([
       sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true),
       partIds.length
         ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
@@ -919,11 +926,19 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       partIds.length
         ? sb.from('fichajes_pendientes').select('id, participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
+      participanteId
+        ? sb.from('participantes').select('presupuesto').eq('id', participanteId).single()
+        : Promise.resolve({ data: null }),
+      participanteId
+        ? sb.from('ofertas_jugadores').select('cantidad').eq('ofertante_id', participanteId).eq('estado', 'pendiente')
+        : Promise.resolve({ data: [] }),
     ]);
     setJugadores(jugs || []);
     setTodasPlantillas(plants || []);
     setTodasPendientes(pends || []);
     setSorteoHabilitado(!!federacion?.sorteo_habilitado);
+    setPresupuesto(presupData?.presupuesto ?? null);
+    setMisOfertas(ofertasData || []);
     const mp = {}, cp = {};
     for (const p of (allPujas || [])) {
       cp[p.jugador_id] = (cp[p.jugador_id] || 0) + 1;
@@ -1085,7 +1100,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const { data: partData } = await sb.from('participantes')
       .select('presupuesto').eq('id', participanteId).single();
     if (cantidad > (partData?.presupuesto || 0)) {
-      alert(`Presupuesto insuficiente. Disponible: ${fmt(partData?.presupuesto || 0)}`); return;
+      const deuda = fmt(cantidad - (partData?.presupuesto || 0));
+      if (!confirm(`Esta puja supera tu presupuesto en ${deuda}.\nSi ganas la subasta entrarás en deuda y no podrás puntuar en la siguiente jornada.\n¿Continuar?`)) return;
     }
     const { error: errPuja } = await sb.from('pujas').upsert(
       { participante_id: participanteId, jugador_id: modalPuja.id,
@@ -1131,9 +1147,10 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const presupuestoActual = partData?.presupuesto ?? 0;
     const coste = modal.valor_mercado || 0;
     if (coste > presupuestoActual) {
-      alert(`Presupuesto insuficiente.\nDisponible: ${fmt(presupuestoActual)}\nCoste: ${fmt(coste)}`);
-      setModal(null);
-      return;
+      const deuda = fmt(coste - presupuestoActual);
+      if (!confirm(`Este fichaje supera el presupuesto del equipo en ${deuda}.\nEl equipo entrará en deuda y no podrá puntuar si empieza jornada en negativo.\n¿Continuar?`)) {
+        setModal(null); return;
+      }
     }
 
     // Obtener plantilla actualizada para validar
@@ -1452,6 +1469,12 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   // Fichajes pendientes del equipo actual
   const misFichajes = todasPendientes.filter(p => p.participante_id === participanteId);
 
+  // Presupuesto comprometido en pujas activas + ofertas pendientes enviadas
+  const pujasTot     = Object.values(misPujas).reduce((s, p) => s + (p.cantidad || 0), 0);
+  const ofertasTot   = misOfertas.reduce((s, o) => s + (o.cantidad || 0), 0);
+  const comprometido = pujasTot + ofertasTot;
+  const siGanaTodo   = presupuesto !== null ? presupuesto - comprometido : null;
+
   // Jugadores del equipo actual (con nombre para el selector de baja)
   const miPlantilla = todasPlantillas
     .filter(p => p.participante_id === participanteId)
@@ -1632,6 +1655,41 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                        borderRadius:8, fontSize:'.85rem', marginBottom:'1rem',
                        border:'1px solid #ffc107'}}>
             El mercado está cerrado. El administrador debe activarlo en Admin → Mercado.
+          </div>
+        )}
+        {!isActingAsAdmin && participanteId && presupuesto !== null && comprometido > 0 && (
+          <div style={{display:'flex', gap:'0', flexWrap:'wrap', background:'var(--fondo-alt)',
+                       borderRadius:8, border:'1px solid var(--borde)', marginBottom:'1rem',
+                       overflow:'hidden'}}>
+            <div style={{flex:'1 1 100px', padding:'.6rem 1rem', borderRight:'1px solid var(--borde)'}}>
+              <div style={{fontSize:'.72rem', color:'var(--texto2)', marginBottom:'.2rem', textTransform:'uppercase', letterSpacing:'.03em'}}>Presupuesto actual</div>
+              <div style={{fontWeight:700, fontSize:'.95rem', color: presupuesto < 0 ? '#dc3545' : 'var(--verde)'}}>
+                {fmt(presupuesto)}
+              </div>
+            </div>
+            <div style={{flex:'1 1 100px', padding:'.6rem 1rem', borderRight:'1px solid var(--borde)'}}>
+              <div style={{fontSize:'.72rem', color:'var(--texto2)', marginBottom:'.2rem', textTransform:'uppercase', letterSpacing:'.03em'}}>
+                Comprometido ({Object.keys(misPujas).length + misOfertas.length})
+              </div>
+              <div style={{fontWeight:700, fontSize:'.95rem', color:'#fd7e14'}}>
+                -{fmt(comprometido)}
+              </div>
+              <div style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.1rem'}}>
+                {Object.keys(misPujas).length > 0 && `${Object.keys(misPujas).length} puja${Object.keys(misPujas).length !== 1 ? 's' : ''}`}
+                {Object.keys(misPujas).length > 0 && misOfertas.length > 0 && ' · '}
+                {misOfertas.length > 0 && `${misOfertas.length} oferta${misOfertas.length !== 1 ? 's' : ''}`}
+              </div>
+            </div>
+            <div style={{flex:'1 1 100px', padding:'.6rem 1rem'}}>
+              <div style={{fontSize:'.72rem', color:'var(--texto2)', marginBottom:'.2rem', textTransform:'uppercase', letterSpacing:'.03em'}}>Si ganas todo</div>
+              <div style={{fontWeight:700, fontSize:'.95rem',
+                           color: siGanaTodo < 0 ? '#dc3545' : siGanaTodo < presupuesto * 0.15 ? '#fd7e14' : 'var(--verde)'}}>
+                {fmt(siGanaTodo)}
+              </div>
+              {siGanaTodo < 0 && (
+                <div style={{fontSize:'.7rem', color:'#dc3545', marginTop:'.1rem'}}>⚠ entrarías en deuda</div>
+              )}
+            </div>
           </div>
         )}
         <div className="filtros">
@@ -2520,7 +2578,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     // 2. Recalcular totales de cada equipo fantasy (aplicando sustituciones y comodines)
     if (participantes && participantes.length > 0) {
       const partIds = participantes.map(p => p.id);
-      const [{ data: alisAll }, { data: subsAuto }, { data: capitanesData }, { data: comodinesData }] = await Promise.all([
+      const [{ data: alisAll }, { data: subsAuto }, { data: capitanesData }, { data: comodinesData }, { data: presupuestosData }] = await Promise.all([
         sb.from('alineaciones')
           .select('participante_id, jugador_id, es_titular')
           .eq('jornada', jornada)
@@ -2538,12 +2596,14 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
           .select('participante_id, tipo')
           .eq('jornada', jornada)
           .in('participante_id', partIds),
+        sb.from('participantes').select('id, presupuesto').in('id', partIds),
       ]);
 
       const ptsMapa = Object.fromEntries(rows.map(r => [r.jugador_id, r.pts]));
       const capitanMap  = Object.fromEntries((capitanesData || []).map(c => [c.participante_id, c.jugador_id]));
       const usaBanquillo = new Set((comodinesData || []).filter(c => c.tipo === 'banquillo').map(c => c.participante_id));
       const usaCapitan   = new Set((comodinesData || []).filter(c => c.tipo === 'capitan').map(c => c.participante_id));
+      const presMap = Object.fromEntries((presupuestosData || []).map(p => [p.id, p.presupuesto]));
       // Scope: comodines solo se aplican al Calendario si su scope es 'calendario'
       const scopeCapCal = federacion?.comodin_capitan_en_calendario   ?? true;
       const scopeBanCal = federacion?.comodin_banquillo_en_calendario ?? true;
@@ -2567,6 +2627,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       });
 
       const clasRows = participantes.map(p => {
+        if ((presMap[p.id] ?? 0) < 0)
+          return { participante_id: p.id, jornada, puntos_jornada: 0 };
         let pts = 0;
         if (federacion?.comodin_banquillo_habilitado && scopeBanCal && usaBanquillo.has(p.id)) {
           // Banquillo completo (scope=calendario): todos los jugadores suman, sin sustituciones automáticas
@@ -6917,6 +6979,12 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
     if (!editModal) return;
     const cant = Number(editCant);
     if (!cant || cant <= 0) { setMsg('Introduce una cantidad válida.'); return; }
+    const { data: partData } = await sb.from('participantes')
+      .select('presupuesto').eq('id', miParticipanteId).single();
+    if (cant > (partData?.presupuesto || 0)) {
+      const deuda = fmt(cant - (partData?.presupuesto || 0));
+      if (!confirm(`Esta oferta supera tu presupuesto en ${deuda}.\nSi es aceptada entrarás en deuda y no podrás puntuar en la siguiente jornada.\n¿Continuar?`)) return;
+    }
     setProcesando(editModal.id);
     await sb.from('ofertas_jugadores')
       .update({ cantidad: cant, leida: false })
@@ -6944,6 +7012,12 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
     const cant = Number(editPujaCant);
     const minimo = editPuja.jugadores?.valor_mercado || 0;
     if (!cant || cant < minimo) { setMsg(`La puja mínima es ${fmt(minimo)}.`); return; }
+    const { data: partData } = await sb.from('participantes')
+      .select('presupuesto').eq('id', miParticipanteId).single();
+    if (cant > (partData?.presupuesto || 0)) {
+      const deuda = fmt(cant - (partData?.presupuesto || 0));
+      if (!confirm(`Esta puja supera tu presupuesto en ${deuda}.\nSi ganas la subasta entrarás en deuda y no podrás puntuar en la siguiente jornada.\n¿Continuar?`)) return;
+    }
     await sb.from('pujas').update({ cantidad: cant }).eq('id', editPuja.id);
     setEditPuja(null);
     cargar();
@@ -8015,10 +8089,11 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
     }
 
     // 3. Recalcular clasificacion con sustituciones, capitán y comodines aplicados
-    const [{ data: ptsData }, { data: capitanesData }, { data: comodinesData }] = await Promise.all([
+    const [{ data: ptsData }, { data: capitanesData }, { data: comodinesData }, { data: presupuestosData }] = await Promise.all([
       sb.from('puntos_jugador').select('jugador_id, pts').eq('federacion_id', federacionId).eq('jornada', jornada),
       sb.from('capitanes').select('participante_id, jugador_id').eq('jornada', jornada).in('participante_id', partIds),
       sb.from('comodines_usados').select('participante_id, tipo').eq('jornada', jornada).in('participante_id', partIds),
+      sb.from('participantes').select('id, presupuesto').in('id', partIds),
     ]);
 
     if (ptsData && ptsData.length > 0) {
@@ -8026,6 +8101,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
       const capitanMap   = Object.fromEntries((capitanesData || []).map(c => [c.participante_id, c.jugador_id]));
       const usaBanquillo = new Set((comodinesData || []).filter(c => c.tipo === 'banquillo').map(c => c.participante_id));
       const usaCapitan   = new Set((comodinesData || []).filter(c => c.tipo === 'capitan').map(c => c.participante_id));
+      const presMap      = Object.fromEntries((presupuestosData || []).map(p => [p.id, p.presupuesto]));
       const scopeCapCal  = federacion?.comodin_capitan_en_calendario   ?? true;
       const scopeBanCal  = federacion?.comodin_banquillo_en_calendario ?? true;
 
@@ -8045,6 +8121,8 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
         subsPorPart[s.participante_id].push(s);
       }
       const clasRows = participantes.map(p => {
+        if ((presMap[p.id] ?? 0) < 0)
+          return { participante_id: p.id, jornada, puntos_jornada: 0 };
         let pts = 0;
         if (federacion?.comodin_banquillo_habilitado && scopeBanCal && usaBanquillo.has(p.id)) {
           pts = (alisAllByPart[p.id] || []).reduce((sum, jid) => sum + (ptsMapa[jid] ?? 0), 0);

@@ -4,6 +4,9 @@
 -- Cambios en resolver_puja:
 --   · Elimina el check presupuesto_insuficiente (deuda permitida)
 --   · Usa federacion.max_jugadores en vez del 14 hardcodeado
+--   · plantilla_completa → fichajes_pendientes (no excepción)
+--   · Portero: bloqueo duro si mismo club ya en la división (otro equipo)
+--   · Portero: fichajes_pendientes si el equipo ya tiene cualquier portero
 --
 -- Cambios en aceptar_oferta:
 --   · Elimina el check presupuesto_insuficiente (deuda permitida)
@@ -34,6 +37,7 @@ declare
   v_jug_posicion text;
   v_jug_equipo   text;
   v_div_ganador  int;
+  v_pendiente    boolean := false;
 begin
   -- ── 0. Verificar que el caller es admin de esta federación ─────
   if not exists (
@@ -71,10 +75,10 @@ begin
    where participante_id = v_puja.participante_id;
 
   if v_planta_cnt >= v_max_jug then
-    raise exception 'plantilla_completa';
+    v_pendiente := true;
   end if;
 
-  -- ── 3. Verificar portería única por división (solo para POR) ───
+  -- ── 3. Verificar portería (solo para POR) ──────────────────────
   select posicion, equipo
     into v_jug_posicion, v_jug_equipo
     from jugadores
@@ -85,6 +89,7 @@ begin
       from participantes
      where id = v_puja.participante_id;
 
+    -- Bloqueo duro: mismo club ya en la misma división (en otro equipo)
     if exists (
       select 1
         from plantillas pl
@@ -97,9 +102,46 @@ begin
     ) then
       raise exception 'porteria_ocupada';
     end if;
+
+    -- Pendiente: el equipo ganador ya tiene cualquier portero
+    if exists (
+      select 1
+        from plantillas pl
+        join jugadores   ju on ju.id = pl.jugador_id
+       where pl.participante_id = v_puja.participante_id
+         and ju.posicion        = 'POR'
+    ) then
+      v_pendiente := true;
+    end if;
   end if;
 
-  -- ── 4. Fichar al jugador ────────────────────────────────────────
+  -- ── 4a. Fichaje pendiente de plaza ─────────────────────────────
+  if v_pendiente then
+    insert into fichajes_pendientes (participante_id, jugador_id, precio_compra)
+    values (v_puja.participante_id, p_jugador_id, v_puja.cantidad)
+    on conflict (participante_id, jugador_id) do update
+      set precio_compra = excluded.precio_compra;
+
+    update participantes
+       set presupuesto = presupuesto - v_puja.cantidad
+     where id = v_puja.participante_id;
+
+    update pujas p
+       set resuelta = true,
+           ganadora = false
+      from participantes pa
+     where p.jugador_id      = p_jugador_id
+       and p.participante_id = pa.id
+       and pa.federacion_id  = p_federacion_id;
+
+    update pujas
+       set ganadora = true
+     where id = p_puja_id;
+
+    return jsonb_build_object('ok', true, 'pendiente', true);
+  end if;
+
+  -- ── 4b. Fichar al jugador directamente ─────────────────────────
   insert into plantillas (participante_id, jugador_id, precio_compra)
   values (v_puja.participante_id, p_jugador_id, v_puja.cantidad);
 

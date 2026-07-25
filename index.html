@@ -2009,12 +2009,13 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
     setAbierto(pid);
     const key = `${pid}_${jornada}`;
     if (detalle[key]) return;
-    const [{ data: alis }, { data: pts }] = await Promise.all([
+    const [{ data: alis }, { data: pts }, { data: subs }] = await Promise.all([
       sb.from('alineaciones').select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', jornada),
       sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion?.id),
+      sb.from('sustituciones_auto').select('jugador_sale_id, jugador_entra_id').eq('participante_id', pid).eq('jornada', jornada).eq('federacion_id', federacion?.id),
     ]);
     const ptsMap = Object.fromEntries((pts || []).map(r => [r.jugador_id, Number(r.pts)]));
-    setDetalle(d => ({ ...d, [key]: { alis: alis || [], ptsMap } }));
+    setDetalle(d => ({ ...d, [key]: { alis: alis || [], ptsMap, subs: subs || [] } }));
   };
 
   // Reset expanded row when jornada changes
@@ -2148,15 +2149,29 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
     const titulares  = info.alis.filter(a => a.es_titular).map(a => a.jugador_id);
     const suplentes  = info.alis.filter(a => !a.es_titular).map(a => a.jugador_id);
     const idJug = Object.fromEntries(jugadores.map(j => [j.id, j]));
+    const saleSet  = new Set((info.subs || []).map(s => s.jugador_sale_id));
+    const entraMap = Object.fromEntries((info.subs || []).map(s => [s.jugador_entra_id, s.jugador_sale_id]));
     const filaJug = (jid, esTitular) => {
       const jug = idJug[jid];
       if (!jug) return null;
       const pts = info.ptsMap[jid];
+      const salio      = saleSet.has(jid);
+      const entroPorId = entraMap[jid];
+      const entroPor   = entroPorId ? idJug[entroPorId] : null;
       return (
         <tr key={jid} style={{background: esTitular ? '#f0fdf4' : '#fafafa'}}>
           <td style={{paddingLeft:'2rem', fontSize:'.8rem', color: esTitular ? 'var(--texto)' : 'var(--texto2)'}}>
             {esTitular ? '▶' : '○'} {jug.nombre}
             <span style={{marginLeft:'.4rem', fontSize:'.72rem', color:'var(--texto2)'}}>{jug.posicion}</span>
+            {salio && <span style={{marginLeft:'.4rem', padding:'.1rem .3rem', borderRadius:4,
+                                    fontSize:'.68rem', fontWeight:700,
+                                    background:'#f8d7da', color:'#842029'}}>no jugó</span>}
+            {entroPor && <span style={{marginLeft:'.4rem', padding:'.1rem .3rem', borderRadius:4,
+                                       fontSize:'.68rem', fontWeight:700,
+                                       background:'#d1e7dd', color:'#0a3622'}}>↑ auto</span>}
+            {entroPor && <span style={{marginLeft:'.3rem', fontSize:'.68rem', color:'var(--texto2)'}}>
+              por {entroPor.nombre}
+            </span>}
           </td>
           <td style={{fontSize:'.75rem', color:'var(--texto2)'}}>{jug.equipo}</td>
           <td style={{textAlign:'right', fontWeight: pts !== undefined ? 700 : 400,

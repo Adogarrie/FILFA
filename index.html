@@ -7640,7 +7640,7 @@ function Cesiones({ federacion, miParticipanteId, miNombre }) {
       .select('id, nombre, equipo, posicion, valor_mercado')
       .eq('activo', true)
       .order('nombre');
-    setJugadoresLibres((jugs || []).filter(j => !ocupados.has(j.id)));
+    setJugadoresLibres((jugs || []).filter(j => j.posicion !== 'POR' && !ocupados.has(j.id)));
     setCargandoMercado(false);
   };
 

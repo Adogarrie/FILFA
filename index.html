@@ -2221,7 +2221,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
             ]),
           ];
           const sheetStats = [
-            ['Equipo', 'J. jugadas', 'Media', 'Desv. típ.', 'Máx', 'J. máx', 'Mín', 'J. 1º', 'J. 2º', 'J. 3º', 'J. como 1º (acum)', 'J. en podio (acum)'],
+            ['Equipo', 'J. jugadas', 'Media', 'Desv. típ.', 'Máx', 'J. máx', 'Mín', 'Jornadas Ganadas', 'J. 2º', 'J. 3º', 'J. como 1º (acum)', 'J. en podio (acum)'],
             ...filasEstadisticas.map(e => [
               e.nombre, e.n, parseFloat(e.media.toFixed(1)), parseFloat(e.stddev.toFixed(1)),
               e.maxPts, e.jornadaMax ? `J${e.jornadaMax}` : '', e.minPts,
@@ -2365,7 +2365,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
               <div className="card" style={{marginBottom:'.75rem'}}>
                 <h2 style={{marginBottom:'.75rem'}}>Estadísticas por equipo</h2>
                 <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                  Ordenado por media. Desv. típ.: cuanto mayor, más irregular el rendimiento. J. 1º/2º/3º: jornadas en las que el equipo obtuvo la mayor, segunda o tercera puntuación.
+                  Ordenado por media. Desv. típ.: cuanto mayor, más irregular el rendimiento. Jornadas Ganadas: jornadas en las que el equipo obtuvo la mayor puntuación. J. 2º/3º: segunda o tercera puntuación.
                 </p>
                 <div style={{overflowX:'auto'}}>
                   <table>
@@ -2377,7 +2377,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                         <th style={{textAlign:'right'}}>Desv. típ.</th>
                         <th style={{textAlign:'right', color:'var(--verde)'}}>Máx</th>
                         <th style={{textAlign:'right', color:'#dc3545'}}>Mín</th>
-                        <th style={{textAlign:'right'}}>J. 1º</th>
+                        <th style={{textAlign:'right'}}>Jornadas Ganadas</th>
                         <th style={{textAlign:'right'}}>J. 2º</th>
                         <th style={{textAlign:'right'}}>J. 3º</th>
                       </tr>

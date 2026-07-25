@@ -2462,7 +2462,9 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       const mapa = {};
       for (const r of (pl || [])) {
         const part = participantes.find(p => p.id === r.participante_id);
-        if (part) mapa[r.jugador_id] = part.nombre;
+        if (part) mapa[r.jugador_id] = mapa[r.jugador_id]
+          ? mapa[r.jugador_id] + ', ' + part.nombre
+          : part.nombre;
       }
       setPropietarios(mapa);
     })();
@@ -7270,7 +7272,9 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     const mapa = {};
     for (const r of (pl || [])) {
       const part = participantes.find(p => p.id === r.participante_id);
-      if (part) mapa[r.jugador_id] = part.nombre;
+      if (part) mapa[r.jugador_id] = mapa[r.jugador_id]
+        ? mapa[r.jugador_id] + ', ' + part.nombre
+        : part.nombre;
     }
     setPropietarios(mapa);
   };

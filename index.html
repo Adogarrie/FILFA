@@ -11,7 +11,6 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="FILFAPP" />
   <link rel="apple-touch-icon" href="icons/icon.png" />
-  <script>(function(){var t=localStorage.getItem('filfa-tema');if(t&&t!=='clasico')document.documentElement.dataset.tema=t;}());</script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -21,26 +20,13 @@
     :root {
       --verde:     #0f2044;
       --verde2:    #1a3a6e;
-      --gris:      #a8c8ee;
+      --gris:      #c0cede;
       --borde:     #4d84c4;
       --texto:     #0a1a38;
       --texto2:    #1e4578;
       --oro:       #f5a623;
       --plata:     #a8a9ad;
       --bronce:    #cd7f32;
-      /* Tema: Clásico (por defecto) */
-      --bg-html:   #182d64;
-      --bg-body:   linear-gradient(155deg,#1c3370 0%,#2a4a96 40%,#1f3a80 70%,#182d64 100%);
-      --card-bg:   rgba(210,232,255,0.86);
-      --modal-bg:  rgba(210,232,255,0.97);
-      --tab-bg:    rgba(210,232,255,0.40);
-      --fondo-alt: rgba(200,225,255,0.85);
-      --fondo-med: rgba(200,225,255,0.40);
-      --fondo-sub: rgba(200,225,255,0.22);
-    }
-
-    /* ── Tema Claro ─────────────────────────────────────────────── */
-    html[data-tema="claro"] {
       --bg-html:   #eef2f7;
       --bg-body:   #eef2f7;
       --card-bg:   rgba(255,255,255,0.97);
@@ -49,26 +35,9 @@
       --fondo-alt: rgba(220,230,245,0.80);
       --fondo-med: rgba(210,222,240,0.55);
       --fondo-sub: rgba(200,214,235,0.35);
-      --gris:      #c0cede;
-      --borde:     #4d84c4;
-      --texto:     #0a1a38;
-      --texto2:    #1e4578;
-    }
-
-    /* ── Tema Nocturno ──────────────────────────────────────────── */
-    html[data-tema="nocturno"] {
-      --bg-html:   #0d1117;
-      --bg-body:   #0d1117;
-      --card-bg:   rgba(20,32,58,0.96);
-      --modal-bg:  #141f38;
-      --tab-bg:    rgba(28,46,82,0.60);
-      --fondo-alt: rgba(28,44,80,0.88);
-      --fondo-med: rgba(255,255,255,0.07);
-      --fondo-sub: rgba(255,255,255,0.04);
-      --gris:      #1e2d48;
-      --borde:     #2a4070;
-      --texto:     #c8d8f0;
-      --texto2:    #7aaad4;
+      --fondo:     #f0f4fa;
+      --fondo2:    rgba(230,238,252,0.60);
+      --radio:     8px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -89,10 +58,6 @@
     .nav-selector { display: flex; align-items: center; gap: .5rem;
                     border-left: 1px solid rgba(255,255,255,.3); padding-left: .75rem; margin-left: .25rem; }
     .nav-selector label { font-size: .8rem; opacity: .85; white-space: nowrap; }
-    .nav-selector select { background: rgba(255,255,255,.15); border: 1.5px solid rgba(255,255,255,.4);
-                           color: #fff; padding: .3rem .6rem; border-radius: 8px;
-                           font-size: .82rem; cursor: pointer; max-width: 140px; }
-    .nav-selector select option { background: #0f2044; color: #fff; }
 
     /* Layout */
     main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
@@ -105,7 +70,6 @@
             padding: 1.25rem; margin-bottom: 1rem;
             overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--verde); }
-    html[data-tema="nocturno"] .card h2 { color: #7aaad4; }
 
     /* Tabs */
     .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -129,10 +93,6 @@
     .DEF { background: #d1e7dd; color: #0a3622; }
     .MED { background: #cfe2ff; color: #0a3276; }
     .DEL { background: #f8d7da; color: #58151c; }
-    html[data-tema="nocturno"] .POR { background: #3a2c00; color: #ffd060; }
-    html[data-tema="nocturno"] .DEF { background: #003a1a; color: #5dde86; }
-    html[data-tema="nocturno"] .MED { background: #001a3a; color: #60b0ff; }
-    html[data-tema="nocturno"] .DEL { background: #3a0008; color: #ff8088; }
 
     /* Mercado */
     .filtros { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -172,8 +132,6 @@
     /* Valores */
     .valor-positivo { color: #1a7f37; font-weight: 600; }
     .valor-negativo { color: #d93025; font-weight: 600; }
-    html[data-tema="nocturno"] .valor-positivo { color: #4ade80; }
-    html[data-tema="nocturno"] .valor-negativo { color: #f87171; }
 
     /* Estados */
     .loading { text-align: center; padding: 2.5rem; color: var(--texto2); font-size: .9rem; }
@@ -190,7 +148,6 @@
                   box-shadow:0 10px 40px rgba(6,20,70,.28); }
     .login-logo { text-align:center; margin-bottom:1.75rem; }
     .login-logo h1 { color:var(--verde); font-size:1.65rem; margin-bottom:.25rem; }
-    html[data-tema="nocturno"] .login-logo h1 { color:#7aaad4; }
     .login-logo p  { color:var(--texto2); font-size:.88rem; }
     .campo { margin-bottom:1rem; }
     .campo label { display:block; font-size:.82rem; font-weight:600;
@@ -9337,13 +9294,6 @@ function App() {
   const [sesionLista, setSesionLista] = useState(false);
   const [ofertasBadge,  setOfertasBadge]  = useState(0);
   const [tablonBadge,   setTablonBadge]   = useState(0);
-  const [tema, setTema] = useState(() => localStorage.getItem('filfa-tema') || 'clasico');
-  useEffect(() => {
-    const html = document.documentElement;
-    if (tema === 'clasico') delete html.dataset.tema;
-    else html.dataset.tema = tema;
-    localStorage.setItem('filfa-tema', tema);
-  }, [tema]);
 
   const seleccionarFederacion = async (part, fed, userOverride, resetear = true) => {
     const u = userOverride || authUser;
@@ -9559,15 +9509,6 @@ function App() {
                 </span>
               </div>
         )}
-
-        <div className="nav-selector">
-          <label>Tema:</label>
-          <select value={tema} onChange={e => setTema(e.target.value)}>
-            <option value="clasico">Clásico</option>
-            <option value="claro">Claro</option>
-            <option value="nocturno">Nocturno</option>
-          </select>
-        </div>
 
         <div className="nav-user">
           <span>{isAdmin ? '⚙ Admin' : isModerador ? '⚙ Mod' : session.email}</span>

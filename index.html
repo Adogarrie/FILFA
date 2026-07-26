@@ -399,11 +399,19 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   useEffect(() => { cargar(); }, [participanteId]);
 
   const activarPendiente = async (fp) => {
-    const plantillaActual = (jugadores || []);
-    const activosCount = plantillaActual.filter(p => !p.jugadores?.lesionado).length;
-    const llena  = activosCount >= maxJug;
-    const liberar = llena ? (liberarSel[fp.id] || '') : null;
-    if (llena && !liberar) { alert(`La plantilla está llena (${maxJug} activos). Selecciona qué jugador liberar primero.`); return; }
+    const activosCount = lista.filter(j => !j.lesionado).length;
+    const llena        = activosCount >= maxJug;
+    const esPor        = fp.jugadores?.posicion === 'POR';
+    const porteroActivo = esPor ? lista.find(j => j.posicion === 'POR') : null;
+    const requiereLiberar = llena || (esPor && !!porteroActivo);
+    const liberar = requiereLiberar ? (liberarSel[fp.id] || '') : null;
+    if (requiereLiberar && !liberar) {
+      if (esPor && porteroActivo)
+        alert(`Ya tienes portería activa (${porteroActivo.equipo}). Selecciona el portero actual como jugador a liberar.`);
+      else
+        alert(`La plantilla está llena (${maxJug} activos). Selecciona qué jugador liberar primero.`);
+      return;
+    }
     setProcesandoPend(fp.id);
     const { error } = await sb.rpc('activar_fichaje_pendiente', {
       p_pendiente_id:       fp.id,
@@ -417,6 +425,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         jugador_a_liberar_no_encontrado: 'El jugador a liberar no está en la plantilla.',
         fichaje_no_encontrado:           'Este fichaje pendiente ya no existe.',
         no_autorizado:                   'No tienes permiso.',
+        portero_ya_en_plantilla:         'Ya tienes portero activo. Selecciona el portero actual como jugador a liberar.',
       };
       alert(msgs[error.message] || 'Error: ' + error.message); return;
     }
@@ -486,9 +495,16 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       else { setPresupuesto(nuevo); if (modalVenta.lesionado && mercadoCerrado) setSustLesion(nuevaSust); }
       publicar(federacion?.id, 'venta', `ÚLTIMA HORA: ${participanteNombre} vende a ${nombreJugVendido} al mercado por ${fmt(valorVenta)}`);
 
-      // Auto-activar primer fichaje pendiente si la venta libera un hueco
+      // Auto-activar primer fichaje pendiente si la venta libera un hueco.
+      // Excepción: si el pendiente es portero, solo se auto-activa si el jugador
+      // vendido también era portero (liberando la plaza de portero).
       if (fichajesPend.length > 0 && lista.length - 1 < maxJug) {
-        const primerPend = fichajesPend[0];
+        const primerPend    = fichajesPend[0];
+        const pendienteEsPor = primerPend.jugadores?.posicion === 'POR';
+        const vendidoEraPor  = modalVenta?.posicion === 'POR';
+        if (pendienteEsPor && !vendidoEraPor) {
+          // La plaza de portero sigue ocupada — no auto-activar
+        } else {
         const { error: errAct } = await sb.rpc('activar_fichaje_pendiente', {
           p_pendiente_id:       primerPend.id,
           p_liberar_jugador_id: null,
@@ -501,6 +517,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
           setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nombreJugVendido}.`);
           setTimeout(() => setMsgPend(''), 6000);
         }
+        } // end else (pendiente no es portero bloqueado)
       }
       cargar();
     }
@@ -753,12 +770,15 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         <div className="card">
           <h2 style={{marginBottom:'1rem'}}>Pendientes de plaza ({fichajesPend.length})</h2>
           {fichajesPend.map(fp => {
-            const jug     = fp.jugadores || {};
-            const nom     = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
-            const esTrasp = !!fp.traspaso_de_id;
-            const llena   = lista.filter(j => !j.lesionado).length >= maxJug;
-            const sel     = liberarSel[fp.id] || '';
-            const enProc  = procesandoPend === fp.id;
+            const jug          = fp.jugadores || {};
+            const nom          = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
+            const esTrasp      = !!fp.traspaso_de_id;
+            const llena        = lista.filter(j => !j.lesionado).length >= maxJug;
+            const esPor        = jug.posicion === 'POR';
+            const porteroActivo = esPor ? lista.find(j => j.posicion === 'POR') : null;
+            const requiereLiberar = llena || (esPor && !!porteroActivo);
+            const sel          = liberarSel[fp.id] || '';
+            const enProc       = procesandoPend === fp.id;
             return (
               <div key={fp.id} style={{display:'flex', flexWrap:'wrap', gap:'.75rem',
                                        alignItems:'flex-start', padding:'.9rem 0',
@@ -775,14 +795,16 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                       : <>Del mercado · {fmt(fp.precio_compra)}</>
                     }
                   </div>
-                  {llena && (
+                  {requiereLiberar && (
                     <div style={{fontSize:'.78rem', color:'#dc3545', marginTop:'.2rem', fontWeight:600}}>
-                      Plantilla llena — selecciona quién sale para activar
+                      {esPor && porteroActivo
+                        ? `Ya tienes portero activo — selecciona quién sale`
+                        : `Plantilla llena — selecciona quién sale para activar`}
                     </div>
                   )}
                 </div>
                 <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', alignItems:'center'}}>
-                  {llena && (
+                  {requiereLiberar && (
                     <select value={sel}
                             onChange={e => setLiberarSel(s => ({...s, [fp.id]: e.target.value}))}
                             style={{padding:'.3rem .6rem', borderRadius:7,
@@ -795,11 +817,11 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                       ))}
                     </select>
                   )}
-                  <button disabled={enProc || (llena && !sel)}
+                  <button disabled={enProc || (requiereLiberar && !sel)}
                           onClick={() => activarPendiente(fp)}
                           style={{padding:'.35rem .85rem', borderRadius:7, border:'none',
-                                  background: (llena && !sel) ? '#6c757d' : '#198754',
-                                  color:'#fff', cursor: (llena && !sel) ? 'not-allowed' : 'pointer',
+                                  background: (requiereLiberar && !sel) ? '#6c757d' : '#198754',
+                                  color:'#fff', cursor: (requiereLiberar && !sel) ? 'not-allowed' : 'pointer',
                                   fontWeight:600, fontSize:'.82rem'}}>
                     {enProc ? '…' : 'Activar'}
                   </button>

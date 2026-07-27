@@ -4749,12 +4749,22 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
         orden_suplente: v === 'S' ? (ordenSup[jugadorId] ?? null) : null,
         posicion_usada: v === 'T' ? (posicionUsada[jugadorId] ?? null) : null,
       }));
-    const { error: errDel } = await sb.from('alineaciones').delete()
-      .eq('participante_id', participanteId).eq('jornada', jornada);
-    if (errDel) { alert('Error al borrar alineación anterior: ' + errDel.message); setGuardando(false); return; }
+    // Paso 1: upsert — si falla aquí los datos anteriores quedan intactos
     if (registros.length) {
-      const { error: errIns } = await sb.from('alineaciones').insert(registros);
-      if (errIns) { alert('Error al guardar: ' + errIns.message); setGuardando(false); return; }
+      const { error: errUps } = await sb.from('alineaciones')
+        .upsert(registros, { onConflict: 'participante_id,jornada,jugador_id' });
+      if (errUps) { alert('Error al guardar: ' + errUps.message); setGuardando(false); return; }
+    }
+    // Paso 2: borrar filas obsoletas (jugadores movidos a 'F')
+    // Si falla quedan filas sobrantes pero sin pérdida de datos
+    const nuevosIds = registros.map(r => r.jugador_id);
+    if (nuevosIds.length > 0) {
+      await sb.from('alineaciones')
+        .delete().eq('participante_id', participanteId).eq('jornada', jornada)
+        .not('jugador_id', 'in', `(${nuevosIds.join(',')})`);
+    } else {
+      await sb.from('alineaciones')
+        .delete().eq('participante_id', participanteId).eq('jornada', jornada);
     }
     setGuardando(false);
     setHeredadaDe(null);

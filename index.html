@@ -2835,7 +2835,18 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     if (!sb || !snapshotEditPid) return;
     setGuardandoEdit(true);
     const datos = snapshotEditDatos;
-    const puntos_totales = datos.filter(d => d.jugo).reduce((s, d) => s + (Number(d.pts) || 0), 0);
+    let puntos_totales = datos.filter(d => d.jugo).reduce((s, d) => s + (Number(d.pts) || 0), 0);
+    if (federacion?.comodin_capitan_habilitado && (federacion?.comodin_capitan_en_calendario ?? true)) {
+      const { data: usoCap } = await sb.from('comodines_usados')
+        .select('tipo')
+        .eq('participante_id', snapshotEditPid)
+        .eq('jornada', jornada)
+        .eq('tipo', 'capitan');
+      if (usoCap?.length) {
+        const cap = datos.find(d => d.es_capitan && d.jugo);
+        if (cap) puntos_totales += Number(cap.pts) || 0;
+      }
+    }
     const { error } = await sb.from('alineaciones_snapshot').update({ datos, puntos_totales })
       .eq('federacion_id', federacion.id).eq('participante_id', snapshotEditPid).eq('jornada', jornada);
     if (!error) {

@@ -2657,6 +2657,24 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
         }
       });
 
+      // Equipos sin alineación explícita → heredar de la jornada guardada más reciente
+      const partsSinAli = partIds.filter(pid => !alisAllByPart[pid]);
+      if (partsSinAli.length > 0) {
+        await Promise.all(partsSinAli.map(async pid => {
+          const { data: ref } = await sb.from('alineaciones')
+            .select('jornada').eq('participante_id', pid)
+            .lt('jornada', jornada).order('jornada', { ascending: false }).limit(1);
+          if (ref?.length) {
+            const { data: prev } = await sb.from('alineaciones')
+              .select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', ref[0].jornada);
+            if (prev?.length) {
+              alisAllByPart[pid] = prev.map(a => a.jugador_id);
+              alisTitByPart[pid] = prev.filter(a => a.es_titular).map(a => a.jugador_id);
+            }
+          }
+        }));
+      }
+
       const subsPorPart = {};
       (subsAuto || []).forEach(s => {
         if (!subsPorPart[s.participante_id]) subsPorPart[s.participante_id] = [];
@@ -2746,6 +2764,23 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       if (!alisByPart[a.participante_id]) alisByPart[a.participante_id] = [];
       alisByPart[a.participante_id].push(a);
     }
+
+    // Equipos sin alineación explícita → heredar de la jornada guardada más reciente
+    const partsSinAliSnap = partIds.filter(pid => !alisByPart[pid]);
+    if (partsSinAliSnap.length > 0) {
+      await Promise.all(partsSinAliSnap.map(async pid => {
+        const { data: ref } = await sb.from('alineaciones')
+          .select('jornada').eq('participante_id', pid)
+          .lt('jornada', jornada).order('jornada', { ascending: false }).limit(1);
+        if (ref?.length) {
+          const { data: prev } = await sb.from('alineaciones')
+            .select('participante_id, jugador_id, es_titular, orden_suplente, posicion_usada')
+            .eq('participante_id', pid).eq('jornada', ref[0].jornada);
+          if (prev?.length) alisByPart[pid] = prev;
+        }
+      }));
+    }
+
     const subsByPart = {};
     for (const s of (subsData || [])) {
       if (!subsByPart[s.participante_id]) subsByPart[s.participante_id] = { sale: new Set(), entra: new Set() };
@@ -4467,6 +4502,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const [cargandoAli, setCargandoAli] = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
+  const [heredadaDe, setHeredadaDe]   = useState(null); // jornada de la que se hereda la alineación
 
   useEffect(() => {
     if (!sb || !participanteId) return;
@@ -4538,7 +4574,12 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
             .eq('participante_id', participanteId)
             .eq('jornada', ref[0].jornada);
           fuente = ultima || [];
+          setHeredadaDe(fuente.length > 0 ? ref[0].jornada : null);
+        } else {
+          setHeredadaDe(null);
         }
+      } else {
+        setHeredadaDe(null);
       }
 
       const ord = {};
@@ -4705,6 +4746,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
       if (errIns) { alert('Error al guardar: ' + errIns.message); setGuardando(false); return; }
     }
     setGuardando(false);
+    setHeredadaDe(null);
     setMsg('✓ Alineación guardada');
     setTimeout(() => setMsg(''), 3000);
     publicar(federacionId, 'alineacion', `${participanteNombre || 'Un equipo'} ha modificado su alineación (J${jornada})`);
@@ -4726,13 +4768,21 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   return (
     <div className="card">
       <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'center', marginBottom:'1.2rem'}}>
-        <div>
-          <label style={{fontSize:'.85rem', color:'var(--texto2)', marginRight:'.4rem'}}>Jornada:</label>
-          <select value={jornada} onChange={e => setJornada(Number(e.target.value))}
-                  style={{padding:'.3rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
-            {Array.from({length:38},(_,i)=>i+1).map(j =>
-              <option key={j} value={j}>J{j}</option>)}
-          </select>
+        <div style={{display:'flex', alignItems:'center', gap:'.6rem', flexWrap:'wrap'}}>
+          <div>
+            <label style={{fontSize:'.85rem', color:'var(--texto2)', marginRight:'.4rem'}}>Jornada:</label>
+            <select value={jornada} onChange={e => setJornada(Number(e.target.value))}
+                    style={{padding:'.3rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+              {Array.from({length:38},(_,i)=>i+1).map(j =>
+                <option key={j} value={j}>J{j}</option>)}
+            </select>
+          </div>
+          {heredadaDe && !snapshot && (
+            <span style={{fontSize:'.78rem', fontWeight:600, padding:'.18rem .55rem',
+                          borderRadius:6, background:'#fff3cd', color:'#664d03'}}>
+              Hereda J{heredadaDe} — guarda para confirmar
+            </span>
+          )}
         </div>
         <div style={{fontSize:'.85rem'}}>
           {snapshot

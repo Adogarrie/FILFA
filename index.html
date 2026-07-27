@@ -5510,7 +5510,9 @@ function AdminPujas({ participantes, federacion, actorNombre }) {
   };
 
   const descartarPujas = async (jugadorId) => {
-    const { error } = await sb.from('pujas').update({ resuelta: true, ganadora: false }).eq('jugador_id', jugadorId);
+    const partIds = participantes.map(p => p.id);
+    const { error } = await sb.from('pujas').update({ resuelta: true, ganadora: false })
+      .eq('jugador_id', jugadorId).in('participante_id', partIds);
     if (error) { alert('Error al descartar pujas: ' + error.message); return; }
     setResueltos(prev => new Set([...prev, jugadorId]));
     cargar();

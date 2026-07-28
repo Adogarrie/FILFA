@@ -6720,6 +6720,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
   const [penMotivo, setPenMotivo] = useState('');
   const [msg, setMsg]             = useState('');
   const [divisiones, setDivisiones] = useState([]);
+  const [liberarModal, setLiberarModal] = useState(null); // { rowId, nombreJug, row }
 
   const flash = txt => { setMsg(txt); setTimeout(() => setMsg(''), 3000); };
 
@@ -6745,7 +6746,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     if (!sb || !selId) return;
     setPlantilla(null);
     const [{ data: pl }, { data: pd }, { data: cl }] = await Promise.all([
-      sb.from('plantillas').select('id, precio_compra, jugadores(id, nombre, equipo, posicion, valor_mercado)').eq('participante_id', selId).order('jugadores(posicion)'),
+      sb.from('plantillas').select('id, precio_compra, jugadores(id, nombre, equipo, posicion, valor_mercado, lesionado)').eq('participante_id', selId).order('jugadores(posicion)'),
       sb.from('participantes').select('presupuesto').eq('id', selId).single(),
       sb.from('clasificacion').select('jornada, puntos_jornada').eq('participante_id', selId).order('jornada'),
     ]);
@@ -6767,23 +6768,44 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     flash('Precios guardados');
   };
 
-  // Liberar jugador (eliminar de plantilla)
-  const liberarJugador = async (rowId, nombreJug) => {
-    if (!confirm(`¿Liberar a ${nombreJug}?`)) return;
+  // Liberar jugador — abre modal de selección de base de reembolso
+  const liberarJugador = (rowId, nombreJug) => {
     const row = plantilla.find(r => r.id === rowId);
-    const valor = row?.precio_compra || 0;
-    const posicion = row?.jugadores?.posicion || '';
-    const equipoReal = row?.jugadores?.equipo || '';
-    await sb.from('plantillas').delete().eq('id', rowId);
-    await sb.from('participantes').update({ presupuesto: (presupuesto || 0) + valor }).eq('id', selId);
-    // Tablón
-    const textoJug = posicion === 'POR' ? `Portería ${equipoReal}` : `${nombreJug} (${equipoReal})`;
-    publicar(
-      federacion?.id,
-      'venta',
-      `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)}`,
-      actorNombre
-    );
+    setLiberarModal({ rowId, nombreJug, row });
+  };
+
+  const confirmarLiberar = async (usarValorMercado) => {
+    if (!liberarModal) return;
+    const { rowId, nombreJug, row } = liberarModal;
+    setLiberarModal(null);
+    const posicion   = row?.jugadores?.posicion  || '';
+    const equipoReal = row?.jugadores?.equipo     || '';
+    const textoJug   = posicion === 'POR' ? `Portería ${equipoReal}` : `${nombreJug} (${equipoReal})`;
+
+    if (usarValorMercado) {
+      // Usar RPC atómico — misma lógica que venta normal
+      const { data, error } = await sb.rpc('vender_jugador', {
+        p_plantilla_id:    rowId,
+        p_participante_id: selId,
+        p_federacion_id:   federacion?.id,
+      });
+      if (error) { flash('Error al liberar: ' + error.message); return; }
+      publicar(federacion?.id, 'venta',
+        `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — valor: ${fmt(data.valor_venta)}`,
+        actorNombre);
+    } else {
+      // Precio de compra original
+      const valor = row?.precio_compra || 0;
+      const { error: e1 } = await sb.from('plantillas').delete().eq('id', rowId);
+      if (e1) { flash('Error al liberar: ' + e1.message); return; }
+      const { error: e2 } = await sb.from('participantes')
+        .update({ presupuesto: (presupuesto || 0) + valor }).eq('id', selId);
+      if (e2) { flash('Error al actualizar presupuesto: ' + e2.message); cargar(); return; }
+      publicar(federacion?.id, 'venta',
+        `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)}`,
+        actorNombre);
+    }
+
     onParticipantesChange?.();
     cargar();
     flash('Jugador liberado');
@@ -6875,6 +6897,52 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
       </div>
 
       {msg && <div style={{background:'#d1e7dd', color:'#0a3622', padding:'.5rem 1rem', borderRadius:8, marginBottom:'.5rem', fontSize:'.85rem'}}>{msg}</div>}
+
+      {liberarModal && (() => {
+        const r   = liberarModal.row;
+        const jug = r?.jugadores || {};
+        const lesionado   = jug.lesionado || false;
+        const pct         = federacion?.pct_venta_mercado ?? 100;
+        const valorMerc   = jug.valor_mercado || 0;
+        const reembolsoMerc = lesionado ? valorMerc : Math.round(valorMerc * pct / 100);
+        const reembolsoCompra = r?.precio_compra || 0;
+        return (
+          <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:9999,
+                       display:'flex', alignItems:'center', justifyContent:'center'}}>
+            <div className="card" style={{maxWidth:380, width:'90%', padding:'1.5rem'}}>
+              <h3 style={{marginBottom:'.75rem'}}>Liberar a {liberarModal.nombreJug}</h3>
+              <p style={{fontSize:'.88rem', color:'var(--texto2)', marginBottom:'1.25rem'}}>
+                ¿Qué cantidad devuelves al equipo?
+              </p>
+              <div style={{display:'flex', flexDirection:'column', gap:'.75rem', marginBottom:'1.25rem'}}>
+                <button onClick={() => confirmarLiberar(false)}
+                        style={{padding:'.6rem 1rem', borderRadius:8, border:'1.5px solid var(--borde)',
+                                background:'var(--fondo-alt)', cursor:'pointer', textAlign:'left', fontSize:'.9rem'}}>
+                  <div style={{fontWeight:700}}>Precio de compra</div>
+                  <div style={{fontSize:'.82rem', color:'var(--texto2)'}}>{fmt(reembolsoCompra)}</div>
+                </button>
+                <button onClick={() => confirmarLiberar(true)}
+                        style={{padding:'.6rem 1rem', borderRadius:8, border:'1.5px solid var(--verde)',
+                                background:'var(--fondo-alt)', cursor:'pointer', textAlign:'left', fontSize:'.9rem'}}>
+                  <div style={{fontWeight:700}}>
+                    Valor de mercado{lesionado ? ' (lesionado — 100%)' : ` (${pct}%)`}
+                  </div>
+                  <div style={{fontSize:'.82rem', color:'var(--texto2)'}}>
+                    {fmt(reembolsoMerc)}{!lesionado && valorMerc !== reembolsoMerc
+                      ? ` de ${fmt(valorMerc)}`
+                      : ''}
+                  </div>
+                </button>
+              </div>
+              <button onClick={() => setLiberarModal(null)}
+                      style={{fontSize:'.85rem', color:'var(--texto2)', background:'none',
+                              border:'none', cursor:'pointer', padding:0}}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {subtab === 'plantilla' && (
         <div className="card">

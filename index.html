@@ -1538,7 +1538,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     cargar();
   };
 
-  const plantillaActivaCnt = todasPlantillas.filter(p => p.participante_id === participanteId && !jugadoresMap.get(p.jugador_id)?.lesionado).length;
+  const plantillaActivaCnt = todasPlantillas.filter(p => p.participante_id === participanteId).length;
   const huecosRestantes = maxJug - plantillaActivaCnt;
 
   return (
@@ -1575,14 +1575,17 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         <div className="card">
           <h2 style={{marginBottom:'.75rem'}}>Liberar jugadores</h2>
           <p style={{color:'var(--texto2)', fontSize:'.88rem', marginBottom:'1.25rem'}}>
-            {miPlantilla.filter(p => !p.lesionado).length >= maxJug
+            {miPlantilla.length >= maxJug
               ? 'Tu plantilla está llena. Para cada fichaje pendiente selecciona qué jugador liberas para hacerle hueco.'
-              : `Tienes ${maxJug - miPlantilla.filter(p => !p.lesionado).length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
+              : `Tienes ${maxJug - miPlantilla.length} plaza(s) libre(s). Puedes incorporar jugadores directamente.`}
           </p>
           {misFichajes.map(f => {
-            const jug = jugadoresMap.get(f.jugador_id);
-            const plazasLibres = maxJug - miPlantilla.filter(p => !p.lesionado).length;
-            const sel = liberarSel[f.id] || '';
+            const jug          = jugadoresMap.get(f.jugador_id);
+            const esPor        = jug?.posicion === 'POR';
+            const porteroActivo = esPor ? miPlantilla.find(p => p.posicion === 'POR') : null;
+            const llena        = miPlantilla.length >= maxJug;
+            const requiereLiberar = llena || (esPor && !!porteroActivo);
+            const sel          = liberarSel[f.id] || '';
             return (
               <div key={f.id} style={{display:'flex', flexWrap:'wrap', alignItems:'flex-start',
                                       gap:'.75rem', padding:'.9rem 0',
@@ -1590,7 +1593,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                 {/* Info jugador */}
                 <div style={{flex:'1 1 200px'}}>
                   <div style={{fontWeight:700, fontSize:'.95rem'}}>
-                    {jug?.posicion === 'POR' ? `Portería ${jug?.equipo}` : jug?.nombre}
+                    {esPor ? `Portería ${jug?.equipo}` : jug?.nombre}
                   </div>
                   <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>
                     {jug?.posicion} · {jug?.equipo}
@@ -1598,13 +1601,20 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                   <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>
                     Fichado por: <strong>{fmt(f.precio_compra)}</strong>
                   </div>
+                  {requiereLiberar && (
+                    <div style={{fontSize:'.78rem', color:'#dc3545', marginTop:'.2rem', fontWeight:600}}>
+                      {esPor && porteroActivo
+                        ? `Ya tienes portero activo — selecciona quién sale`
+                        : `Plantilla llena — selecciona quién sale para activar`}
+                    </div>
+                  )}
                 </div>
 
                 {/* Acción */}
                 <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', alignItems:'center'}}>
-                  {plazasLibres > 0 ? (
+                  {!requiereLiberar ? (
                     <span style={{fontSize:'.8rem', color:'#198754'}}>
-                      ✓ {plazasLibres} plaza(s) libre(s)
+                      ✓ {maxJug - miPlantilla.length} plaza(s) libre(s)
                     </span>
                   ) : (
                     <select value={sel}
@@ -1620,8 +1630,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                     </select>
                   )}
                   <button className="btn-fichar"
-                          disabled={plazasLibres === 0 && !sel}
-                          onClick={() => activarFichaje(f.id, plazasLibres > 0 ? null : sel)}>
+                          disabled={requiereLiberar && !sel}
+                          onClick={() => activarFichaje(f.id, requiereLiberar ? sel : null)}>
                     Incorporar
                   </button>
                   {(isAdmin || isModerador) && (

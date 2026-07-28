@@ -1504,9 +1504,11 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     });
     if (error) {
       const msgs = {
-        plantilla_llena_indica_baja:    'El equipo está lleno. Selecciona qué jugador liberas.',
-        jugador_a_liberar_no_encontrado:'El jugador a liberar no está en la plantilla.',
-        no_autorizado:                  'No tienes permisos para esta acción.',
+        plantilla_llena_indica_baja:     'El equipo está lleno. Selecciona qué jugador liberas.',
+        jugador_a_liberar_no_encontrado: 'El jugador a liberar no está en la plantilla.',
+        fichaje_no_encontrado:           'Este fichaje pendiente ya no existe.',
+        no_autorizado:                   'No tienes permisos para esta acción.',
+        portero_ya_en_plantilla:         'El equipo ya tiene portero activo. Selecciona el portero actual como jugador a liberar.',
       };
       alert(msgs[error.message] || 'Error: ' + error.message);
       return;
@@ -5261,10 +5263,11 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
     setProcesando(null);
     if (error) {
       const msgs = {
-        plantilla_llena_indica_baja:      'El equipo está lleno. Selecciona quién sale.',
-        jugador_a_liberar_no_encontrado:  'El jugador a liberar no está en la plantilla.',
-        fichaje_no_encontrado:            'Este fichaje pendiente ya no existe.',
-        no_autorizado:                    'No tienes permiso para realizar esta acción.',
+        plantilla_llena_indica_baja:     'El equipo está lleno. Selecciona quién sale.',
+        jugador_a_liberar_no_encontrado: 'El jugador a liberar no está en la plantilla.',
+        fichaje_no_encontrado:           'Este fichaje pendiente ya no existe.',
+        no_autorizado:                   'No tienes permiso para realizar esta acción.',
+        portero_ya_en_plantilla:         'El equipo ya tiene portero activo. Selecciona el portero actual como jugador a liberar.',
       };
       alert(msgs[error.message] || 'Error: ' + error.message);
       return;

@@ -473,50 +473,42 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     const nombreJugVendido = modalVenta.posicion === 'POR'
       ? `Portería ${modalVenta.equipo}`
       : `${modalVenta.nombre} (${modalVenta.equipo})`;
-    const { error } = await sb.from('plantillas')
-      .delete()
-      .eq('id', modalVenta.id)
-      .eq('participante_id', participanteId);
+
+    const { data, error } = await sb.rpc('vender_jugador', {
+      p_plantilla_id:    modalVenta.id,
+      p_participante_id: participanteId,
+      p_federacion_id:   federacion?.id,
+    });
+
     if (error) {
       alert('Error al vender: ' + error.message);
     } else {
-      const pct = modalVenta.lesionado ? 1 : (federacion?.pct_venta_mercado ?? 100) / 100;
-      const valorVenta = Math.round((modalVenta.valor || 0) * pct);
-      const nuevo = (presupuesto || 0) + valorVenta;
-      const mercadoCerrado = !federacion?.ventas_habilitadas;
-      const nuevaSust = (modalVenta.lesionado && mercadoCerrado) ? (sustLesion + 1) : sustLesion;
-      const updatePart = { presupuesto: nuevo };
-      if (modalVenta.lesionado && mercadoCerrado) updatePart.sustituciones_lesion = nuevaSust;
-      const { error: errPres } = await sb.from('participantes')
-        .update(updatePart)
-        .eq('id', participanteId);
-      if (errPres) console.error('Error actualizando presupuesto:', errPres);
-      else { setPresupuesto(nuevo); if (modalVenta.lesionado && mercadoCerrado) setSustLesion(nuevaSust); }
+      const valorVenta = data.valor_venta;
+      setPresupuesto((presupuesto || 0) + valorVenta);
+      if (data.sust_lesion) setSustLesion(s => s + 1);
       publicar(federacion?.id, 'venta', `ÚLTIMA HORA: ${participanteNombre} vende a ${nombreJugVendido} al mercado por ${fmt(valorVenta)}`);
 
       // Auto-activar primer fichaje pendiente si la venta libera un hueco.
       // Excepción: si el pendiente es portero, solo se auto-activa si el jugador
       // vendido también era portero (liberando la plaza de portero).
       if (fichajesPend.length > 0 && lista.length - 1 < maxJug) {
-        const primerPend    = fichajesPend[0];
+        const primerPend     = fichajesPend[0];
         const pendienteEsPor = primerPend.jugadores?.posicion === 'POR';
         const vendidoEraPor  = modalVenta?.posicion === 'POR';
-        if (pendienteEsPor && !vendidoEraPor) {
-          // La plaza de portero sigue ocupada — no auto-activar
-        } else {
-        const { error: errAct } = await sb.rpc('activar_fichaje_pendiente', {
-          p_pendiente_id:       primerPend.id,
-          p_liberar_jugador_id: null,
-          p_federacion_id:      federacion?.id,
-        });
-        if (!errAct) {
-          const jugPend = primerPend.jugadores;
-          const nomEntra = jugPend?.posicion === 'POR' ? `Portería ${jugPend?.equipo}` : jugPend?.nombre;
-          publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nombreJugVendido}`);
-          setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nombreJugVendido}.`);
-          setTimeout(() => setMsgPend(''), 6000);
+        if (!(pendienteEsPor && !vendidoEraPor)) {
+          const { error: errAct } = await sb.rpc('activar_fichaje_pendiente', {
+            p_pendiente_id:       primerPend.id,
+            p_liberar_jugador_id: null,
+            p_federacion_id:      federacion?.id,
+          });
+          if (!errAct) {
+            const jugPend = primerPend.jugadores;
+            const nomEntra = jugPend?.posicion === 'POR' ? `Portería ${jugPend?.equipo}` : jugPend?.nombre;
+            publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nombreJugVendido}`);
+            setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nombreJugVendido}.`);
+            setTimeout(() => setMsgPend(''), 6000);
+          }
         }
-        } // end else (pendiente no es portero bloqueado)
       }
       cargar();
     }

@@ -7720,6 +7720,7 @@ function Cesiones({ federacion, miParticipanteId, miNombre }) {
   const [msg, setMsg]                   = useState('');
 
   useEffect(() => { if (federacionId && miParticipanteId) cargar(); }, [federacionId, miParticipanteId]);
+  useEffect(() => { if (formAbierto) cargarMercado(); }, [fJornada]);
 
   const cargar = async () => {
     setCargando(true);
@@ -7738,13 +7739,15 @@ function Cesiones({ federacion, miParticipanteId, miNombre }) {
     const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacionId);
     const partIds = (parts || []).map(p => p.id);
     const ocupados = new Set();
-    if (partIds.length > 0) {
-      const [{ data: pl }, { data: pend }] = await Promise.all([
-        sb.from('plantillas').select('jugador_id').in('participante_id', partIds),
-        sb.from('fichajes_pendientes').select('jugador_id').in('participante_id', partIds),
-      ]);
-      for (const p of [...(pl || []), ...(pend || [])]) ocupados.add(p.jugador_id);
-    }
+    const empty = Promise.resolve({ data: [] });
+    const [{ data: ces }, { data: pl }, { data: pend }] = await Promise.all([
+      sb.from('cesiones').select('jugador_id')
+        .eq('federacion_id', federacionId).eq('jornada', fJornada)
+        .in('estado', ['pendiente', 'aprobada']),
+      partIds.length > 0 ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds) : empty,
+      partIds.length > 0 ? sb.from('fichajes_pendientes').select('jugador_id').in('participante_id', partIds) : empty,
+    ]);
+    for (const p of [...(ces || []), ...(pl || []), ...(pend || [])]) ocupados.add(p.jugador_id);
     const { data: jugs } = await sb.from('jugadores')
       .select('id, nombre, equipo, posicion, valor_mercado')
       .eq('activo', true)

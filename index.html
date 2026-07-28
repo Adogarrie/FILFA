@@ -7079,9 +7079,14 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
   const rechazar = async () => {
     if (!rechazModal) return;
     setProcesando(rechazModal.id);
-    await sb.from('ofertas_jugadores')
+    const { error } = await sb.from('ofertas_jugadores')
       .update({ estado: 'rechazada', mensaje: msgRechazo.trim() || null })
       .eq('id', rechazModal.id);
+    if (error) {
+      setMsg('Error al rechazar: ' + error.message);
+      setProcesando(null);
+      return;
+    }
     const nomJugRec = rechazModal.jugadores?.posicion === 'POR'
       ? `Portería ${rechazModal.jugadores?.equipo}`
       : rechazModal.jugadores?.nombre;
@@ -7104,23 +7109,26 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
       if (!confirm(`Esta oferta supera tu presupuesto en ${deuda}.\nSi es aceptada entrarás en deuda y no podrás puntuar en la siguiente jornada.\n¿Continuar?`)) return;
     }
     setProcesando(editModal.id);
-    await sb.from('ofertas_jugadores')
+    const { error } = await sb.from('ofertas_jugadores')
       .update({ cantidad: cant, leida: false })
       .eq('id', editModal.id);
     setProcesando(null);
+    if (error) { setMsg('Error al editar: ' + error.message); return; }
     setEditModal(null);
     cargar();
   };
 
   const retirar = async (id) => {
     if (!window.confirm('¿Retirar esta oferta?')) return;
-    await sb.from('ofertas_jugadores').delete().eq('id', id);
+    const { error } = await sb.from('ofertas_jugadores').delete().eq('id', id);
+    if (error) { setMsg('Error al retirar: ' + error.message); return; }
     cargar();
   };
 
   const cancelarPuja = async (pujaId) => {
     if (!window.confirm('¿Retirar esta puja?')) return;
-    await sb.from('pujas').delete().eq('id', pujaId);
+    const { error } = await sb.from('pujas').delete().eq('id', pujaId);
+    if (error) { setMsg('Error al retirar la puja: ' + error.message); return; }
     cargar();
     onPujaChange && onPujaChange();
   };
@@ -7136,7 +7144,8 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
       const deuda = fmt(cant - (partData?.presupuesto || 0));
       if (!confirm(`Esta puja supera tu presupuesto en ${deuda}.\nSi ganas la subasta entrarás en deuda y no podrás puntuar en la siguiente jornada.\n¿Continuar?`)) return;
     }
-    await sb.from('pujas').update({ cantidad: cant }).eq('id', editPuja.id);
+    const { error } = await sb.from('pujas').update({ cantidad: cant }).eq('id', editPuja.id);
+    if (error) { setMsg('Error al actualizar la puja: ' + error.message); return; }
     setEditPuja(null);
     cargar();
     onPujaChange && onPujaChange();

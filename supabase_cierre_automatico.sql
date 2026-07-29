@@ -51,6 +51,7 @@ declare
   v_eq_nom    text;
   v_div       int;
   v_cnt       int;
+  v_max_jug   int;
   v_pendiente boolean;
   v_firmados  int := 0;
 begin
@@ -96,6 +97,9 @@ begin
   ) then
     return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'ya_procesado');
   end if;
+
+  -- Límite de plantilla configurable por federación
+  v_max_jug := get_max_jugadores(p_federacion_id);
 
   -- Procesar cada jugador con pujas anteriores al cierre
   for v_jug_id in
@@ -152,7 +156,7 @@ begin
       -- Plantilla llena → fichaje pendiente
       select count(*) into v_cnt
         from plantillas where participante_id = v_ganadora.participante_id;
-      v_pendiente := v_cnt >= 14;
+      v_pendiente := v_cnt >= v_max_jug;
 
       if v_pendiente then
         if exists (

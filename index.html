@@ -1220,24 +1220,16 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       }
     }
 
-    // Insertar solo el portero más caro como representante de la portería del equipo
-    const { error } = await sb.from('plantillas').insert({
-      participante_id: participanteId,
-      jugador_id:      modal.id,
-      precio_compra:   coste,
+    const { data: fichajeData, error } = await sb.rpc('fichar_jugador_admin', {
+      p_participante_id: participanteId,
+      p_jugador_id:      modal.id,
+      p_precio:          coste,
+      p_federacion_id:   federacion?.id,
     });
-    if (error) {
-      alert('Error al fichar: ' + error.message);
+    if (error || !fichajeData?.ok) {
+      alert('Error al fichar: ' + (error?.message || 'desconocido'));
     } else {
-      const esSustituto = !federacion?.ventas_habilitadas && sustLesion > 0;
-      const nuevaSust = esSustituto ? Math.max(0, sustLesion - 1) : sustLesion;
-      const updatePart = { presupuesto: presupuestoActual - coste };
-      if (esSustituto) updatePart.sustituciones_lesion = nuevaSust;
-      const { error: errPres } = await sb.from('participantes')
-        .update(updatePart)
-        .eq('id', participanteId);
-      if (errPres) console.error('Error actualizando presupuesto:', errPres);
-      else if (esSustituto) setSustLesion(nuevaSust);
+      if (fichajeData.dec_sust) setSustLesion(prev => Math.max(0, prev - 1));
       onFichaje && onFichaje();
       cargar();
     }

@@ -963,7 +963,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   };
   cargarRef.current = cargar; // siempre actualizado al último render
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { if (participantes.length) cargar(); }, [participantes]);
   useEffect(() => { setSubtabMercado('jugadores'); }, [participanteId]);
   useEffect(() => {
     if (!participanteId || !sb || (isAdmin && participanteId !== miParticipanteId)) { setSustLesion(0); return; }

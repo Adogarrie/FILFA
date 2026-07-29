@@ -9,8 +9,8 @@ alter table fichajes_pendientes
   references participantes(id) on delete set null;
 
 -- ── RPC: descartar un traspaso pendiente ──────────────────────
--- Reembolsa el 80% al comprador (siempre, tomado del vendedor).
--- Si el vendedor tiene plaza libre (<14), el jugador vuelve a su plantilla.
+-- Reembolsa pct_venta_mercado% de la federación al comprador (tomado del vendedor).
+-- Si el vendedor tiene plaza libre (< max_jugadores), el jugador vuelve a su plantilla.
 -- Si no, el jugador queda libre en el mercado.
 drop function if exists anular_traspaso_pendiente(int, uuid);
 
@@ -32,6 +32,8 @@ declare
   v_cnt        int;
   v_devuelto   boolean := false;
   v_nom_jug    text;
+  v_pct        int;
+  v_max_jug    int;
 begin
   -- 1. Cargar fichaje pendiente
   select * into v_pend from fichajes_pendientes where id = p_pendiente_id;
@@ -55,12 +57,16 @@ begin
   select * into v_vendedor  from participantes where id = v_pend.traspaso_de_id;
   select * into v_jug       from jugadores     where id = v_pend.jugador_id;
 
-  v_refund := round(v_pend.precio_compra * 0.8, 2);
+  select coalesce(pct_venta_mercado, 100) into v_pct
+    from federaciones where id = p_federacion_id;
+  v_max_jug := get_max_jugadores(p_federacion_id);
+
+  v_refund := round(v_pend.precio_compra * v_pct / 100.0, 2);
 
   -- 4. ¿El vendedor tiene hueco en la plantilla?
   select count(*) into v_cnt from plantillas where participante_id = v_pend.traspaso_de_id;
 
-  if v_cnt < 14 then
+  if v_cnt < v_max_jug then
     -- Devolver jugador al vendedor
     insert into plantillas (participante_id, jugador_id, precio_compra)
     values (v_pend.traspaso_de_id, v_pend.jugador_id, v_pend.precio_compra)
@@ -69,7 +75,7 @@ begin
   end if;
   -- Si la plantilla está llena el jugador queda libre (no se inserta en ninguna plantilla)
 
-  -- 5. Transferencia: vendedor devuelve el 80% al comprador
+  -- 5. Transferencia: vendedor devuelve pct_venta_mercado% al comprador
   update participantes set presupuesto = presupuesto - v_refund where id = v_pend.traspaso_de_id;
   update participantes set presupuesto = presupuesto + v_refund where id = v_pend.participante_id;
 
@@ -87,7 +93,7 @@ begin
          then ' · Vuelve a ' || v_vendedor.nombre
          else ' · Queda libre (plantilla de ' || v_vendedor.nombre || ' llena)'
        end
-    || ' · Reembolso: ' || to_char(v_refund, 'FM999G999G999') || ' €'
+    || ' · Reembolso: ' || v_pct || '% (' || to_char(v_refund, 'FM999G999G999') || ' €)'
   );
 
   return jsonb_build_object(

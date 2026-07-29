@@ -518,26 +518,20 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const confirmarVentaTodo = async () => {
     if (!isAdmin || lista.length === 0) return;
     setVendiendoTodo(true);
-    const pct = (federacion?.pct_venta_mercado ?? 100) / 100;
-    const total = Math.round(lista.reduce((s, j) => s + (j.valor || 0), 0) * pct);
-    const { error } = await sb.from('plantillas')
-      .delete()
-      .eq('participante_id', participanteId);
-    if (error) {
-      alert('Error al vender la plantilla: ' + error.message);
+    const { data, error } = await sb.rpc('vender_plantilla_completa', {
+      p_participante_id: participanteId,
+      p_federacion_id:   federacion?.id,
+    });
+    if (error || !data?.ok) {
+      alert('Error al vender la plantilla: ' + (error?.message || 'desconocido'));
       setVendiendoTodo(false);
       return;
     }
-    const nuevo = (presupuesto || 0) + total;
-    const { error: errPres } = await sb.from('participantes')
-      .update({ presupuesto: nuevo })
-      .eq('id', participanteId);
-    if (errPres) console.error('Error actualizando presupuesto:', errPres);
-    else setPresupuesto(nuevo);
+    const total = data.total ?? 0;
     publicar(
       federacion?.id,
       'venta',
-      `ÚLTIMA HORA: ${participanteNombre} vende toda su plantilla al mercado (${lista.length} jugadores) por ${fmt(total)} (acción del administrador)`
+      `ÚLTIMA HORA: ${participanteNombre} vende toda su plantilla al mercado (${data.jugadores_count} jugadores) por ${fmt(total)} (acción del administrador)`
     );
     setVendiendoTodo(false);
     setModalVentaTodo(false);

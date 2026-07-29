@@ -5236,15 +5236,16 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
     if (!sb) return;
     const partIds = participantes.map(p => p.id);
     if (!partIds.length) { setPendientes([]); return; }
-    const [{ data: pends }, { data: plants }] = await Promise.all([
+    const [{ data: pends, error: errP }, { data: plants }] = await Promise.all([
       sb.from('fichajes_pendientes')
-        .select('id, participante_id, jugador_id, precio_compra, traspaso_de_id, participantes(nombre), jugadores(nombre, equipo, posicion), origen:traspaso_de_id(nombre)')
+        .select('id, participante_id, jugador_id, precio_compra, traspaso_de_id, participantes!participante_id(nombre), jugadores(nombre, equipo, posicion), origen:traspaso_de_id(nombre)')
         .in('participante_id', partIds)
         .order('id', { ascending: true }),
       sb.from('plantillas')
         .select('participante_id, jugador_id, jugadores(nombre, equipo, posicion, lesionado)')
         .in('participante_id', partIds),
     ]);
+    if (errP) { console.error('Error cargando fichajes pendientes:', errP); setPendientes([]); return; }
     const pm = {};
     for (const p of (plants || [])) {
       if (!pm[p.participante_id]) pm[p.participante_id] = [];

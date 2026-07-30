@@ -1008,15 +1008,6 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     return s;
   }, [todasPlantillas, todasPendientes, participanteId]);
 
-  const miActivosCount = useMemo(() => {
-    let count = 0;
-    for (const id of misJugadoresIds) {
-      if (!jugadoresMap.get(id)?.lesionado) count++;
-    }
-    return count;
-  }, [misJugadoresIds, jugadoresMap]);
-
-  const miPlantillaLlena = miActivosCount >= maxJug;
 
   // Equipos LaLiga cuya portería ya está cogida (plantilla o pendiente) en MI división
   const porteríasBloqueadas = useMemo(() => {

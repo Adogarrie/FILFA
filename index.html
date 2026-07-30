@@ -2525,6 +2525,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const [cerrando, setCerrando]                     = useState(false);
   const [snapshotEditPid, setSnapshotEditPid]       = useState(null);
   const [snapshotEditDatos, setSnapshotEditDatos]   = useState([]);
+  const [editComodin, setEditComodin]               = useState(null); // 'banquillo'|'capitan'|null
   const [guardandoEdit, setGuardandoEdit]           = useState(false);
 
   useEffect(() => {
@@ -2813,23 +2814,26 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     publicar(federacion.id, 'admin', `J${jornada} re-abierta. Los datos vuelven a ser editables.`, actorNombre);
   };
 
-  const iniciarEdicion = (pid) => {
+  const iniciarEdicion = async (pid) => {
     setSnapshotEditPid(pid);
     setSnapshotEditDatos(JSON.parse(JSON.stringify(snapshotsMap[pid]?.datos || [])));
+    const { data: com } = await sb.from('comodines_usados')
+      .select('tipo').eq('participante_id', pid).eq('jornada', jornada)
+      .in('tipo', ['capitan', 'banquillo']);
+    const tipos = (com || []).map(c => c.tipo);
+    setEditComodin(tipos.includes('banquillo') ? 'banquillo' : tipos.includes('capitan') ? 'capitan' : null);
   };
 
   const guardarEdicion = async () => {
     if (!sb || !snapshotEditPid) return;
     setGuardandoEdit(true);
     const datos = snapshotEditDatos;
-    let puntos_totales = datos.filter(d => d.jugo).reduce((s, d) => s + (Number(d.pts) || 0), 0);
-    if (federacion?.comodin_capitan_habilitado && (federacion?.comodin_capitan_en_calendario ?? true)) {
-      const { data: usoCap } = await sb.from('comodines_usados')
-        .select('tipo')
-        .eq('participante_id', snapshotEditPid)
-        .eq('jornada', jornada)
-        .eq('tipo', 'capitan');
-      if (usoCap?.length) {
+    let puntos_totales;
+    if (editComodin === 'banquillo' && federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_calendario ?? true)) {
+      puntos_totales = datos.reduce((s, d) => s + (Number(d.pts) || 0), 0);
+    } else {
+      puntos_totales = datos.filter(d => d.jugo).reduce((s, d) => s + (Number(d.pts) || 0), 0);
+      if (editComodin === 'capitan' && federacion?.comodin_capitan_habilitado && (federacion?.comodin_capitan_en_calendario ?? true)) {
         const cap = datos.find(d => d.es_capitan && d.jugo);
         if (cap) puntos_totales += Number(cap.pts) || 0;
       }
@@ -2982,7 +2986,16 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
                 </tbody>
               </table>
               <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
-                Total calculado: <strong>{snapshotEditDatos.filter(d=>d.jugo).reduce((s,d)=>s+(Number(d.pts)||0),0)} pts</strong>
+                Total calculado: <strong>{(() => {
+                  if (editComodin === 'banquillo' && federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_calendario ?? true))
+                    return snapshotEditDatos.reduce((s,d)=>s+(Number(d.pts)||0),0);
+                  let s = snapshotEditDatos.filter(d=>d.jugo).reduce((s,d)=>s+(Number(d.pts)||0),0);
+                  if (editComodin === 'capitan' && federacion?.comodin_capitan_habilitado && (federacion?.comodin_capitan_en_calendario ?? true)) {
+                    const cap = snapshotEditDatos.find(d=>d.es_capitan && d.jugo);
+                    if (cap) s += Number(cap.pts)||0;
+                  }
+                  return s;
+                })()} pts</strong>
               </div>
               <div style={{display:'flex', gap:'.75rem', flexWrap:'wrap'}}>
                 <button className="btn-ok" onClick={guardarEdicion} disabled={guardandoEdit}>{guardandoEdit ? 'Guardando…' : 'Guardar cambios'}</button>

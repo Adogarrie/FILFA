@@ -5404,7 +5404,7 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
                       style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid #dc3545',
                               background:'var(--fondo)', color:'#dc3545', cursor:'pointer',
                               fontSize:'.82rem', fontWeight:600}}>
-                {pend.traspaso_de_id ? 'Descartar (80%)' : 'Anular'}
+                {pend.traspaso_de_id ? `Descartar (${federacion?.pct_venta_mercado ?? 100}%)` : 'Anular'}
               </button>
             </div>
           </div>
@@ -9846,7 +9846,7 @@ function App() {
           <Competiciones federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
         )}
         {vista === 'Ayuda' && (
-          <Ayuda isAdmin={isAdmin} maxJugadores={federacion?.max_jugadores ?? 14} />
+          <Ayuda isAdmin={isAdmin} maxJugadores={federacion?.max_jugadores ?? 14} pctVenta={federacion?.pct_venta_mercado ?? 100} />
         )}
         {vista === 'Tablón' && (
           <Tablon federacionId={federacion?.id} isAdmin={isAdmin} isModerador={isModerador}
@@ -11473,7 +11473,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
 
 // ── AYUDA ──────────────────────────────────────────────────────
-function Ayuda({ isAdmin, maxJugadores = 14 }) {
+function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
   const [abierto, setAbierto] = React.useState(null);
   const toggle = (k) => setAbierto(a => a === k ? null : k);
 
@@ -11517,7 +11517,7 @@ function Ayuda({ isAdmin, maxJugadores = 14 }) {
       contenido: [
         ['¿Qué son?', `Si ganas una puja o aceptas un traspaso pero ya tienes ${maxJugadores} jugadores, el fichaje queda "pendiente de plaza". El dinero ya se descuenta en el momento del fichaje.`],
         ['Activar', 'Desde Mi Plantilla, sección "Pendientes de plaza", puedes activar el fichaje. Si la plantilla sigue llena, deberás elegir qué jugador liberar (recuperas su valor de mercado).'],
-        ['Descartar', 'Si no quieres al jugador, puedes descartarlo. Solo se te devuelve el 80 % de lo que pagaste (penalización del 20 %). En traspasos, el jugador vuelve al equipo vendedor si tiene hueco; si no, queda libre en el mercado.'],
+        ['Descartar', `Si no quieres al jugador, puedes descartarlo. Solo se te devuelve el ${pctVenta} % de lo que pagaste${pctVenta < 100 ? ` (penalización del ${100 - pctVenta} %)` : ''}. En traspasos, el jugador vuelve al equipo vendedor si tiene hueco; si no, queda libre en el mercado.`],
       ]
     },
     {

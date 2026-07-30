@@ -7576,20 +7576,15 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     }).select().single();
     if (errJug) { setMsg('Error: ' + errJug.message); setGuardando(false); return; }
 
-    // 2. Si destino es un equipo, añadir a plantillas
+    // 2. Si destino es un equipo, añadir a plantillas y descontar presupuesto (atómico)
     if (form.destino === 'equipo') {
-      const { error: errPl } = await sb.from('plantillas').insert({
-        participante_id: form.participante_id,
-        jugador_id:      jug.id,
-        precio_compra:   Number(form.valor) * 1_000_000,
+      const { data: asigData, error: errAs } = await sb.rpc('asignar_jugador_a_equipo', {
+        p_jugador_id:      jug.id,
+        p_participante_id: form.participante_id,
+        p_precio:          Number(form.valor) * 1_000_000,
+        p_federacion_id:   federacion?.id,
       });
-      if (errPl) { setMsg('Jugador creado pero error al asignar equipo: ' + errPl.message); setGuardando(false); return; }
-
-      // Descontar presupuesto
-      const part = participantes.find(p => p.id === form.participante_id);
-      if (part) {
-        await sb.from('participantes').update({ presupuesto: part.presupuesto - Number(form.valor) * 1_000_000 }).eq('id', form.participante_id);
-      }
+      if (errAs || !asigData?.ok) { setMsg('Jugador creado pero error al asignar equipo: ' + (errAs?.message || 'desconocido')); setGuardando(false); return; }
     }
 
     const nomJug = form.posicion === 'POR' ? `Portería de ${form.equipo.trim()}` : form.nombre.trim();

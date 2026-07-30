@@ -3921,17 +3921,23 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilita
   const enviarMensaje = async () => {
     if (!textoUsuario.trim() || enviandoUsuario) return;
     setEnviandoUsuario(true);
+    const estado = mensajesHabilitados ? 'aprobado' : 'pendiente';
     const { error } = await sb.from('anuncios').insert({
       federacion_id: federacionId,
       tipo: 'mensaje_usuario',
       texto: textoUsuario.trim(),
       actor_nombre: miNombre || null,
-      estado: 'pendiente',
+      estado,
     });
     setEnviandoUsuario(false);
     if (error) { setMsgUsuario('Error: ' + error.message); return; }
     setTextoUsuario('');
-    setMsgUsuario('Mensaje enviado. Pendiente de aprobación del administrador.');
+    if (mensajesHabilitados) {
+      setPagina(0); setAnuncios(null);
+      setMsgUsuario('Mensaje publicado.');
+    } else {
+      setMsgUsuario('Mensaje enviado. Pendiente de aprobación del administrador.');
+    }
     setTimeout(() => setMsgUsuario(''), 6000);
   };
 
@@ -4124,11 +4130,13 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilita
       </div>
 
       {/* ── Enviar mensaje al tablón (solo usuarios, no admin/moderador) ── */}
-      {!isAdmin && !isModerador && mensajesHabilitados && (
+      {!isAdmin && !isModerador && (
         <div className="card" style={{marginTop:'.75rem'}}>
           <h2 style={{margin:'0 0 .4rem'}}>Enviar mensaje al tablón</h2>
           <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-            Tu mensaje será visible para todos una vez que el administrador lo apruebe.
+            {mensajesHabilitados
+              ? 'Tu mensaje se publicará directamente en el tablón.'
+              : 'Tu mensaje será visible para todos una vez que el administrador lo apruebe.'}
           </p>
           <textarea
             value={textoUsuario}
@@ -5902,8 +5910,8 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
         onChange={v => cambiar('cesiones_habilitadas', v, setCesiones)}
       />
       <Opcion
-        label="Mensajes de usuarios en el tablón"
-        desc="Permite a los usuarios (no admin ni moderador) enviar mensajes al tablón. Cada mensaje queda pendiente de aprobación del administrador antes de publicarse."
+        label="Mensajes libres en el tablón"
+        desc="Activado: los usuarios publican mensajes en el tablón directamente, sin aprobación. Desactivado: los mensajes quedan pendientes hasta que un admin o moderador los apruebe."
         activo={mensajesTablon}
         onChange={v => cambiar('mensajes_tablon_habilitados', v, setMensajesTablon)}
       />

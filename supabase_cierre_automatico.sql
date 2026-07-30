@@ -44,7 +44,6 @@ declare
   v_ts        timestamptz;
   v_jug_id    uuid;
   v_ganadora  record;
-  v_pres      numeric;
   v_pos       text;
   v_equipo    text;
   v_jug_nom   text;
@@ -125,10 +124,9 @@ begin
 
       if not found then continue; end if;
 
-      -- Comprobar presupuesto
-      select presupuesto, nombre into v_pres, v_eq_nom
+      -- Nombre del equipo ganador (para el tablón)
+      select nombre into v_eq_nom
         from participantes where id = v_ganadora.participante_id;
-      if v_pres < v_ganadora.cantidad then continue; end if;
 
       -- Datos del jugador
       select posicion, equipo, nombre into v_pos, v_equipo, v_jug_nom

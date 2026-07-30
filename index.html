@@ -3108,6 +3108,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [cantOferta, setCantOferta]   = useState('');
   const [enviandoOf, setEnviandoOf]   = useState(false);
   const [msgOferta, setMsgOferta]     = useState('');
+  const [miPresupuesto, setMiPresupuesto] = useState(null);
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -3124,6 +3125,12 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
       .then(({ data }) => setPresupuesto(data?.presupuesto ?? null));
   }, [equipoId]);
+
+  useEffect(() => {
+    if (!sesionParticipanteId || !sb) return;
+    sb.from('participantes').select('presupuesto').eq('id', sesionParticipanteId).single()
+      .then(({ data }) => setMiPresupuesto(data?.presupuesto ?? null));
+  }, [sesionParticipanteId]);
 
   useEffect(() => {
     if (!equipoId || !sb) return;
@@ -3225,6 +3232,10 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const enviarOferta = async () => {
     const cant = Math.round(Number(cantOferta) * 100) / 100 * 1_000_000;
     if (!cant || cant <= 0) { setMsgOferta('Introduce una cantidad válida.'); return; }
+    if (miPresupuesto !== null && cant > miPresupuesto) {
+      setMsgOferta(`No tienes presupuesto suficiente (disponible: ${fmt(miPresupuesto)}).`);
+      return;
+    }
     setEnviandoOf(true); setMsgOferta('');
     const { error } = await sb.from('ofertas_jugadores').insert({
       federacion_id:  federacion.id,
@@ -3384,6 +3395,11 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                      placeholder={`Valor: ${fmt(modalOferta.valor || 0)}`}
                      style={{width:'100%'}} />
             </div>
+            {miPresupuesto !== null && (
+              <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.3rem'}}>
+                Tu presupuesto: <strong>{fmt(miPresupuesto)}</strong>
+              </div>
+            )}
             {msgOferta && <div style={{color:'#dc3545', fontSize:'.85rem', marginBottom:'.5rem'}}>{msgOferta}</div>}
             <div style={{display:'flex', gap:'.75rem', marginTop:'.75rem'}}>
               <button className="btn-cancel" onClick={() => setModalOferta(null)}>Cancelar</button>

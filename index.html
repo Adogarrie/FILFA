@@ -1163,10 +1163,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const { data: miPlantilla } = await sb.from('plantillas')
       .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
 
-    // Límite de jugadores activos (sin contar lesionados)
-    const activosCnt = (miPlantilla || []).filter(p => !p.jugadores?.lesionado).length;
-    if (activosCnt >= maxJug) {
-      alert(`Tu equipo ya tiene ${maxJug} jugadores activos (máximo permitido).`);
+    const totalCnt = (miPlantilla || []).length;
+    if (totalCnt >= maxJug) {
+      alert(`Tu equipo ya tiene ${maxJug} jugadores (máximo permitido).`);
       setModal(null);
       return;
     }

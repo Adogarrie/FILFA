@@ -6739,10 +6739,10 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
   const flash = txt => { setMsg(txt); setTimeout(() => setMsg(''), 3000); };
 
   useEffect(() => {
-    if (!sb) return;
-    sb.from('divisiones').select('id, nombre').order('id')
+    if (!sb || !federacion?.id) return;
+    sb.from('divisiones').select('id, nombre').eq('federacion_id', federacion.id).order('id')
       .then(({ data }) => setDivisiones(data || []));
-  }, []);
+  }, [federacion?.id]);
 
   const cambiarDivision = async (nuevoId) => {
     const equipo    = participantes.find(p => p.id === selId);

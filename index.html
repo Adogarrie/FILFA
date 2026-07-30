@@ -6779,15 +6779,15 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
         `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — valor: ${fmt(data.valor_venta)}`,
         actorNombre);
     } else {
-      // Precio de compra original
-      const valor = row?.precio_compra || 0;
-      const { error: e1 } = await sb.from('plantillas').delete().eq('id', rowId);
-      if (e1) { flash('Error al liberar: ' + e1.message); return; }
-      const { error: e2 } = await sb.from('participantes')
-        .update({ presupuesto: (presupuesto || 0) + valor }).eq('id', selId);
-      if (e2) { flash('Error al actualizar presupuesto: ' + e2.message); cargar(); return; }
+      // Precio de compra original — RPC atómico
+      const { data: libData, error } = await sb.rpc('liberar_jugador_precio_compra', {
+        p_plantilla_id:    rowId,
+        p_participante_id: selId,
+        p_federacion_id:   federacion?.id,
+      });
+      if (error || !libData?.ok) { flash('Error al liberar: ' + (error?.message || 'desconocido')); return; }
       publicar(federacion?.id, 'venta',
-        `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(valor)}`,
+        `ÚLTIMA HORA: ${equipo?.nombre} libera a ${textoJug} al mercado — precio de compra: ${fmt(libData.valor)}`,
         actorNombre);
     }
 

@@ -3556,7 +3556,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
 // Función utilitaria global para registrar acciones
 async function publicar(federacionId, tipo, texto, actorNombre) {
   if (!sb || !federacionId) return;
-  const { error } = await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null });
+  const { error } = await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null, estado: 'aprobado' });
   if (error) console.error('[Tablón] Error al publicar:', error.message, { tipo, texto });
 }
 

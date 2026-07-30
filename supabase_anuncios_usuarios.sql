@@ -33,24 +33,21 @@ create policy "Ver anuncios de la federación"
   );
 
 -- ── 3. Actualizar política INSERT ─────────────────────────────
--- Admin puede insertar cualquier tipo; miembros solo pueden
--- insertar mensajes de usuario en estado pendiente.
+-- Cualquier miembro de la federación puede insertar.
+-- El control del estado (aprobado/pendiente) lo gestiona la capa de aplicación.
 drop policy if exists "Insertar anuncios" on anuncios;
 create policy "Insertar anuncios"
   on anuncios for insert
   with check (
-    -- Admin o moderador puede insertar cualquier cosa
     federacion_id in (
       select id from federaciones where admin_user_id = auth.uid()
       union
       select m.federacion_id from moderadores m
         join participantes p on p.id = m.participante_id
         where p.user_id = auth.uid()
+      union
+      select federacion_id from participantes where user_id = auth.uid()
     )
-    or
-    -- Miembros pueden insertar solo mensajes de usuario pendientes
-    (tipo = 'mensaje_usuario' and estado = 'pendiente' and
-     federacion_id in (select federacion_id from participantes where user_id = auth.uid()))
   );
 
 -- ── 4. Política UPDATE (aprobar/rechazar) ─────────────────────

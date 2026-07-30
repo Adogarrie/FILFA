@@ -3836,7 +3836,7 @@ function FederacionInfo({ federacionId, isAdmin, isModerador }) {
   );
 }
 
-function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange }) {
+function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilitados = true, onBadgeChange }) {
   const [tab, setTab]          = useState('anuncios');
   const [anuncios, setAnuncios] = useState(null);
   const [pagina, setPagina]    = useState(0);
@@ -4124,7 +4124,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, onBadgeChange })
       </div>
 
       {/* ── Enviar mensaje al tablón (solo usuarios, no admin/moderador) ── */}
-      {!isAdmin && !isModerador && (
+      {!isAdmin && !isModerador && mensajesHabilitados && (
         <div className="card" style={{marginTop:'.75rem'}}>
           <h2 style={{margin:'0 0 .4rem'}}>Enviar mensaje al tablón</h2>
           <p style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
@@ -5727,6 +5727,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
   const [sorteo,       setSorteo]       = useState(!!federacion?.sorteo_habilitado);
   const [ptsMod,       setPtsMod]       = useState(!!federacion?.puntos_mod_habilitado);
   const [cesiones,     setCesiones]     = useState(federacion?.cesiones_habilitadas ?? true);
+  const [mensajesTablon, setMensajesTablon] = useState(federacion?.mensajes_tablon_habilitados ?? true);
   const [duplicados,   setDuplicados]   = useState(!!federacion?.duplicados_habilitado);
   const [duplValorMin, setDuplValorMin] = useState((federacion?.duplicados_valor_min ?? 0) / 1_000_000);
   const [duplMax,      setDuplMax]      = useState(federacion?.duplicados_max ?? 2);
@@ -5739,7 +5740,8 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
     ventas_habilitadas:      v => `Ventas en el mercado ${v ? 'habilitadas' : 'deshabilitadas'}`,
     sorteo_habilitado:       v => `Sorteo del mercado ${v ? 'habilitado' : 'deshabilitado'}`,
     puntos_mod_habilitado:   v => `Puntos por moderador ${v ? 'habilitado' : 'deshabilitado'}`,
-    cesiones_habilitadas:    v => `Cesiones ${v ? 'habilitadas' : 'deshabilitadas'}`,
+    cesiones_habilitadas:          v => `Cesiones ${v ? 'habilitadas' : 'deshabilitadas'}`,
+    mensajes_tablon_habilitados:   v => `Mensajes de usuarios en el tablón ${v ? 'habilitados' : 'deshabilitados'}`,
     duplicados_habilitado:   v => `Jugadores duplicados ${v ? 'habilitados' : 'deshabilitados'}`,
   };
 
@@ -5898,6 +5900,12 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
         desc="Permite a los equipos solicitar el préstamo de jugadores de otros equipos para una jornada concreta. Desactivar esto impide nuevas solicitudes, pero no afecta a las cesiones ya aprobadas."
         activo={cesiones}
         onChange={v => cambiar('cesiones_habilitadas', v, setCesiones)}
+      />
+      <Opcion
+        label="Mensajes de usuarios en el tablón"
+        desc="Permite a los usuarios (no admin ni moderador) enviar mensajes al tablón. Cada mensaje queda pendiente de aprobación del administrador antes de publicarse."
+        activo={mensajesTablon}
+        onChange={v => cambiar('mensajes_tablon_habilitados', v, setMensajesTablon)}
       />
       <Opcion
         label="Jugadores duplicados"
@@ -9865,6 +9873,7 @@ function App() {
         {vista === 'Tablón' && (
           <Tablon federacionId={federacion?.id} isAdmin={isAdmin} isModerador={isModerador}
                   miNombre={participantes.find(p => p.id === session?.participante_id)?.nombre}
+                  mensajesHabilitados={federacion?.mensajes_tablon_habilitados ?? true}
                   onBadgeChange={refrescarTablonBadge} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (

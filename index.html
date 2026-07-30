@@ -507,6 +507,14 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             publicar(federacion?.id, 'fichaje', `ÚLTIMA HORA: ${participanteNombre} incorpora a ${nomEntra} a su plantilla · Sale: ${nombreJugVendido}`);
             setMsgPend(`✓ ${nomEntra} incorporado a tu plantilla tras la salida de ${nombreJugVendido}.`);
             setTimeout(() => setMsgPend(''), 6000);
+          } else {
+            const msgs = {
+              portero_ya_en_plantilla:     'El fichaje pendiente no se activó automáticamente: ya tienes portero activo. Actívalo manualmente.',
+              fichaje_no_encontrado:       'El fichaje pendiente ya no existe.',
+              plantilla_llena_indica_baja: 'El fichaje pendiente no se activó: la plantilla sigue llena.',
+            };
+            setMsgPend(msgs[errAct.message] || 'El fichaje pendiente no se activó automáticamente. Actívalo desde Fichajes pendientes.');
+            setTimeout(() => setMsgPend(''), 8000);
           }
         }
       }

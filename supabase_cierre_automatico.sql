@@ -15,24 +15,33 @@ create table if not exists log_cierres_pujas (
   id            serial primary key,
   federacion_id uuid not null references federaciones(id) on delete cascade,
   fecha_cierre  date not null,
+  hora_cierre   time not null,
   procesado_en  timestamptz not null default now(),
   firmados      int not null default 0,
-  unique(federacion_id, fecha_cierre)
+  unique(federacion_id, fecha_cierre, hora_cierre)
 );
 
--- Garantizar constraint único aunque la tabla se creara en versión anterior sin él
--- Primero eliminar duplicados (conserva el registro más reciente de cada día)
+-- ─── Migración idempotente para instalaciones previas ───────────
+-- 1. Añadir columna si falta (antes de usarla en los siguientes pasos)
+alter table log_cierres_pujas
+  add column if not exists hora_cierre time;
+
+-- 2. Eliminar duplicados bajo el constraint definitivo de 3 columnas
 delete from log_cierres_pujas a
 using log_cierres_pujas b
 where a.federacion_id = b.federacion_id
   and a.fecha_cierre  = b.fecha_cierre
+  and a.hora_cierre   = b.hora_cierre
   and a.id < b.id;
 
+-- 3. Reemplazar cualquier constraint previo (2 o 3 columnas) por el definitivo
 alter table log_cierres_pujas
   drop constraint if exists log_cierres_pujas_federacion_id_fecha_cierre_key;
 alter table log_cierres_pujas
-  add constraint log_cierres_pujas_federacion_id_fecha_cierre_key
-  unique (federacion_id, fecha_cierre);
+  drop constraint if exists log_cierres_pujas_federacion_id_fecha_cierre_hora_cierre_key;
+alter table log_cierres_pujas
+  add constraint log_cierres_pujas_federacion_id_fecha_cierre_hora_cierre_key
+  unique (federacion_id, fecha_cierre, hora_cierre);
 
 alter table log_cierres_pujas enable row level security;
 grant select on log_cierres_pujas to authenticated;
@@ -42,7 +51,6 @@ create policy "Ver log cierres"
   on log_cierres_pujas for select using (true);
 
 -- ─── 3. Función principal ────────────────────────────────────────
--- Eliminar TODAS las versiones previas antes de crear la definitiva.
 drop function if exists procesar_cierre_pujas(uuid);
 drop function if exists procesar_cierre_pujas(uuid, boolean);
 
@@ -54,162 +62,208 @@ set search_path = public
 set row_security = off
 as $$
 declare
-  v_hora      time;
-  v_fecha     date;
-  v_ts        timestamptz;
-  v_jug_id    uuid;
-  v_ganadora  record;
-  v_pos       text;
-  v_equipo    text;
-  v_jug_nom   text;
-  v_eq_nom    text;
-  v_div       int;
-  v_cnt       int;
-  v_max_jug   int;
-  v_pendiente boolean;
-  v_firmados  int := 0;
+  v_hora        time;
+  v_fecha       date;
+  v_ts          timestamptz;
+  v_firmados    int := 0;
+  v_jug_id      uuid;
+  v_ganadora    record;
+  v_cnt_plant   int;
+  v_pendiente   boolean;
+  v_resto_pujas text;
+  v_max_jug     int;
 begin
-  -- Requiere mercado activo y hora configurada
+
+  -- ── 1. Verificar mercado activo y hora configurada ────────────
   select hora_cierre_pujas into v_hora
     from federaciones
    where id = p_federacion_id
      and ventas_habilitadas = true;
 
-  if v_hora is null then
-    return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'sin_hora_o_mercado_cerrado');
+  if not found or v_hora is null then
+    return jsonb_build_object('ok', true, 'skipped', true,
+                              'reason', 'sin_hora_o_mercado_cerrado');
   end if;
 
-  -- Calcular la fecha y timestamp del último cierre que debería haberse producido
-  v_fecha := (now() at time zone 'Europe/Madrid')::date;
-  v_ts    := (v_fecha::text || ' ' || v_hora::text)::timestamp at time zone 'Europe/Madrid';
-
-  -- Si el cierre de hoy todavía no ha llegado, usamos el de ayer
-  if now() < v_ts then
-    v_fecha := v_fecha - 1;
-    v_ts    := ((v_fecha::text) || ' ' || v_hora::text)::timestamp at time zone 'Europe/Madrid';
-    -- Si el de ayer tampoco ha pasado (instalación nueva antes del primer cierre), salir
-    if now() < v_ts then
-      return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'sin_cierre_pendiente');
-    end if;
-  end if;
-
-  -- Idempotencia: no reprocesar el mismo día
-  if exists (
-    select 1 from log_cierres_pujas
-    where federacion_id = p_federacion_id and fecha_cierre = v_fecha
-  ) then
-    return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'ya_procesado');
-  end if;
-
-  -- Lock de fila para serializar llamadas concurrentes
-  perform id from federaciones where id = p_federacion_id for update;
-
-  -- Segunda comprobación tras el lock
-  if exists (
-    select 1 from log_cierres_pujas
-    where federacion_id = p_federacion_id and fecha_cierre = v_fecha
-  ) then
-    return jsonb_build_object('ok', true, 'skipped', true, 'reason', 'ya_procesado');
-  end if;
-
-  -- Límite de plantilla configurable por federación
   v_max_jug := get_max_jugadores(p_federacion_id);
 
-  -- Procesar cada jugador con pujas anteriores al cierre
-  for v_jug_id in
+  -- ── 2. Calcular timestamp del cierre (Madrid → UTC) ───────────
+  v_fecha := (now() at time zone 'Europe/Madrid')::date;
+  v_ts    := (v_fecha::text || ' ' || v_hora::text)::timestamp
+               at time zone 'Europe/Madrid';
+
+  if now() < v_ts then
+    v_fecha := v_fecha - 1;
+    v_ts    := (v_fecha::text || ' ' || v_hora::text)::timestamp
+                 at time zone 'Europe/Madrid';
+  end if;
+
+  if now() < v_ts then
+    return jsonb_build_object('ok', true, 'skipped', true,
+                              'reason', 'sin_cierre_pendiente');
+  end if;
+
+  -- ── 3. Idempotencia ───────────────────────────────────────────
+  if exists (
+    select 1 from log_cierres_pujas
+     where federacion_id = p_federacion_id
+       and fecha_cierre  = v_fecha
+       and hora_cierre   = v_hora
+  ) then
+    return jsonb_build_object('ok', true, 'skipped', true,
+                              'reason', 'ya_procesado',
+                              'fecha', v_fecha, 'hora', v_hora);
+  end if;
+
+  -- ── 4. Lock de fila para serializar llamadas concurrentes ─────
+  perform 1 from federaciones where id = p_federacion_id for update;
+
+  if exists (
+    select 1 from log_cierres_pujas
+     where federacion_id = p_federacion_id
+       and fecha_cierre  = v_fecha
+       and hora_cierre   = v_hora
+  ) then
+    return jsonb_build_object('ok', true, 'skipped', true,
+                              'reason', 'ya_procesado',
+                              'fecha', v_fecha, 'hora', v_hora);
+  end if;
+
+  -- ── 5. Procesar cada jugador con pujas sin resolver ───────────
+  for v_jug_id in (
     select distinct p.jugador_id
       from pujas p
       join participantes pa on pa.id = p.participante_id
      where pa.federacion_id = p_federacion_id
        and p.resuelta       = false
-       and (p.created_at is null or p.created_at <= v_ts)
-  loop
+       and p.created_at    <= v_ts
+     order by p.jugador_id
+  ) loop
     begin
+
       -- Puja ganadora: mayor cantidad; empate → más antigua
-      select p.* into v_ganadora
+      select p.id            as puja_id,
+             p.participante_id,
+             p.cantidad,
+             pa.presupuesto  as presupuesto,
+             pa.nombre       as nombre_equipo,
+             pa.division_id  as division_id,
+             ju.posicion     as jugador_posicion,
+             ju.equipo       as jugador_equipo,
+             ju.nombre       as jugador_nombre
+        into v_ganadora
         from pujas p
         join participantes pa on pa.id = p.participante_id
+        join jugadores     ju on ju.id = p.jugador_id
        where p.jugador_id     = v_jug_id
          and pa.federacion_id = p_federacion_id
          and p.resuelta       = false
-         and (p.created_at is null or p.created_at <= v_ts)
+         and p.created_at    <= v_ts
        order by p.cantidad desc, p.created_at asc
-       limit 1
-       for update;
+       limit 1;
 
       if not found then continue; end if;
 
-      -- Nombre del equipo ganador (para el tablón)
-      select nombre into v_eq_nom
-        from participantes where id = v_ganadora.participante_id;
+      -- ── 5a. Jugador ya fichado en la federación ────────────────
+      if exists (
+        select 1 from plantillas pl
+          join participantes pa on pa.id = pl.participante_id
+         where pl.jugador_id = v_jug_id and pa.federacion_id = p_federacion_id
+      ) or exists (
+        select 1 from fichajes_pendientes fp
+          join participantes pa on pa.id = fp.participante_id
+         where fp.jugador_id = v_jug_id and pa.federacion_id = p_federacion_id
+      ) then
+        update pujas set resuelta = true, ganadora = false
+         where jugador_id = v_jug_id and resuelta = false
+           and participante_id in (
+             select id from participantes where federacion_id = p_federacion_id);
+        continue;
+      end if;
 
-      -- Datos del jugador
-      select posicion, equipo, nombre into v_pos, v_equipo, v_jug_nom
-        from jugadores where id = v_jug_id;
-
-      -- Portería única por división (activa + pendientes)
-      if v_pos = 'POR' then
-        select division_id into v_div
-          from participantes where id = v_ganadora.participante_id;
+      -- ── 5b. Portería única por división ───────────────────────
+      if v_ganadora.jugador_posicion = 'POR' then
         if exists (
           select 1 from plantillas pl
-          join participantes pa on pa.id = pl.participante_id
-          join jugadores     ju on ju.id = pl.jugador_id
-          where ju.posicion = 'POR' and ju.equipo = v_equipo
-            and pa.division_id = v_div and pa.federacion_id = p_federacion_id
+            join participantes pa on pa.id = pl.participante_id
+            join jugadores     ju on ju.id = pl.jugador_id
+           where ju.posicion = 'POR' and ju.equipo = v_ganadora.jugador_equipo
+             and pa.division_id  = v_ganadora.division_id
+             and pa.federacion_id = p_federacion_id
         ) or exists (
           select 1 from fichajes_pendientes fp
-          join participantes pa on pa.id = fp.participante_id
-          join jugadores     ju on ju.id = fp.jugador_id
-          where ju.posicion = 'POR' and ju.equipo = v_equipo
-            and pa.division_id = v_div and pa.federacion_id = p_federacion_id
-        ) then continue; end if;
+            join participantes pa on pa.id = fp.participante_id
+            join jugadores     ju on ju.id = fp.jugador_id
+           where ju.posicion = 'POR' and ju.equipo = v_ganadora.jugador_equipo
+             and pa.division_id  = v_ganadora.division_id
+             and pa.federacion_id = p_federacion_id
+        ) then
+          update pujas set resuelta = true, ganadora = false
+           where jugador_id = v_jug_id and resuelta = false
+             and participante_id in (
+               select id from participantes where federacion_id = p_federacion_id);
+          continue;
+        end if;
       end if;
 
-      -- Plantilla llena → fichaje pendiente
-      select count(*) into v_cnt
+      -- ── 5c. Plantilla llena → fichaje pendiente ───────────────
+      select count(*) into v_cnt_plant
         from plantillas where participante_id = v_ganadora.participante_id;
-      v_pendiente := v_cnt >= v_max_jug;
+      v_pendiente := (v_cnt_plant >= v_max_jug);
 
       if v_pendiente then
-        if exists (
-          select 1 from fichajes_pendientes
-          where participante_id = v_ganadora.participante_id and jugador_id = v_jug_id
-        ) then continue; end if;
         insert into fichajes_pendientes (participante_id, jugador_id, precio_compra)
-        values (v_ganadora.participante_id, v_jug_id, v_ganadora.cantidad);
+        values (v_ganadora.participante_id, v_jug_id, v_ganadora.cantidad)
+        on conflict (participante_id, jugador_id) do nothing;
       else
         insert into plantillas (participante_id, jugador_id, precio_compra)
-        values (v_ganadora.participante_id, v_jug_id, v_ganadora.cantidad);
+        values (v_ganadora.participante_id, v_jug_id, v_ganadora.cantidad)
+        on conflict (participante_id, jugador_id) do nothing;
       end if;
 
-      -- Descontar presupuesto
+      -- ── 5d. Descontar presupuesto ─────────────────────────────
       update participantes
          set presupuesto = presupuesto - v_ganadora.cantidad
        where id = v_ganadora.participante_id;
 
-      -- Resolver todas las pujas del jugador en la federación
-      update pujas p set resuelta = true, ganadora = false
-        from participantes pa
-       where p.jugador_id      = v_jug_id
-         and p.participante_id = pa.id
-         and pa.federacion_id  = p_federacion_id;
+      -- ── 5e. Resolver todas las pujas del jugador ──────────────
+      update pujas set resuelta = true, ganadora = false
+       where jugador_id = v_jug_id and resuelta = false
+         and participante_id in (
+           select id from participantes where federacion_id = p_federacion_id);
 
-      -- Marcar la ganadora
-      update pujas set ganadora = true where id = v_ganadora.id;
+      update pujas set ganadora = true where id = v_ganadora.puja_id;
 
-      -- Tablón
+      -- ── 5f. Lista de pujas perdedoras ─────────────────────────
+      select string_agg(
+               '- ' || pa.nombre || ' pujó ' || to_char(p.cantidad, 'FM999G999G999') || ' €',
+               chr(10) order by p.cantidad desc
+             )
+        into v_resto_pujas
+        from pujas p
+        join participantes pa on pa.id = p.participante_id
+       where p.jugador_id     = v_jug_id
+         and pa.federacion_id = p_federacion_id
+         and p.created_at    <= v_ts
+         and p.id             <> v_ganadora.puja_id;
+
+      -- ── 5g. Anuncio individual en el tablón ───────────────────
       insert into anuncios (federacion_id, tipo, texto)
       values (
-        p_federacion_id,
-        'fichaje',
-        v_eq_nom
-          || case when v_pos = 'POR'
-                  then ' ficha la Portería de ' || v_equipo
-                  else ' ficha a ' || v_jug_nom || ' (' || v_equipo || ')'
+        p_federacion_id, 'fichaje',
+        v_ganadora.nombre_equipo
+          || case v_ganadora.jugador_posicion
+               when 'POR' then ' ficha la Portería de ' || v_ganadora.jugador_equipo
+               else ' ficha a ' || v_ganadora.jugador_nombre
+                    || ' (' || v_ganadora.jugador_equipo || ')'
              end
           || ' por ' || to_char(v_ganadora.cantidad, 'FM999G999G999') || ' €'
-          || case when v_pendiente then ' — pendiente de plaza' else '' end
+          || case when v_pendiente then ' (pendiente de plaza)' else '' end
+          || '.'
+          || case when v_resto_pujas is not null
+               then chr(10) || 'Resto de pujas:' || chr(10) || v_resto_pujas
+               else ''
+             end
       );
 
       v_firmados := v_firmados + 1;
@@ -219,25 +273,26 @@ begin
     end;
   end loop;
 
-  -- Registrar el cierre
-  insert into log_cierres_pujas (federacion_id, fecha_cierre, firmados)
-  values (p_federacion_id, v_fecha, v_firmados)
-  on conflict (federacion_id, fecha_cierre) do nothing;
+  -- ── 6. Registrar el cierre ─────────────────────────────────────
+  insert into log_cierres_pujas (federacion_id, fecha_cierre, hora_cierre, firmados)
+  values (p_federacion_id, v_fecha, v_hora, v_firmados)
+  on conflict (federacion_id, fecha_cierre, hora_cierre) do nothing;
 
-  -- Resumen en el tablón
+  -- ── 7. Resumen en el tablón ───────────────────────────────────
   insert into anuncios (federacion_id, tipo, texto)
   values (
-    p_federacion_id,
-    'admin',
-    'Cierre de pujas ' || to_char(v_fecha, 'DD/MM/YYYY') || ' a las '
-    || to_char(v_hora, 'HH24:MI') || 'h — '
-    || case when v_firmados > 0
-            then v_firmados || ' jugador(es) fichado(s)'
-            else 'sin fichajes'
+    p_federacion_id, 'admin',
+    'Cierre de pujas ' || to_char(v_fecha, 'DD/MM/YYYY')
+    || ' a las ' || to_char(v_hora, 'HH24:MI') || 'h — '
+    || case
+         when v_firmados = 0 then 'sin adjudicaciones'
+         when v_firmados = 1 then '1 jugador adjudicado'
+         else v_firmados || ' jugadores adjudicados'
        end
   );
 
-  return jsonb_build_object('ok', true, 'fecha', v_fecha::text, 'firmados', v_firmados);
+  return jsonb_build_object('ok', true, 'fecha', v_fecha::text,
+                            'hora', v_hora::text, 'firmados', v_firmados);
 end;
 $$;
 

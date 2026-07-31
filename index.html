@@ -10626,7 +10626,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   const [desempateOrden, setDesempateOrden] = useState(() => parsarOrden(federacion?.h2h_desempate_orden));
   // Fantasy ↔ H2H
   const parsarBaremo = (val) => { try { return JSON.parse(val || 'null') || BAREMO_DEFAULT; } catch { return BAREMO_DEFAULT; } };
-  const [jornadaConfig, setJornadaConfig] = useState({});  // { jornada_h2h: jornada_fantasy|null }
+  const [jornadaConfig, setJornadaConfig] = useState({});  // { cfgKey(j,divId): jornada_fantasy|null }
+  const [divisiones,    setDivisiones]    = useState([]);
+  // Clave de estado: por (jornada_h2h, division_id) — null para federaciones sin divisiones
+  const cfgKey = (j, divId) => divId != null ? `${j}_${divId}` : String(j);
   const [baremo,        setBaremo]        = useState(() => parsarBaremo(federacion?.h2h_baremo));
   const [ptsLocalV1,    setPtsLocalV1]    = useState(federacion?.h2h_pts_local_v1 ?? 5);
   const [ptsLocalV2,    setPtsLocalV2]    = useState(federacion?.h2h_pts_local_v2 ?? 5);
@@ -10665,14 +10668,19 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   };
 
   useEffect(() => { if (federacion?.id) { cargar(); cargarConfig(); } }, [federacion?.id]);
+  useEffect(() => {
+    if (!sb || !federacion?.id) return;
+    sb.from('divisiones').select('id, nombre').eq('federacion_id', federacion.id).order('id')
+      .then(({ data }) => setDivisiones(data || []));
+  }, [federacion?.id]);
 
   const cargarConfig = async () => {
     const [{ data: jcData }, { data: veData }] = await Promise.all([
-      sb.from('h2h_jornada_config').select('jornada_h2h, jornada_fantasy').eq('federacion_id', federacion.id),
+      sb.from('h2h_jornada_config').select('jornada_h2h, division_id, jornada_fantasy').eq('federacion_id', federacion.id),
       sb.from('h2h_vueltas_extra').select('*').eq('federacion_id', federacion.id).order('vuelta_num'),
     ]);
     const cfg = {};
-    (jcData || []).forEach(r => { cfg[r.jornada_h2h] = r.jornada_fantasy; });
+    (jcData || []).forEach(r => { cfg[cfgKey(r.jornada_h2h, r.division_id)] = r.jornada_fantasy; });
     setJornadaConfig(cfg);
     setVueltasExtra(veData || []);
   };
@@ -10740,13 +10748,20 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setVueltasExtra(prev => prev.map(v => v.id === ve.id ? { ...v, pts_local: nuevoPts } : v));
   };
 
-  const setJornadaFantasy = async (j_h2h, raw) => {
+  const setJornadaFantasy = async (j_h2h, division_id, raw) => {
     const val = raw === '' ? null : Number(raw);
-    await sb.from('h2h_jornada_config').upsert(
-      { federacion_id: federacion.id, jornada_h2h: j_h2h, jornada_fantasy: val },
-      { onConflict: 'federacion_id,jornada_h2h' }
-    );
-    setJornadaConfig(prev => ({ ...prev, [j_h2h]: val }));
+    // DELETE + INSERT para evitar complejidad de onConflict con division_id nullable
+    let q = sb.from('h2h_jornada_config').delete()
+      .eq('federacion_id', federacion.id).eq('jornada_h2h', j_h2h);
+    q = division_id != null ? q.eq('division_id', division_id) : q.is('division_id', null);
+    await q;
+    if (val != null) {
+      await sb.from('h2h_jornada_config').insert({
+        federacion_id: federacion.id, jornada_h2h: j_h2h,
+        division_id: division_id ?? null, jornada_fantasy: val,
+      });
+    }
+    setJornadaConfig(prev => ({ ...prev, [cfgKey(j_h2h, division_id)]: val }));
   };
 
   const guardarBaremo = async () => {
@@ -10771,52 +10786,71 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   };
 
   const calcularDesdeFantasy = async (j_h2h) => {
-    const jornada_fantasy = jornadaConfig[j_h2h];
-    if (!jornada_fantasy) return;
+    const ms = partidos.filter(p => p.jornada === j_h2h);
+    if (ms.length === 0) return;
+
+    // Jornada fantasy asignada por división
+    const divIds = [...new Set(ms.map(m => m.division_id))];
+    const divToJf = {};
+    divIds.forEach(divId => { divToJf[divId] = jornadaConfig[cfgKey(j_h2h, divId)] || null; });
+    if (Object.values(divToJf).every(v => !v)) return;
+
     setCalculando(j_h2h);
     const { ptsLocal } = getVueltaInfo(j_h2h, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, vueltasExtra);
-    const partIds = participantes.map(p => p.id);
-    const { data: clsData } = await sb.from('clasificacion')
-      .select('participante_id, puntos_jornada')
-      .eq('jornada', jornada_fantasy)
-      .in('participante_id', partIds);
-    const ptsMap = {};
-    (clsData || []).forEach(r => { ptsMap[r.participante_id] = r.puntos_jornada ?? 0; });
 
-    // Aplicar comodines con scope='h2h' si están habilitados
+    // Participantes agrupados por jornada fantasy (según su división)
+    const pidToDiv  = Object.fromEntries(participantes.map(p => [p.id, p.division_id ?? null]));
+    const uniqueJfs = [...new Set(Object.values(divToJf).filter(Boolean))];
+    const pidsByJf  = {};
+    uniqueJfs.forEach(jf => { pidsByJf[jf] = []; });
+    participantes.forEach(p => {
+      const jf = divToJf[p.division_id ?? null];
+      if (jf) pidsByJf[jf].push(p.id);
+    });
+
+    const ptsMap = {};
     const scopeCapH2H = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_h2h   ?? false);
     const scopeBanH2H = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_h2h ?? false);
-    if (scopeCapH2H || scopeBanH2H) {
-      const { data: comsH2H } = await sb.from('comodines_usados')
-        .select('participante_id, tipo').eq('jornada', jornada_fantasy).in('participante_id', partIds);
-      const h2hBan = new Set((comsH2H||[]).filter(c=>c.tipo==='banquillo').map(c=>c.participante_id));
-      const h2hCap = new Set((comsH2H||[]).filter(c=>c.tipo==='capitan').map(c=>c.participante_id));
 
-      // Capitán doble H2H: leer capitan + puntos_jugador, sumar pts del capitán
-      if (scopeCapH2H && h2hCap.size > 0) {
-        const [{ data: capsH2H }, { data: pjH2H }] = await Promise.all([
-          sb.from('capitanes').select('participante_id,jugador_id').eq('jornada',jornada_fantasy).in('participante_id',[...h2hCap]),
-          sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada_fantasy).eq('federacion_id',federacion.id),
-        ]);
-        const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
-        (capsH2H||[]).forEach(c => { ptsMap[c.participante_id] = (ptsMap[c.participante_id]||0) + (pjMap[c.jugador_id]||0); });
-      }
+    // Procesar cada jornada fantasy de forma independiente
+    for (const jf of uniqueJfs) {
+      const pids = pidsByJf[jf];
+      if (pids.length === 0) continue;
 
-      // Banquillo completo H2H: recalcular sumando todos los jugadores de la alineación
-      if (scopeBanH2H && h2hBan.size > 0) {
-        const [{ data: alisH2H }, { data: pjH2H }] = await Promise.all([
-          sb.from('alineaciones').select('participante_id,jugador_id').eq('jornada',jornada_fantasy).in('participante_id',[...h2hBan]),
-          sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada_fantasy).eq('federacion_id',federacion.id),
-        ]);
-        const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
-        const alisByPid = {};
-        (alisH2H||[]).forEach(a=>{ if(!alisByPid[a.participante_id]) alisByPid[a.participante_id]=[]; alisByPid[a.participante_id].push(a.jugador_id); });
-        h2hBan.forEach(pid => { ptsMap[pid] = (alisByPid[pid]||[]).reduce((s,jid)=>s+(pjMap[jid]||0),0); });
+      const { data: clsData } = await sb.from('clasificacion')
+        .select('participante_id, puntos_jornada').eq('jornada', jf).in('participante_id', pids);
+      (clsData || []).forEach(r => { ptsMap[r.participante_id] = r.puntos_jornada ?? 0; });
+
+      if (scopeCapH2H || scopeBanH2H) {
+        const { data: comsH2H } = await sb.from('comodines_usados')
+          .select('participante_id, tipo').eq('jornada', jf).in('participante_id', pids);
+        const h2hBan = new Set((comsH2H||[]).filter(c=>c.tipo==='banquillo').map(c=>c.participante_id));
+        const h2hCap = new Set((comsH2H||[]).filter(c=>c.tipo==='capitan').map(c=>c.participante_id));
+
+        if (scopeCapH2H && h2hCap.size > 0) {
+          const [{ data: capsH2H }, { data: pjH2H }] = await Promise.all([
+            sb.from('capitanes').select('participante_id,jugador_id').eq('jornada',jf).in('participante_id',[...h2hCap]),
+            sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jf).eq('federacion_id',federacion.id),
+          ]);
+          const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
+          (capsH2H||[]).forEach(c => { ptsMap[c.participante_id] = (ptsMap[c.participante_id]||0) + (pjMap[c.jugador_id]||0); });
+        }
+
+        if (scopeBanH2H && h2hBan.size > 0) {
+          const [{ data: alisH2H }, { data: pjH2H }] = await Promise.all([
+            sb.from('alineaciones').select('participante_id,jugador_id').eq('jornada',jf).in('participante_id',[...h2hBan]),
+            sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jf).eq('federacion_id',federacion.id),
+          ]);
+          const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
+          const alisByPid = {};
+          (alisH2H||[]).forEach(a=>{ if(!alisByPid[a.participante_id]) alisByPid[a.participante_id]=[]; alisByPid[a.participante_id].push(a.jugador_id); });
+          h2hBan.forEach(pid => { ptsMap[pid] = (alisByPid[pid]||[]).reduce((s,jid)=>s+(pjMap[jid]||0),0); });
+        }
       }
     }
 
-    const ms = partidos.filter(p => p.jornada === j_h2h);
     await Promise.all(ms.map(m => {
+      if (!divToJf[m.division_id]) return Promise.resolve();
       const gl = ptsToGoles((ptsMap[m.local_id] ?? 0) + ptsLocal, baremo);
       const gv = ptsToGoles(ptsMap[m.visitante_id] ?? 0, baremo);
       return sb.from('h2h_partidos').update({
@@ -10825,10 +10859,17 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
         fantasy_visitante: ptsMap[m.visitante_id] ?? null,
       }).eq('id', m.id);
     }));
+
     setCalculando(null);
     await cargar();
-    publicar(federacion?.id, 'admin', `H2H J${j_h2h} calculada automáticamente desde jornada fantasy ${jornada_fantasy}`, actorNombre);
-    setMsg(`J${j_h2h} calculada desde jornada fantasy ${jornada_fantasy}`);
+    const detalle = divIds.map(did => {
+      const jf = divToJf[did];
+      if (!jf) return null;
+      const nom = divisiones.find(d => d.id === did)?.nombre || (did == null ? 'General' : `Div ${did}`);
+      return `${nom}→J${jf}`;
+    }).filter(Boolean).join(', ');
+    publicar(federacion?.id, 'admin', `H2H J${j_h2h} calculada automáticamente (${detalle})`, actorNombre);
+    setMsg(`J${j_h2h} calculada`);
     setTimeout(() => setMsg(''), 3000);
   };
 
@@ -11423,21 +11464,42 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
                                letterSpacing:'.05em', minWidth:80}}>
                     JORNADA {j}
                   </span>
-                  {/* Asignación de jornada fantasy */}
-                  <label style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.78rem', color:'var(--texto2)'}}>
-                    J. fantasy:
-                    <select value={jornadaConfig[j] ?? ''}
-                            onChange={e => setJornadaFantasy(j, e.target.value)}
-                            style={{padding:'.15rem .35rem', borderRadius:6, border:'1.5px solid var(--borde)',
-                                    fontSize:'.78rem', background:'var(--fondo)', color:'var(--texto)'}}>
-                      <option value="">—</option>
-                      {Array.from({length:38}, (_, i) => i+1).map(jf => (
-                        <option key={jf} value={jf}>{jf}</option>
-                      ))}
-                    </select>
-                  </label>
-                  {/* Calcular desde fantasy */}
-                  {jornadaConfig[j] && (
+                  {/* Asignación de jornada fantasy — por división si hasDivs */}
+                  {hasDivs
+                    ? [...new Set(ms.map(m => m.division_id))].map(divId => {
+                        const divNom = divisiones.find(d => d.id === divId)?.nombre || `Div ${divId}`;
+                        return (
+                          <label key={divId ?? '__'} style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.78rem', color:'var(--texto2)'}}>
+                            {divNom}:
+                            <select value={jornadaConfig[cfgKey(j, divId)] ?? ''}
+                                    onChange={e => setJornadaFantasy(j, divId, e.target.value)}
+                                    style={{padding:'.15rem .35rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                            fontSize:'.78rem', background:'var(--fondo)', color:'var(--texto)'}}>
+                              <option value="">—</option>
+                              {Array.from({length:38}, (_, i) => i+1).map(jf => (
+                                <option key={jf} value={jf}>{jf}</option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      })
+                    : (
+                      <label style={{display:'flex', alignItems:'center', gap:'.3rem', fontSize:'.78rem', color:'var(--texto2)'}}>
+                        J. fantasy:
+                        <select value={jornadaConfig[cfgKey(j, null)] ?? ''}
+                                onChange={e => setJornadaFantasy(j, null, e.target.value)}
+                                style={{padding:'.15rem .35rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                        fontSize:'.78rem', background:'var(--fondo)', color:'var(--texto)'}}>
+                          <option value="">—</option>
+                          {Array.from({length:38}, (_, i) => i+1).map(jf => (
+                            <option key={jf} value={jf}>{jf}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )
+                  }
+                  {/* Calcular desde fantasy — visible si al menos una división tiene jornada asignada */}
+                  {ms.some(m => jornadaConfig[cfgKey(j, m.division_id)]) && (
                     <button onClick={() => calcularDesdeFantasy(j)}
                             disabled={calculando === j}
                             style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem',

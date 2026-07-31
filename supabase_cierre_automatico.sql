@@ -20,6 +20,20 @@ create table if not exists log_cierres_pujas (
   unique(federacion_id, fecha_cierre)
 );
 
+-- Garantizar constraint único aunque la tabla se creara en versión anterior sin él
+-- Primero eliminar duplicados (conserva el registro más reciente de cada día)
+delete from log_cierres_pujas a
+using log_cierres_pujas b
+where a.federacion_id = b.federacion_id
+  and a.fecha_cierre  = b.fecha_cierre
+  and a.id < b.id;
+
+alter table log_cierres_pujas
+  drop constraint if exists log_cierres_pujas_federacion_id_fecha_cierre_key;
+alter table log_cierres_pujas
+  add constraint log_cierres_pujas_federacion_id_fecha_cierre_key
+  unique (federacion_id, fecha_cierre);
+
 alter table log_cierres_pujas enable row level security;
 grant select on log_cierres_pujas to authenticated;
 

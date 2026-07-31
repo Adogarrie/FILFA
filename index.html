@@ -874,7 +874,7 @@ function CountdownCierre({ horaCierre, habilitado }) {
 }
 
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaje, federacion, miParticipanteId, onBadgeChange, ofertasBadge }) {
+function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaje, federacion, miParticipanteId, onBadgeChange, onCierre, ofertasBadge }) {
   const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
   const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
@@ -915,8 +915,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
             return;
           }
           console.log('[FILFA cierre] RPC resultado:', data);
-          if (data?.firmados > 0) {
-            cargarRef.current?.(); // refresca el mercado con la cargar más actual
+          if (data?.ok && !data?.skipped) {
+            if (data.firmados > 0) cargarRef.current?.(); // refresca el mercado solo si hay fichajes
+            onCierre?.(); // señal al Tablón para que recargue
           }
         });
     };
@@ -3836,7 +3837,7 @@ function FederacionInfo({ federacionId, isAdmin, isModerador }) {
   );
 }
 
-function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilitados = true, onBadgeChange }) {
+function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilitados = true, onBadgeChange, refreshKey = 0 }) {
   const [tab, setTab]          = useState('anuncios');
   const [anuncios, setAnuncios] = useState(null);
   const [pagina, setPagina]    = useState(0);
@@ -3869,7 +3870,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilita
   };
 
   useEffect(() => { setPagina(0); setAnuncios(null); }, [federacionId]);
-  useEffect(() => { cargar(); }, [federacionId, pagina]);
+  useEffect(() => { cargar(); }, [federacionId, pagina, refreshKey]);
 
   const enviar = async () => {
     if (!texto.trim()) return;
@@ -9605,7 +9606,8 @@ function App() {
   const [session, setSession]         = useState(null);
   const [sesionLista, setSesionLista] = useState(false);
   const [ofertasBadge,  setOfertasBadge]  = useState(0);
-  const [tablonBadge,   setTablonBadge]   = useState(0);
+  const [tablonBadge,       setTablonBadge]       = useState(0);
+  const [tablonRefreshKey,  setTablonRefreshKey]  = useState(0);
 
   const seleccionarFederacion = async (part, fed, userOverride, resetear = true) => {
     const u = userOverride || authUser;
@@ -9854,7 +9856,8 @@ function App() {
           <Mercado participanteId={participanteId} participantes={participantes}
                    isAdmin={isAdmin} isModerador={isModerador} onFichaje={() => {}} federacion={federacion}
                    miParticipanteId={session?.participante_id}
-                   onBadgeChange={refrescarBadge} ofertasBadge={ofertasBadge} />
+                   onBadgeChange={refrescarBadge} ofertasBadge={ofertasBadge}
+                   onCierre={() => setTablonRefreshKey(k => k + 1)} />
         </div>
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}
@@ -9882,7 +9885,7 @@ function App() {
           <Tablon federacionId={federacion?.id} isAdmin={isAdmin} isModerador={isModerador}
                   miNombre={participantes.find(p => p.id === session?.participante_id)?.nombre}
                   mensajesHabilitados={federacion?.mensajes_tablon_habilitados ?? true}
-                  onBadgeChange={refrescarTablonBadge} />
+                  onBadgeChange={refrescarTablonBadge} refreshKey={tablonRefreshKey} />
         )}
         {vista === 'Admin' && (isAdmin || isModerador) && (
           <ErrorBoundary>

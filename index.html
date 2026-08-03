@@ -375,6 +375,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [filtroNomModal, setFiltroNomModal]   = useState('');
   const [fichandoId, setFichandoId]           = useState(null);
   const [draftCopiado, setDraftCopiado]       = useState(false);
+  const [draftResultado, setDraftResultado]   = useState(null);
 
   const maxJug = federacion?.max_jugadores ?? 14;
 
@@ -448,27 +449,22 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
 
   const generarDraft = async () => {
     const { data: jugs } = await sb.from('jugadores')
-      .select('nombre, equipo, posicion')
+      .select('nombre, equipo, posicion, valor_mercado')
       .eq('activo', true);
     const mezclar = arr => [...arr].sort(() => Math.random() - 0.5);
     const pors = mezclar((jugs || []).filter(j => j.posicion === 'POR'));
     const defs = mezclar((jugs || []).filter(j => j.posicion === 'DEF'));
     const meds = mezclar((jugs || []).filter(j => j.posicion === 'MED'));
     const dels = mezclar((jugs || []).filter(j => j.posicion === 'DEL'));
-    const lineas = [
-      'Porterías',
-      ...pors.slice(0, 10).map(j => j.equipo),
-      '',
-      'Defensas',
-      ...defs.slice(0, 25).map(j => j.nombre),
-      '',
-      'Centrocampistas',
-      ...meds.slice(0, 25).map(j => j.nombre),
-      '',
-      'Delanteros',
-      ...dels.slice(0, 25).map(j => j.nombre),
+    const secciones = [
+      { titulo: 'Porterías',       items: pors.slice(0, 10).map(j => `${j.equipo} — ${fmt(j.valor_mercado || 0)}`) },
+      { titulo: 'Defensas',        items: defs.slice(0, 25).map(j => `${j.nombre} (${j.equipo}) — ${fmt(j.valor_mercado || 0)}`) },
+      { titulo: 'Centrocampistas', items: meds.slice(0, 25).map(j => `${j.nombre} (${j.equipo}) — ${fmt(j.valor_mercado || 0)}`) },
+      { titulo: 'Delanteros',      items: dels.slice(0, 25).map(j => `${j.nombre} (${j.equipo}) — ${fmt(j.valor_mercado || 0)}`) },
     ];
-    await navigator.clipboard.writeText(lineas.join('\n'));
+    const clip = secciones.map(s => [s.titulo, ...s.items].join('\n')).join('\n\n');
+    await navigator.clipboard.writeText(clip);
+    setDraftResultado(secciones);
     setDraftCopiado(true);
     setTimeout(() => setDraftCopiado(false), 2500);
   };
@@ -683,11 +679,10 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         {federacion?.draft_habilitado && (
           <div style={{marginLeft:'auto'}}>
             <button onClick={generarDraft}
-                    style={{background: draftCopiado ? '#198754' : '#0d6efd', color:'#fff',
-                            border:'none', padding:'.5rem 1.1rem', borderRadius:'8px',
-                            cursor:'pointer', fontSize:'.88rem', fontWeight:600,
-                            transition:'background .2s'}}>
-              {draftCopiado ? '¡Copiado!' : '🎲 Generar Draft'}
+                    style={{background:'#0d6efd', color:'#fff', border:'none',
+                            padding:'.5rem 1.1rem', borderRadius:'8px',
+                            cursor:'pointer', fontSize:'.88rem', fontWeight:600}}>
+              🎲 Generar Draft
             </button>
           </div>
         )}
@@ -923,6 +918,38 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
               }
               <div className="modal-btns" style={{marginTop:'1rem'}}>
                 <button className="btn-cancel" onClick={() => setModalSustituto(null)}>Cerrar</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {draftResultado && (
+          <div className="overlay" onClick={() => setDraftResultado(null)}>
+            <div className="modal" style={{maxWidth:520, width:'100%', maxHeight:'80vh',
+                                           display:'flex', flexDirection:'column'}}
+                 onClick={e => e.stopPropagation()}>
+              <h3 style={{marginBottom:'.75rem'}}>Draft generado</h3>
+              <div style={{overflowY:'auto', flex:1, marginBottom:'1rem'}}>
+                {draftResultado.map(s => (
+                  <div key={s.titulo} style={{marginBottom:'1rem'}}>
+                    <div style={{fontWeight:700, fontSize:'.95rem', marginBottom:'.35rem',
+                                 color:'var(--acento)', letterSpacing:'.03em'}}>{s.titulo}</div>
+                    {s.items.map((item, i) => (
+                      <div key={i} style={{fontSize:'.87rem', padding:'.18rem 0',
+                                           borderBottom:'1px solid var(--borde)'}}>{item}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className="modal-btns">
+                <button className={draftCopiado ? 'btn-ok' : 'btn-ok'} onClick={async () => {
+                  const clip = draftResultado.map(s => [s.titulo, ...s.items].join('\n')).join('\n\n');
+                  await navigator.clipboard.writeText(clip);
+                  setDraftCopiado(true);
+                  setTimeout(() => setDraftCopiado(false), 2500);
+                }} style={draftCopiado ? {background:'#198754'} : {}}>
+                  {draftCopiado ? '¡Copiado!' : 'Copiar'}
+                </button>
+                <button className="btn-cancel" onClick={() => setDraftResultado(null)}>Cerrar</button>
               </div>
             </div>
           </div>

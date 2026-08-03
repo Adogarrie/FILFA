@@ -356,7 +356,7 @@ function Spinner() {
 }
 
 // ── PLANTILLA ──────────────────────────────────────────────────
-function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId }) {
+function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId, onIrAlMercado }) {
   const [jugadores, setJugadores]           = useState(null);
   const [presupuesto, setPresupuesto]       = useState(null);
   const [sustLesion, setSustLesion]         = useState(0);
@@ -664,14 +664,24 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                       </td>
                       {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j2 => j2.lesionado)) && (
                         <td>
-                          {(isActingAsAdmin || federacion?.ventas_habilitadas || j.lesionado) && (
-                            <button onClick={() => setModalVenta(j)}
-                              style={{background:'#d93025', color:'#fff', border:'none',
-                                      padding:'.3rem .7rem', borderRadius:'8px',
-                                      cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
-                              Vender
-                            </button>
-                          )}
+                          <div style={{display:'flex', flexDirection:'column', gap:'.3rem', alignItems:'flex-end'}}>
+                            {(isActingAsAdmin || federacion?.ventas_habilitadas || j.lesionado) && (
+                              <button onClick={() => setModalVenta(j)}
+                                style={{background:'#d93025', color:'#fff', border:'none',
+                                        padding:'.3rem .7rem', borderRadius:'8px',
+                                        cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                                Vender
+                              </button>
+                            )}
+                            {j.lesionado && (
+                              <button onClick={() => onIrAlMercado?.()}
+                                style={{background:'#0d6efd', color:'#fff', border:'none',
+                                        padding:'.3rem .7rem', borderRadius:'8px',
+                                        cursor:'pointer', fontSize:'.8rem', fontWeight:600, whiteSpace:'nowrap'}}>
+                                Fichar sustituto
+                              </button>
+                            )}
+                          </div>
                         </td>
                       )}
                     </tr>
@@ -931,7 +941,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); setPresupuesto(null); setMisOfertas([]); return; }
 
     const partIds = participantes.map(p => p.id);
-    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }] = await Promise.all([
+    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }, { data: lesData }] = await Promise.all([
       sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true),
       partIds.length
         ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
@@ -948,8 +958,12 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       participanteId
         ? sb.from('ofertas_jugadores').select('cantidad').eq('ofertante_id', participanteId).eq('estado', 'pendiente')
         : Promise.resolve({ data: [] }),
+      partIds.length
+        ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds).eq('lesionado', true)
+        : Promise.resolve({ data: [] }),
     ]);
-    setJugadores(jugs || []);
+    const lesionadosFedSet = new Set((lesData || []).map(r => r.jugador_id));
+    setJugadores((jugs || []).map(j => ({ ...j, lesionado: lesionadosFedSet.has(j.id) })));
     setTodasPlantillas(plants || []);
     setTodasPendientes(pends || []);
     setSorteoHabilitado(!!federacion?.sorteo_habilitado);
@@ -1297,6 +1311,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const porEquipoPool = {}, restoPool = [];
     for (const j of (jugadores || [])) {
       if (misJugFrescos.has(j.id)) continue;
+      if (j.lesionado) continue;
       if (j.posicion === 'POR') {
         if (porteriasBloq.has(j.equipo)) continue;
         const vm = j.valor_mercado || 0;
@@ -4531,6 +4546,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const [jugadoresHistoricos, setJugadoresHistoricos] = useState([]);
   const [jugadoresCedidos, setJugadoresCedidos]       = useState([]);
   const [aplazadosSet, setAplazadosSet] = useState(new Set());
+  const [lesionadosSet, setLesionadosSet] = useState(new Set());
   const [snapshot, setSnapshot]         = useState(null);
   const [capitanId, setCapitanId]       = useState(null);
   const [comodinJornada, setComodinJornada] = useState(null);   // 'capitan'|'banquillo'|null
@@ -4543,9 +4559,10 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   useEffect(() => {
     if (!sb || !participanteId) return;
     sb.from('plantillas')
-      .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt)')
+      .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt)')
       .eq('participante_id', participanteId)
       .then(({ data }) => {
+        setLesionadosSet(new Set((data || []).filter(p => p.lesionado).map(p => p.jugador_id)));
         const jugs = (data || []).map(p => p.jugadores).filter(Boolean);
         jugs.sort((a, b) => POS_ORDEN[a.posicion] - POS_ORDEN[b.posicion]);
         setPlantilla(jugs);
@@ -4622,9 +4639,10 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
       const pu  = {};
       for (const a of fuente) {
         if (Object.prototype.hasOwnProperty.call(e, a.jugador_id)) {
-          e[a.jugador_id] = a.es_titular ? 'T' : 'S';
-          if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
-          if (a.es_titular && a.posicion_usada)          pu[a.jugador_id]  = a.posicion_usada;
+          const esLes = lesionadosSet.has(a.jugador_id);
+          e[a.jugador_id] = esLes ? 'F' : (a.es_titular ? 'T' : 'S');
+          if (!esLes && !a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
+          if (!esLes && a.es_titular && a.posicion_usada)          pu[a.jugador_id]  = a.posicion_usada;
         }
       }
       setPosicionUsada(pu);
@@ -4694,6 +4712,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 
   const setJugadorEstado = (id, op) => {
     if (!puedeEditar(id)) return;
+    if (lesionadosSet.has(id) && (op === 'T' || op === 'S')) { alert('No puedes alinear a un jugador lesionado.'); return; }
     const prev = estado[id];
     if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
     if (op === 'S' && nS >= 4  && prev !== 'S') { alert('Máximo 4 suplentes.'); return; }
@@ -4979,6 +4998,12 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                             </td>
                             <td style={{fontWeight:600}}>
                               {nombreJugador(j.nombre, j.posicion, j.equipo)}
+                              {lesionadosSet.has(j.id) && (
+                                <span style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
+                                             padding:'1px 4px', borderRadius:3, background:'#dc3545', color:'#fff', verticalAlign:'middle'}}>
+                                  LES
+                                </span>
+                              )}
                               {esCedido && (
                                 <span style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
                                              padding:'1px 4px', borderRadius:3, background:'#0dcaf0', color:'#000', verticalAlign:'middle'}}>
@@ -9865,7 +9890,8 @@ function App() {
                      participanteNombre={participanteActual?.nombre}
                      federacion={federacion}
                      isAdmin={isAdmin}
-                     miParticipanteId={session?.participante_id} />
+                     miParticipanteId={session?.participante_id}
+                     onIrAlMercado={() => setVista('Mercado')} />
         )}
         {/* Mercado se mantiene montado para no relanzar queries al volver */}
         <div style={{display: vista === 'Mercado' ? '' : 'none'}}>

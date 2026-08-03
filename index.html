@@ -376,7 +376,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     if (!participanteId || !sb) { setJugadores([]); return; }
     const [{ data: pl, error }, { data: pres }] = await Promise.all([
       sb.from('plantillas')
-        .select('id, jugador_id, precio_compra, fecha_fichaje, jugadores(nombre, equipo, posicion, valor_mercado, lesionado)')
+        .select('id, jugador_id, precio_compra, fecha_fichaje, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
         .eq('participante_id', participanteId),
       sb.from('participantes').select('presupuesto, escudo_url, sustituciones_lesion').eq('id', participanteId).single(),
     ]);
@@ -560,7 +560,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     posicion:   p.jugadores?.posicion || '',
     valor:      p.jugadores?.valor_mercado || 0,
     compra:     p.precio_compra || 0,
-    lesionado:  p.jugadores?.lesionado || false,
+    lesionado:  p.lesionado || false,
   })).sort((a, b) => (POS_ORDER[a.posicion] ?? 4) - (POS_ORDER[b.posicion] ?? 4));
 
   const presupuestoDisplay = presupuesto ?? null;
@@ -1162,9 +1162,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
     // Obtener plantilla actualizada para validar
     const { data: miPlantilla } = await sb.from('plantillas')
-      .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
+      .select('id, lesionado, jugadores(posicion)').eq('participante_id', participanteId);
 
-    const totalCnt = (miPlantilla || []).length;
+    const totalCnt = (miPlantilla || []).filter(p => !p.lesionado).length;
     if (totalCnt >= maxJug) {
       alert(`Tu equipo ya tiene ${maxJug} jugadores (máximo permitido).`);
       setModal(null);
@@ -3133,7 +3133,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     setJugadores(null);
     setPresupuesto(null);
     sb.from('plantillas')
-      .select('id, jugador_id, precio_compra, jugadores(nombre, equipo, posicion, valor_mercado, lesionado)')
+      .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
       .eq('participante_id', equipoId)
       .then(({ data, error }) => setJugadores(error ? [] : (data || [])));
     sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
@@ -3238,7 +3238,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     posicion:   p.jugadores?.posicion || '',
     valor:      p.jugadores?.valor_mercado || 0,
     compra:     p.precio_compra || 0,
-    lesionado:  p.jugadores?.lesionado || false,
+    lesionado:  p.lesionado || false,
   })).sort((a, b) => (POS_ORDER_EQ[a.posicion] ?? 4) - (POS_ORDER_EQ[b.posicion] ?? 4));
 
   const puedeOfrecer = !!(sesionParticipanteId && equipoId !== sesionParticipanteId && federacion?.ventas_habilitadas);
@@ -6777,7 +6777,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
     if (!sb || !selId) return;
     setPlantilla(null);
     const [{ data: pl }, { data: pd }, { data: cl }] = await Promise.all([
-      sb.from('plantillas').select('id, precio_compra, jugadores(id, nombre, equipo, posicion, valor_mercado, lesionado)').eq('participante_id', selId).order('jugadores(posicion)'),
+      sb.from('plantillas').select('id, precio_compra, lesionado, jugadores(id, nombre, equipo, posicion, valor_mercado)').eq('participante_id', selId).order('jugadores(posicion)'),
       sb.from('participantes').select('presupuesto').eq('id', selId).single(),
       sb.from('clasificacion').select('jornada, puntos_jornada').eq('participante_id', selId).order('jornada'),
     ]);
@@ -6932,7 +6932,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
       {liberarModal && (() => {
         const r   = liberarModal.row;
         const jug = r?.jugadores || {};
-        const lesionado   = jug.lesionado || false;
+        const lesionado   = r.lesionado || false;
         const pct         = federacion?.pct_venta_mercado ?? 100;
         const valorMerc   = jug.valor_mercado || 0;
         const reembolsoMerc = lesionado ? valorMerc : Math.round(valorMerc * pct / 100);

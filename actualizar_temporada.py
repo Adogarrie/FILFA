@@ -3,9 +3,9 @@ Actualiza los jugadores a una nueva temporada de LaLiga.
 
   1. Marca como inactivos (activo=false) todos los jugadores actuales.
   2. Carga los jugadores del jugadores_cache.json como activos.
-  3. Los jugadores de temporadas anteriores que ya no estén en la caché
-     quedan inactivos y no aparecen en el mercado, pero se conservan en
-     la BD para mantener el historial de plantillas.
+  3. Elimina los jugadores que siguen inactivos (ya no están en la liga).
+     AVISO: si hay jugadores referenciados en plantillas o alineaciones la
+     BD rechazará el borrado. Ejecuta el reinicio de temporada primero.
 
 Flujo completo:
     # Paso 1: actualizar la caché con los jugadores de la nueva temporada
@@ -137,11 +137,20 @@ def main():
         cargados += len(registros[i:i+batch])
         print(f"  {cargados}/{len(registros)}…")
 
+    # 3. Borrar jugadores que ya no están en la liga
+    print("\nPaso 3: Eliminando jugadores que ya no están en la liga…")
+    try:
+        resp = sb.table("jugadores").delete().eq("activo", False).execute()
+        borrados = len(resp.data) if resp.data else "?"
+        print(f"  {borrados} jugadores eliminados.")
+    except Exception as e:
+        print(f"  AVISO: no se pudieron borrar ({e}).")
+        print(f"  Puede haber jugadores referenciados en plantillas o alineaciones.")
+        print(f"  Ejecuta el reinicio de temporada primero y vuelve a intentarlo.")
+
     print(f"\nTemporada actualizada correctamente.")
     print(f"  Jugadores cargados : {len(registros)}")
     print(f"  Jugadores sin pos  : {len(sin_pos)}")
-    print(f"\nNOTA: Los jugadores de la temporada anterior que no están")
-    print(f"en la nueva caché han quedado marcados como inactivos.")
 
 
 if __name__ == "__main__":

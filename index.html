@@ -374,6 +374,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [filtroPosModal, setFiltroPosModal]   = useState('');
   const [filtroNomModal, setFiltroNomModal]   = useState('');
   const [fichandoId, setFichandoId]           = useState(null);
+  const [draftCopiado, setDraftCopiado]       = useState(false);
 
   const maxJug = federacion?.max_jugadores ?? 14;
 
@@ -443,6 +444,33 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     setModalSustituto(null);
     setJugadoresLibres(null);
     cargar();
+  };
+
+  const generarDraft = async () => {
+    const { data: jugs } = await sb.from('jugadores')
+      .select('nombre, equipo, posicion')
+      .eq('activo', true);
+    const mezclar = arr => [...arr].sort(() => Math.random() - 0.5);
+    const pors = mezclar((jugs || []).filter(j => j.posicion === 'POR'));
+    const defs = mezclar((jugs || []).filter(j => j.posicion === 'DEF'));
+    const meds = mezclar((jugs || []).filter(j => j.posicion === 'MED'));
+    const dels = mezclar((jugs || []).filter(j => j.posicion === 'DEL'));
+    const lineas = [
+      'Porterías',
+      ...pors.slice(0, 10).map(j => j.equipo),
+      '',
+      'Defensas',
+      ...defs.slice(0, 25).map(j => j.nombre),
+      '',
+      'Centrocampistas',
+      ...meds.slice(0, 25).map(j => j.nombre),
+      '',
+      'Delanteros',
+      ...dels.slice(0, 25).map(j => j.nombre),
+    ];
+    await navigator.clipboard.writeText(lineas.join('\n'));
+    setDraftCopiado(true);
+    setTimeout(() => setDraftCopiado(false), 2500);
   };
 
   const activarPendiente = async (fp) => {
@@ -652,6 +680,17 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             )}
           </div>
         </div>
+        {federacion?.draft_habilitado && (
+          <div style={{marginLeft:'auto'}}>
+            <button onClick={generarDraft}
+                    style={{background: draftCopiado ? '#198754' : '#0d6efd', color:'#fff',
+                            border:'none', padding:'.5rem 1.1rem', borderRadius:'8px',
+                            cursor:'pointer', fontSize:'.88rem', fontWeight:600,
+                            transition:'background .2s'}}>
+              {draftCopiado ? '¡Copiado!' : '🎲 Generar Draft'}
+            </button>
+          </div>
+        )}
       </div>
       <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
@@ -5960,6 +5999,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
   const [ptsMod,       setPtsMod]       = useState(!!federacion?.puntos_mod_habilitado);
   const [cesiones,     setCesiones]     = useState(federacion?.cesiones_habilitadas ?? true);
   const [mensajesTablon, setMensajesTablon] = useState(federacion?.mensajes_tablon_habilitados ?? true);
+  const [draft,        setDraft]        = useState(!!federacion?.draft_habilitado);
   const [duplicados,   setDuplicados]   = useState(!!federacion?.duplicados_habilitado);
   const [duplValorMin, setDuplValorMin] = useState((federacion?.duplicados_valor_min ?? 0) / 1_000_000);
   const [duplMax,      setDuplMax]      = useState(federacion?.duplicados_max ?? 2);
@@ -5974,6 +6014,7 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
     puntos_mod_habilitado:   v => `Puntos por moderador ${v ? 'habilitado' : 'deshabilitado'}`,
     cesiones_habilitadas:          v => `Cesiones ${v ? 'habilitadas' : 'deshabilitadas'}`,
     mensajes_tablon_habilitados:   v => `Mensajes de usuarios en el tablón ${v ? 'habilitados' : 'deshabilitados'}`,
+    draft_habilitado:        v => `Draft ${v ? 'habilitado' : 'deshabilitado'}`,
     duplicados_habilitado:   v => `Jugadores duplicados ${v ? 'habilitados' : 'deshabilitados'}`,
   };
 
@@ -6138,6 +6179,12 @@ function AdminMercado({ federacion, onFederacionUpdate, actorNombre }) {
         desc="Activado: los usuarios publican mensajes en el tablón directamente, sin aprobación. Desactivado: los mensajes quedan pendientes hasta que un admin o moderador los apruebe."
         activo={mensajesTablon}
         onChange={v => cambiar('mensajes_tablon_habilitados', v, setMensajesTablon)}
+      />
+      <Opcion
+        label="Generar Draft"
+        desc="Muestra a los usuarios el botón 'Generar Draft' en Mi Plantilla. Al pulsarlo obtienen un listado aleatorio de 10 porterías, 25 defensas, 25 centrocampistas y 25 delanteros, copiado automáticamente al portapapeles."
+        activo={draft}
+        onChange={v => cambiar('draft_habilitado', v, setDraft)}
       />
       <Opcion
         label="Jugadores duplicados"

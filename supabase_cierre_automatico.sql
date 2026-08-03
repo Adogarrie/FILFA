@@ -208,7 +208,8 @@ begin
 
       -- ── 5c. Plantilla llena → fichaje pendiente ───────────────
       select count(*) into v_cnt_plant
-        from plantillas where participante_id = v_ganadora.participante_id;
+        from plantillas where participante_id = v_ganadora.participante_id
+          and not lesionado;
       v_pendiente := (v_cnt_plant >= v_max_jug);
 
       if v_pendiente then

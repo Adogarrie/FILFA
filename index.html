@@ -1245,9 +1245,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     let presupuestoRestante = partData?.presupuesto ?? 0;
 
     const { data: miPlantilla } = await sb.from('plantillas')
-      .select('id, jugadores(posicion, lesionado)').eq('participante_id', participanteId);
+      .select('id, lesionado, jugadores(posicion)').eq('participante_id', participanteId);
     const TARGET = maxJug;
-    const huecos = TARGET - (miPlantilla || []).filter(p => !p.jugadores?.lesionado).length;
+    const huecos = TARGET - (miPlantilla || []).filter(p => !p.lesionado).length;
 
     if (huecos <= 0) {
       alert(`Tu plantilla ya tiene ${maxJug} jugadores activos.`);
@@ -5264,14 +5264,14 @@ function AdminFichajesPendientes({ participantes, federacion, actorNombre }) {
         .in('participante_id', partIds)
         .order('id', { ascending: true }),
       sb.from('plantillas')
-        .select('participante_id, jugador_id, jugadores(nombre, equipo, posicion, lesionado)')
+        .select('participante_id, jugador_id, lesionado, jugadores(nombre, equipo, posicion)')
         .in('participante_id', partIds),
     ]);
     if (errP) { console.error('Error cargando fichajes pendientes:', errP); setPendientes([]); return; }
     const pm = {};
     for (const p of (plants || [])) {
       if (!pm[p.participante_id]) pm[p.participante_id] = [];
-      pm[p.participante_id].push({ jugador_id: p.jugador_id, nombre: p.jugadores?.nombre || '', posicion: p.jugadores?.posicion || '', equipo: p.jugadores?.equipo || '', lesionado: p.jugadores?.lesionado || false });
+      pm[p.participante_id].push({ jugador_id: p.jugador_id, nombre: p.jugadores?.nombre || '', posicion: p.jugadores?.posicion || '', equipo: p.jugadores?.equipo || '', lesionado: p.lesionado || false });
     }
     setPendientes(pends || []);
     setPlantillasMap(pm);
@@ -7565,27 +7565,40 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const cargarJugadores = async () => {
     const partIds = participantes.map(p => p.id);
     const [{ data }, { data: pl }] = await Promise.all([
-      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, lesionado').order('equipo').order('nombre'),
-      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado').order('equipo').order('nombre'),
+      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id, lesionado').in('participante_id', partIds) : Promise.resolve({ data: [] }),
     ]);
-    setJugadores(data || []);
+    const mapaLesion = {};
     const mapa = {};
     for (const r of (pl || [])) {
       const part = participantes.find(p => p.id === r.participante_id);
-      if (part) mapa[r.jugador_id] = mapa[r.jugador_id]
-        ? mapa[r.jugador_id] + ', ' + part.nombre
-        : part.nombre;
+      if (part) {
+        mapa[r.jugador_id] = mapa[r.jugador_id]
+          ? mapa[r.jugador_id] + ', ' + part.nombre
+          : part.nombre;
+        mapaLesion[r.jugador_id] = r.lesionado;
+      }
     }
+    setJugadores((data || []).map(j => ({ ...j, lesionado: mapaLesion[j.id] ?? false })));
     setPropietarios(mapa);
   };
 
   const toggleLesionado = async (j) => {
     const nuevoEstado = !j.lesionado;
-    const { error } = await sb.from('jugadores').update({ lesionado: nuevoEstado }).eq('id', j.id);
+    const { data, error } = await sb.rpc('marcar_lesionado', {
+      p_jugador_id:    j.id,
+      p_nuevo_estado:  nuevoEstado,
+      p_federacion_id: federacion?.id,
+    });
     if (error) { alert('Error: ' + error.message); return; }
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
-    publicar(federacion?.id, 'admin', `${nomJug} marcado como ${nuevoEstado ? 'lesionado' : 'disponible'}`, actorNombre);
-    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, lesionado: nuevoEstado } : p));
+    if (data?.pendiente) {
+      publicar(federacion?.id, 'admin', `${nomJug} marcado como disponible — pendiente de plaza por plantilla llena`, actorNombre);
+      cargarJugadores();
+    } else {
+      publicar(federacion?.id, 'admin', `${nomJug} marcado como ${nuevoEstado ? 'lesionado' : 'disponible'}`, actorNombre);
+      setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, lesionado: nuevoEstado } : p));
+    }
   };
 
   const cambiarPosAlt = async (j, nuevaAlt) => {
@@ -7787,13 +7800,16 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                       </td>
                       <td style={{ textAlign:'right', fontVariantNumeric:'tabular-nums' }}>{fmt(j.valor_mercado ?? 0)}</td>
                       <td style={{ textAlign:'center' }}>
-                        <button onClick={() => toggleLesionado(j)}
+                        {propietarios[j.id]
+                          ? <button onClick={() => toggleLesionado(j)}
                                 style={{ background: j.lesionado ? '#dc3545' : 'var(--gris)',
                                          color: j.lesionado ? '#fff' : 'var(--texto)',
                                          border:'none', padding:'.25rem .55rem', borderRadius:6,
                                          cursor:'pointer', fontSize:'.75rem', fontWeight:700 }}>
-                          {j.lesionado ? 'Lesionado' : 'Sano'}
-                        </button>
+                              {j.lesionado ? 'Lesionado' : 'Sano'}
+                            </button>
+                          : <span style={{ color:'var(--texto2)', fontSize:'.75rem' }}>—</span>
+                        }
                       </td>
                       <td style={{ textAlign:'right' }}>
                         <button onClick={() => borrar(j)} disabled={borrando === j.id}

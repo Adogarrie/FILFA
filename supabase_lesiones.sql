@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- FILFA — Estado de lesión de jugadores
+-- FILFA — Estado de lesión de jugadores (por federación)
 -- Ejecutar en: Supabase Dashboard → SQL Editor
 -- ═══════════════════════════════════════════════════════════════
 
@@ -12,8 +12,19 @@ alter table jugadores
 alter table participantes
   add column if not exists sustituciones_lesion int not null default 0;
 
+-- Estado de lesión per-equipo (= per-federación: un jugador solo está en un
+-- equipo por federación). Sustituye al flag global de jugadores.lesionado.
+alter table plantillas
+  add column if not exists lesionado boolean not null default false;
+
+-- Migración: copiar estado existente de jugadores.lesionado → plantillas.lesionado
+update plantillas pl
+   set lesionado = true
+  from jugadores j
+ where j.id = pl.jugador_id
+   and j.lesionado = true;
+
 -- ─── 2. activar_fichaje_pendiente (excluye lesionados del límite) ─
--- Sustituye la versión anterior: el límite de 14 solo cuenta jugadores no lesionados.
 drop function if exists activar_fichaje_pendiente(int, uuid, uuid);
 
 create function activar_fichaje_pendiente(
@@ -29,6 +40,7 @@ as $$
 declare
   v_pend      record;
   v_cnt       int;
+  v_max_jug   int;
   v_valor_lib numeric := 0;
 begin
   select * into v_pend from fichajes_pendientes where id = p_pendiente_id;
@@ -39,14 +51,15 @@ begin
     or exists (select 1 from federaciones where id = p_federacion_id and admin_user_id = auth.uid())
   ) then raise exception 'no_autorizado'; end if;
 
-  -- Contar solo jugadores NO lesionados para el límite de 14
-  select count(*) into v_cnt
-    from plantillas pl
-    join jugadores  j on j.id = pl.jugador_id
-   where pl.participante_id = v_pend.participante_id
-     and not j.lesionado;
+  v_max_jug := get_max_jugadores(p_federacion_id);
 
-  if v_cnt >= 14 then
+  -- Contar solo jugadores NO lesionados (plantillas.lesionado, por federación)
+  select count(*) into v_cnt
+    from plantillas
+   where participante_id = v_pend.participante_id
+     and not lesionado;
+
+  if v_cnt >= v_max_jug then
     if p_liberar_jugador_id is null then
       raise exception 'plantilla_llena_indica_baja';
     end if;
@@ -76,3 +89,84 @@ end;
 $$;
 
 grant execute on function activar_fichaje_pendiente(int, uuid, uuid) to authenticated;
+
+-- ─── 3. marcar_lesionado ─────────────────────────────────────────
+-- Marca/desmarca un jugador como lesionado en la plantilla de esta federación.
+-- Si el jugador se recupera y la plantilla queda llena, pasa a fichajes_pendientes.
+drop function if exists marcar_lesionado(uuid, boolean, uuid);
+
+create function marcar_lesionado(
+  p_jugador_id    uuid,
+  p_nuevo_estado  boolean,
+  p_federacion_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+set row_security = off
+as $$
+declare
+  v_participante_id uuid;
+  v_cnt             int;
+  v_max             int;
+  v_precio          numeric;
+begin
+  if not exists (
+    select 1 from federaciones
+     where id = p_federacion_id and admin_user_id = auth.uid()
+  ) then
+    raise exception 'no_autorizado';
+  end if;
+
+  update plantillas pl
+     set lesionado = p_nuevo_estado
+    from participantes pa
+   where pl.participante_id = pa.id
+     and pa.federacion_id   = p_federacion_id
+     and pl.jugador_id      = p_jugador_id;
+
+  if not found then
+    return jsonb_build_object('ok', true, 'en_plantilla', false);
+  end if;
+
+  -- Si se recupera (lesionado → sano), comprobar si la plantilla queda llena
+  if not p_nuevo_estado then
+    select pa.id into v_participante_id
+      from plantillas pl
+      join participantes pa on pa.id = pl.participante_id
+     where pl.jugador_id    = p_jugador_id
+       and pa.federacion_id = p_federacion_id;
+
+    if found then
+      v_max := get_max_jugadores(p_federacion_id);
+
+      select count(*) into v_cnt
+        from plantillas
+       where participante_id = v_participante_id
+         and not lesionado;
+
+      if v_cnt > v_max then
+        select precio_compra into v_precio
+          from plantillas
+         where participante_id = v_participante_id
+           and jugador_id      = p_jugador_id;
+
+        insert into fichajes_pendientes (participante_id, jugador_id, precio_compra)
+        values (v_participante_id, p_jugador_id, v_precio)
+        on conflict (participante_id, jugador_id) do nothing;
+
+        delete from plantillas
+         where participante_id = v_participante_id
+           and jugador_id      = p_jugador_id;
+
+        return jsonb_build_object('ok', true, 'en_plantilla', true, 'pendiente', true);
+      end if;
+    end if;
+  end if;
+
+  return jsonb_build_object('ok', true, 'en_plantilla', true, 'pendiente', false);
+end;
+$$;
+
+grant execute on function marcar_lesionado(uuid, boolean, uuid) to authenticated;

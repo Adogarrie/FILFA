@@ -448,14 +448,21 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   };
 
   const generarDraft = async () => {
-    const { data: jugs } = await sb.from('jugadores')
-      .select('nombre, equipo, posicion, valor_mercado')
-      .eq('activo', true);
+    const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacion?.id);
+    const partIds = (parts || []).map(p => p.id);
+    const [{ data: jugs }, { data: lesData }] = await Promise.all([
+      sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').eq('activo', true),
+      partIds.length
+        ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds).eq('lesionado', true)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const lesSet = new Set((lesData || []).map(r => r.jugador_id));
+    const disponibles = (jugs || []).filter(j => !lesSet.has(j.id));
     const mezclar = arr => [...arr].sort(() => Math.random() - 0.5);
-    const pors = mezclar((jugs || []).filter(j => j.posicion === 'POR'));
-    const defs = mezclar((jugs || []).filter(j => j.posicion === 'DEF'));
-    const meds = mezclar((jugs || []).filter(j => j.posicion === 'MED'));
-    const dels = mezclar((jugs || []).filter(j => j.posicion === 'DEL'));
+    const pors = mezclar(disponibles.filter(j => j.posicion === 'POR'));
+    const defs = mezclar(disponibles.filter(j => j.posicion === 'DEF'));
+    const meds = mezclar(disponibles.filter(j => j.posicion === 'MED'));
+    const dels = mezclar(disponibles.filter(j => j.posicion === 'DEL'));
     const secciones = [
       { titulo: 'Porterías',       items: pors.slice(0, 10).map(j => `${j.equipo} — ${fmt(j.valor_mercado || 0)}`) },
       { titulo: 'Defensas',        items: defs.slice(0, 25).map(j => `${j.nombre} (${j.equipo}) — ${fmt(j.valor_mercado || 0)}`) },

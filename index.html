@@ -6757,7 +6757,7 @@ function AdminEquipos({ participantes, federacion, onParticipantesChange, actorN
 
   useEffect(() => {
     if (!sb || !federacion?.id) return;
-    sb.from('divisiones').select('id, nombre').eq('federacion_id', federacion.id).order('id')
+    sb.from('divisiones').select('id, nombre').order('id')
       .then(({ data }) => setDivisiones(data || []));
   }, [federacion?.id]);
 
@@ -10689,7 +10689,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   useEffect(() => { if (federacion?.id) { cargar(); cargarConfig(); } }, [federacion?.id]);
   useEffect(() => {
     if (!sb || !federacion?.id) return;
-    sb.from('divisiones').select('id, nombre').eq('federacion_id', federacion.id).order('id')
+    sb.from('divisiones').select('id, nombre').order('id')
       .then(({ data }) => setDivisiones(data || []));
   }, [federacion?.id]);
 

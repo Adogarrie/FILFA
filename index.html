@@ -459,7 +459,12 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     const lesSet = new Set((lesData || []).map(r => r.jugador_id));
     const disponibles = (jugs || []).filter(j => !lesSet.has(j.id));
     const mezclar = arr => [...arr].sort(() => Math.random() - 0.5);
-    const pors = mezclar(disponibles.filter(j => j.posicion === 'POR'));
+    const porEquipo = {};
+    disponibles.filter(j => j.posicion === 'POR').forEach(j => {
+      if (!porEquipo[j.equipo] || (j.valor_mercado || 0) > (porEquipo[j.equipo].valor_mercado || 0))
+        porEquipo[j.equipo] = j;
+    });
+    const pors = mezclar(Object.values(porEquipo));
     const defs = mezclar(disponibles.filter(j => j.posicion === 'DEF'));
     const meds = mezclar(disponibles.filter(j => j.posicion === 'MED'));
     const dels = mezclar(disponibles.filter(j => j.posicion === 'DEL'));

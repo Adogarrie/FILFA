@@ -3541,7 +3541,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                 <>
                   <div style={{fontWeight:700, fontSize:'.78rem', color:'#fd7e14',
                                textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
-                    Suplentes ({suplentes.length}/4)
+                    Suplentes ({suplentes.length}/3)
                   </div>
                   <table style={{width:'100%'}}>
                     <tbody>
@@ -4715,7 +4715,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     if (lesionadosSet.has(id) && (op === 'T' || op === 'S')) { alert('No puedes alinear a un jugador lesionado.'); return; }
     const prev = estado[id];
     if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
-    if (op === 'S' && nS >= 4  && prev !== 'S') { alert('Máximo 4 suplentes.'); return; }
+    if (op === 'S' && nS >= 3  && prev !== 'S') { alert('Máximo 3 suplentes.'); return; }
     setEstado(e => ({ ...e, [id]: op }));
     if (prev === 'T' && op !== 'T') setPosicionUsada(p => { const n = {...p}; delete n[id]; return n; });
     if (op === 'S' && prev !== 'S') {
@@ -4778,6 +4778,70 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     }
   };
 
+  const alineacionAleatoria = async () => {
+    if ((bloqueado && !hayAplazados) || !sb) return;
+    const mezclar = arr => [...arr].sort(() => Math.random() - 0.5);
+    const todos = [...(plantilla || []), ...jugadoresHistoricos, ...jugadoresCedidos];
+    const disponibles = todos.filter(j => !lesionadosSet.has(j.id));
+    const pors   = mezclar(disponibles.filter(j => j.posicion === 'POR'));
+    const campos = mezclar(disponibles.filter(j => j.posicion !== 'POR'));
+    if (pors.length === 0 || campos.length < 10) {
+      alert('No hay suficientes jugadores disponibles para generar una alineación.');
+      return;
+    }
+    const FORMS = [[4,4,2],[4,3,3],[4,5,1],[3,5,2],[3,4,3],[5,3,2],[5,4,1],[4,2,4],[3,3,4],[3,6,1],[5,2,3]];
+    let resultado = null;
+    for (let i = 0; i < 40 && !resultado; i++) {
+      const diez = mezclar(campos).slice(0, 10);
+      const asignados = {};
+      const conteo = { DEF: 0, MED: 0, DEL: 0 };
+      for (const j of diez) {
+        const pos = j.posicion_alt ? (Math.random() < 0.5 ? j.posicion : j.posicion_alt) : j.posicion;
+        asignados[j.id] = pos;
+        conteo[pos] = (conteo[pos] || 0) + 1;
+      }
+      if (FORMS.some(f => f[0] === conteo.DEF && f[1] === conteo.MED && f[2] === conteo.DEL)) {
+        resultado = { titulares: diez, asignados };
+      }
+    }
+    if (!resultado) { alert('No se pudo generar una formación válida. Inténtalo de nuevo.'); return; }
+    const { titulares, asignados } = resultado;
+    const titIds = new Set(titulares.map(j => j.id));
+    const porElegido = pors[0];
+    const suplentes = mezclar(disponibles.filter(j => !titIds.has(j.id) && j.id !== porElegido.id)).slice(0, 3);
+    const newEstado = {};
+    for (const j of todos) newEstado[j.id] = 'F';
+    newEstado[porElegido.id] = 'T';
+    for (const j of titulares) newEstado[j.id] = 'T';
+    const newOrden = {};
+    for (let i = 0; i < suplentes.length; i++) {
+      newEstado[suplentes[i].id] = 'S';
+      newOrden[suplentes[i].id] = i + 1;
+    }
+    const newPosUsada = {};
+    for (const j of titulares) {
+      if (j.posicion_alt && asignados[j.id] !== j.posicion) newPosUsada[j.id] = asignados[j.id];
+    }
+    setEstado(newEstado);
+    setOrdenSup(newOrden);
+    setPosicionUsada(newPosUsada);
+    setGuardando(true);
+    const registros = [
+      { participante_id: participanteId, jornada, jugador_id: porElegido.id, es_titular: true, orden_suplente: null, posicion_usada: null },
+      ...titulares.map(j => ({ participante_id: participanteId, jornada, jugador_id: j.id, es_titular: true, orden_suplente: null, posicion_usada: newPosUsada[j.id] ?? null })),
+      ...suplentes.map((j, i) => ({ participante_id: participanteId, jornada, jugador_id: j.id, es_titular: false, orden_suplente: i + 1, posicion_usada: null })),
+    ];
+    const { error: errUps } = await sb.from('alineaciones').upsert(registros, { onConflict: 'participante_id,jornada,jugador_id' });
+    if (errUps) { alert('Error al guardar: ' + errUps.message); setGuardando(false); return; }
+    const nuevosIds = registros.map(r => r.jugador_id);
+    await sb.from('alineaciones').delete().eq('participante_id', participanteId).eq('jornada', jornada).not('jugador_id', 'in', `(${nuevosIds.join(',')})`);
+    setGuardando(false);
+    setHeredadaDe(null);
+    setMsg('✓ Alineación aleatoria guardada');
+    setTimeout(() => setMsg(''), 3000);
+    publicar(federacionId, 'alineacion', `${participanteNombre || 'Un equipo'} ha modificado su alineación (J${jornada})`);
+  };
+
   const guardar = async () => {
     if ((bloqueado && !hayAplazados) || !sb) return;
     if (nT === 11 && !formValida) {
@@ -4823,7 +4887,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 
   const secciones = [
     { key: 'T', label: `Titulares (${nT}/11)`, color: '#198754' },
-    { key: 'S', label: `Suplentes (${nS}/4)`,  color: '#fd7e14' },
+    { key: 'S', label: `Suplentes (${nS}/3)`,  color: '#fd7e14' },
     { key: 'F', label: 'Sin convocar',           color: 'var(--texto2)' },
   ];
   const supsOrdenados = [...(plantilla || []), ...jugadoresHistoricos, ...jugadoresCedidos]
@@ -4872,7 +4936,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
             <span>
               <strong style={{color: nT===11 ? '#198754' : 'inherit'}}>{nT}/11</strong>
               <span style={{color:'var(--texto2)'}}> tit &nbsp;·&nbsp; </span>
-              <strong>{nS}/4</strong>
+              <strong>{nS}/3</strong>
               <span style={{color:'var(--texto2)'}}> sup</span>
             </span>
           </div>
@@ -5174,6 +5238,12 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                     ⏸ Jornada cerrada, pero hay jugadores aplazados — puedes modificar sus posiciones.
                   </span>
                 )}
+                <button onClick={alineacionAleatoria} disabled={guardando}
+                        style={{padding:'.55rem 1.1rem', borderRadius:8, border:'1.5px solid var(--borde)',
+                                background:'var(--fondo-alt)', color:'var(--texto)', fontWeight:600,
+                                fontSize:'.9rem', cursor:'pointer'}}>
+                  🎲 Alinear aleatoriamente
+                </button>
                 <button className="btn-ok" onClick={guardar} disabled={guardando}>
                   {guardando ? 'Guardando…' : 'Guardar alineación'}
                 </button>

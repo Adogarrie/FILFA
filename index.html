@@ -356,7 +356,7 @@ function Spinner() {
 }
 
 // ── PLANTILLA ──────────────────────────────────────────────────
-function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId, onIrAlMercado }) {
+function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId }) {
   const [jugadores, setJugadores]           = useState(null);
   const [presupuesto, setPresupuesto]       = useState(null);
   const [sustLesion, setSustLesion]         = useState(0);
@@ -369,6 +369,11 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [msgPend, setMsgPend]               = useState('');
   const [escudoUrl, setEscudoUrl]           = useState(null);
   const [subtabPlantilla, setSubtabPlantilla] = useState('plantilla');
+  const [modalSustituto, setModalSustituto]   = useState(null);
+  const [jugadoresLibres, setJugadoresLibres] = useState(null);
+  const [filtroPosModal, setFiltroPosModal]   = useState('');
+  const [filtroNomModal, setFiltroNomModal]   = useState('');
+  const [fichandoId, setFichandoId]           = useState(null);
 
   const maxJug = federacion?.max_jugadores ?? 14;
 
@@ -397,6 +402,48 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   };
 
   useEffect(() => { cargar(); }, [participanteId]);
+
+  const abrirModalSustituto = async (j) => {
+    setModalSustituto(j);
+    setJugadoresLibres(null);
+    setFiltroPosModal('');
+    setFiltroNomModal('');
+    const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacion?.id);
+    const partIds = (parts || []).map(p => p.id);
+    const [{ data: enPl }, { data: enFp }] = await Promise.all([
+      partIds.length ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+      partIds.length ? sb.from('fichajes_pendientes').select('jugador_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+    ]);
+    const ocupados = new Set([...(enPl||[]).map(r => r.jugador_id), ...(enFp||[]).map(r => r.jugador_id)]);
+    const { data: jugs } = await sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true).order('posicion').order('nombre');
+    setJugadoresLibres((jugs || []).filter(jg => !ocupados.has(jg.id)));
+  };
+
+  const ficharSustituto = async (jug) => {
+    setFichandoId(jug.id);
+    const { error } = await sb.rpc('fichar_sustituto_lesion', {
+      p_jugador_id:      jug.id,
+      p_participante_id: participanteId,
+      p_federacion_id:   federacion?.id,
+    });
+    setFichandoId(null);
+    if (error) {
+      const msgs = {
+        sin_lesionados:           'Tu equipo no tiene ningún jugador lesionado.',
+        jugador_ocupado:          'Este jugador ya pertenece a otro equipo.',
+        presupuesto_insuficiente: 'Presupuesto insuficiente para este fichaje.',
+        plantilla_llena:          'La plantilla de jugadores activos ya está al completo.',
+        no_autorizado:            'No tienes permiso.',
+      };
+      alert(msgs[error.message] || 'Error: ' + error.message);
+      return;
+    }
+    const nom = jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
+    publicar(federacion?.id, 'fichaje', `${participanteNombre} ficha a ${nom} como sustituto por lesión por ${fmt(jug.valor_mercado || 0)}`);
+    setModalSustituto(null);
+    setJugadoresLibres(null);
+    cargar();
+  };
 
   const activarPendiente = async (fp) => {
     const llena        = lista.length >= maxJug;
@@ -674,7 +721,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                               </button>
                             )}
                             {j.lesionado && (
-                              <button onClick={() => onIrAlMercado?.()}
+                              <button onClick={() => abrirModalSustituto(j)}
                                 style={{background:'#0d6efd', color:'#fff', border:'none',
                                         padding:'.3rem .7rem', borderRadius:'8px',
                                         cursor:'pointer', fontSize:'.8rem', fontWeight:600, whiteSpace:'nowrap'}}>
@@ -756,6 +803,87 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
                         disabled={vendiendoTodo} onClick={confirmarVentaTodo}>
                   {vendiendoTodo ? 'Vendiendo…' : 'Confirmar venta total'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {modalSustituto && (
+          <div className="overlay" onClick={() => setModalSustituto(null)}>
+            <div className="modal" style={{maxWidth:520, width:'100%'}} onClick={e => e.stopPropagation()}>
+              <h3>Fichar sustituto</h3>
+              <p style={{marginBottom:'.5rem', fontSize:'.9rem'}}>
+                Sustituto para{' '}
+                <strong>{nombreJugador(modalSustituto.nombre, modalSustituto.posicion, modalSustituto.equipo)}</strong>
+                <span style={{marginLeft:6, background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.68rem', padding:'1px 5px', fontWeight:700}}>LES</span>
+              </p>
+              <p style={{marginBottom:'1rem', fontSize:'.88rem', color:'var(--texto2)'}}>
+                Presupuesto disponible:{' '}
+                <strong style={{color:'var(--texto)'}}>{fmt(presupuesto ?? 0)}</strong>
+              </p>
+              <div style={{display:'flex', gap:'.5rem', marginBottom:'.75rem', flexWrap:'wrap'}}>
+                <select value={filtroPosModal} onChange={e => setFiltroPosModal(e.target.value)}
+                        style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)', fontSize:'.85rem', background:'var(--fondo)', color:'var(--texto)'}}>
+                  <option value="">Todas las posiciones</option>
+                  <option value="POR">Portero</option>
+                  <option value="DEF">Defensa</option>
+                  <option value="MED">Centrocampista</option>
+                  <option value="DEL">Delantero</option>
+                </select>
+                <input value={filtroNomModal} onChange={e => setFiltroNomModal(e.target.value)}
+                       placeholder="Buscar por nombre o equipo…"
+                       style={{flex:1, minWidth:150, padding:'.35rem .6rem', borderRadius:6,
+                               border:'1.5px solid var(--borde)', fontSize:'.85rem',
+                               background:'var(--fondo)', color:'var(--texto)'}} />
+              </div>
+              {jugadoresLibres === null
+                ? <Spinner />
+                : (() => {
+                    const nom = filtroNomModal.toLowerCase();
+                    const vis = jugadoresLibres.filter(jg =>
+                      (!filtroPosModal || jg.posicion === filtroPosModal) &&
+                      (!nom || jg.nombre?.toLowerCase().includes(nom) || jg.equipo?.toLowerCase().includes(nom))
+                    );
+                    if (vis.length === 0) return <p style={{color:'var(--texto2)', fontSize:'.9rem'}}>No hay jugadores libres con ese filtro.</p>;
+                    return (
+                      <div style={{maxHeight:320, overflowY:'auto'}}>
+                        <table style={{width:'100%', borderCollapse:'collapse', fontSize:'.88rem'}}>
+                          <tbody>
+                            {vis.map(jg => {
+                              const sinPresup = (presupuesto ?? 0) < (jg.valor_mercado || 0);
+                              return (
+                                <tr key={jg.id} style={{borderBottom:'1px solid var(--borde)'}}>
+                                  <td style={{padding:'.35rem .3rem', width:44}}>
+                                    <span className={`badge ${jg.posicion}`}>{jg.posicion}</span>
+                                  </td>
+                                  <td style={{padding:'.35rem .3rem', fontWeight:600}}>
+                                    {jg.posicion === 'POR' ? `Portería ${jg.equipo}` : jg.nombre}
+                                  </td>
+                                  <td style={{padding:'.35rem .3rem', color:'var(--texto2)', fontSize:'.82rem'}}>{jg.equipo}</td>
+                                  <td style={{padding:'.35rem .3rem', textAlign:'right', fontWeight:600}}>{fmt(jg.valor_mercado || 0)}</td>
+                                  <td style={{padding:'.35rem .3rem', textAlign:'right'}}>
+                                    <button onClick={() => ficharSustituto(jg)}
+                                            disabled={sinPresup || fichandoId !== null}
+                                            title={sinPresup ? 'Presupuesto insuficiente' : ''}
+                                            style={{background: sinPresup ? 'var(--gris)' : '#0d6efd',
+                                                    color:'#fff', border:'none', padding:'.28rem .65rem',
+                                                    borderRadius:6, cursor: sinPresup ? 'not-allowed' : 'pointer',
+                                                    fontWeight:600, fontSize:'.8rem',
+                                                    opacity: sinPresup || fichandoId !== null ? .5 : 1}}>
+                                      {fichandoId === jg.id ? '…' : 'Fichar'}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()
+              }
+              <div className="modal-btns" style={{marginTop:'1rem'}}>
+                <button className="btn-cancel" onClick={() => setModalSustituto(null)}>Cerrar</button>
               </div>
             </div>
           </div>
@@ -9960,8 +10088,7 @@ function App() {
                      participanteNombre={participanteActual?.nombre}
                      federacion={federacion}
                      isAdmin={isAdmin}
-                     miParticipanteId={session?.participante_id}
-                     onIrAlMercado={() => setVista('Mercado')} />
+                     miParticipanteId={session?.participante_id} />
         )}
         {/* Mercado se mantiene montado para no relanzar queries al volver */}
         <div style={{display: vista === 'Mercado' ? '' : 'none'}}>

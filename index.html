@@ -1100,6 +1100,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [filtroEquipo, setFiltroEquipo]     = useState('');
   const [filtroValMin, setFiltroValMin]     = useState('');
   const [filtroValMax, setFiltroValMax]     = useState('');
+  const [sortCol, setSortCol]               = useState('');
+  const [sortDir, setSortDir]               = useState('asc');
   const [modal, setModal]                   = useState(null); // admin: fichar directo
   const [modalPuja, setModalPuja]           = useState(null); // usuario: pujar
   const [cantidadPuja, setCantidadPuja]     = useState('');
@@ -1282,8 +1284,19 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         resto.push(j);
       }
     }
-    return [...Object.values(porEquipo), ...resto];
-  }, [jugadores, busqueda, filtroPOS, filtroEquipo, filtroValMin, filtroValMax, misJugadoresIds, conteosPorJugador, porteríasBloqueadas, duplHabilitado, duplValorMin, duplMax]);
+    const merged = [...Object.values(porEquipo), ...resto];
+    if (!sortCol) return merged;
+    const POS_SORT = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+    return [...merged].sort((a, b) => {
+      let v = 0;
+      if (sortCol === 'nombre')   v = (a.nombre||'').localeCompare(b.nombre||'');
+      else if (sortCol === 'equipo')  v = (a.equipo||'').localeCompare(b.equipo||'');
+      else if (sortCol === 'posicion') v = (POS_SORT[a.posicion]??4) - (POS_SORT[b.posicion]??4);
+      else if (sortCol === 'valor')   v = (a.valor_mercado||0) - (b.valor_mercado||0);
+      else if (sortCol === 'pujas')   v = (conteosPorJugador[a.id]||0) - (conteosPorJugador[b.id]||0);
+      return sortDir === 'asc' ? v : -v;
+    });
+  }, [jugadores, busqueda, filtroPOS, filtroEquipo, filtroValMin, filtroValMax, sortCol, sortDir, misJugadoresIds, conteosPorJugador, porteríasBloqueadas, duplHabilitado, duplValorMin, duplMax]);
 
   // ── Pujar (usuarios) ──────────────────────────────────────────
   const confirmarPuja = async () => {
@@ -1952,9 +1965,18 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         <table>
           <thead>
             <tr>
-              <th>Jugador</th><th>Pos</th><th>Equipo</th>
-              <th style={{textAlign:'right'}}>Valor mín.</th>
-              <th>Pujas</th>
+              {[
+                ['nombre',   'Jugador',    {}],
+                ['posicion', 'Pos',        {}],
+                ['equipo',   'Equipo',     {}],
+                ['valor',    'Valor mín.', {textAlign:'right'}],
+                ['pujas',    'Pujas',      {}],
+              ].map(([col, label, st]) => (
+                <th key={col} style={{...st, cursor:'pointer', userSelect:'none', whiteSpace:'nowrap'}}
+                    onClick={() => { setSortDir(sortCol === col && sortDir === 'asc' ? 'desc' : 'asc'); setSortCol(col); }}>
+                  {label}{sortCol === col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                </th>
+              ))}
               <th></th>
             </tr>
           </thead>

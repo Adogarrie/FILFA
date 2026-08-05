@@ -5478,6 +5478,43 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 }
 
 // ── ADMIN — PRESUPUESTOS ───────────────────────────────────────
+function AdminPresupuestosSeccion({ lista, titulo, valores, onChange, onGuardar, guardado }) {
+  return (
+    <div className="card">
+      <h2>{titulo}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Equipo</th>
+            <th style={{textAlign:'right'}}>Presupuesto (M)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {lista.map(p => (
+            <tr key={p.id}>
+              <td style={{fontWeight:600}}>{p.nombre}</td>
+              <td style={{textAlign:'right'}}>
+                <input type="number" value={valores[p.id] ?? ''}
+                  onChange={e => onChange(p.id, e.target.value)}
+                  style={{width:'150px', textAlign:'right', padding:'.3rem .5rem',
+                          border:'1.5px solid var(--borde)', borderRadius:'8px', fontSize:'.9rem'}} />
+              </td>
+              <td style={{paddingLeft:'.5rem'}}>
+                <button onClick={() => onGuardar(p.id)} className="btn-fichar"
+                  style={{background: guardado === p.id ? 'var(--verde)' : undefined,
+                          minWidth:'90px'}}>
+                  {guardado === p.id ? 'Guardado ✓' : 'Guardar'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function AdminPresupuestos({ participantes, federacion, actorNombre }) {
   const [valores, setValores]   = useState({});
   const [guardado, setGuardado] = useState(null);
@@ -5503,45 +5540,16 @@ function AdminPresupuestos({ participantes, federacion, actorNombre }) {
     setTimeout(() => setGuardado(null), 2000);
   };
 
-  const Seccion = ({ lista, titulo }) => (
-    <div className="card">
-      <h2>{titulo}</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Equipo</th>
-            <th style={{textAlign:'right'}}>Presupuesto (M)</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {lista.map(p => (
-            <tr key={p.id}>
-              <td style={{fontWeight:600}}>{p.nombre}</td>
-              <td style={{textAlign:'right'}}>
-                <input type="number" value={valores[p.id] ?? ''}
-                  onChange={e => setValores(prev => ({...prev, [p.id]: e.target.value}))}
-                  style={{width:'150px', textAlign:'right', padding:'.3rem .5rem',
-                          border:'1.5px solid var(--borde)', borderRadius:'8px', fontSize:'.9rem'}} />
-              </td>
-              <td style={{paddingLeft:'.5rem'}}>
-                <button onClick={() => guardar(p.id)} className="btn-fichar"
-                  style={{background: guardado === p.id ? 'var(--verde)' : undefined,
-                          minWidth:'90px'}}>
-                  {guardado === p.id ? 'Guardado ✓' : 'Guardar'}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const handleChange = (pid, val) => setValores(prev => ({ ...prev, [pid]: val }));
 
   return (
     <div>
-      <Seccion lista={participantes.filter(p => p.division_id === 1)} titulo="Primera División" />
-      <Seccion lista={participantes.filter(p => p.division_id === 2)} titulo="Segunda División" />
+      <AdminPresupuestosSeccion
+        lista={participantes.filter(p => p.division_id === 1)} titulo="Primera División"
+        valores={valores} onChange={handleChange} onGuardar={guardar} guardado={guardado} />
+      <AdminPresupuestosSeccion
+        lista={participantes.filter(p => p.division_id === 2)} titulo="Segunda División"
+        valores={valores} onChange={handleChange} onGuardar={guardar} guardado={guardado} />
     </div>
   );
 }

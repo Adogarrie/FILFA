@@ -1098,6 +1098,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [busqueda, setBusqueda]             = useState('');
   const [filtroPOS, setFiltroPOS]           = useState('');
   const [filtroEquipo, setFiltroEquipo]     = useState('');
+  const [filtroValMin, setFiltroValMin]     = useState('');
+  const [filtroValMax, setFiltroValMax]     = useState('');
   const [modal, setModal]                   = useState(null); // admin: fichar directo
   const [modalPuja, setModalPuja]           = useState(null); // usuario: pujar
   const [cantidadPuja, setCantidadPuja]     = useState('');
@@ -1263,7 +1265,10 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       const okBus    = !busqueda ||
         (j.nombre||'').toLowerCase().includes(busqueda.toLowerCase()) ||
         (j.equipo||'').toLowerCase().includes(busqueda.toLowerCase());
-      return okPos && okEquipo && okBus;
+      const vm = j.valor_mercado || 0;
+      const okValMin = !filtroValMin || vm >= parseFloat(filtroValMin) * 1_000_000;
+      const okValMax = !filtroValMax || vm <= parseFloat(filtroValMax) * 1_000_000;
+      return okPos && okEquipo && okBus && okValMin && okValMax;
     });
     // Porteros: colapsar por equipo, mostrar solo el más caro
     const porEquipo = {};
@@ -1278,7 +1283,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       }
     }
     return [...Object.values(porEquipo), ...resto];
-  }, [jugadores, busqueda, filtroPOS, filtroEquipo, misJugadoresIds, conteosPorJugador, porteríasBloqueadas, duplHabilitado, duplValorMin, duplMax]);
+  }, [jugadores, busqueda, filtroPOS, filtroEquipo, filtroValMin, filtroValMax, misJugadoresIds, conteosPorJugador, porteríasBloqueadas, duplHabilitado, duplValorMin, duplMax]);
 
   // ── Pujar (usuarios) ──────────────────────────────────────────
   const confirmarPuja = async () => {
@@ -1937,6 +1942,12 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
             <option value="">Todos los equipos</option>
             {equiposLista.map(eq => <option key={eq} value={eq}>{eq}</option>)}
           </select>
+          <input type="number" min="0" step="0.5" placeholder="Valor mín (M)"
+                 value={filtroValMin} onChange={e => setFiltroValMin(e.target.value)}
+                 style={{width:'120px'}} />
+          <input type="number" min="0" step="0.5" placeholder="Valor máx (M)"
+                 value={filtroValMax} onChange={e => setFiltroValMax(e.target.value)}
+                 style={{width:'120px'}} />
         </div>
         <table>
           <thead>

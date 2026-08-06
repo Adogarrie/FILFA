@@ -1307,6 +1307,27 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       .then(({ data }) => setSustLesion(data?.sustituciones_lesion || 0));
   }, [participanteId]);
 
+  const cargarEscogidos = async () => {
+    const partIds = (participantes || []).map(p => p.id);
+    if (!partIds.length) { setEscogidos([]); return; }
+    const { data } = await sb.from('plantillas')
+      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre), lesionado')
+      .in('participante_id', partIds);
+    const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+    setEscogidos((data || [])
+      .filter(r => r.jugadores)
+      .map(r => ({ jugador: r.jugadores, equipo_fantasy: r.participantes?.nombre || '—', lesionado: r.lesionado || false }))
+      .sort((a, b) =>
+        (POS_ORDEN[a.jugador.posicion] ?? 4) - (POS_ORDEN[b.jugador.posicion] ?? 4) ||
+        (a.jugador.nombre || a.jugador.equipo || '').localeCompare(b.jugador.nombre || b.jugador.equipo || '')
+      )
+    );
+  };
+
+  useEffect(() => {
+    if (subtabMercado === 'escogidos' && escogidos === null && sb) cargarEscogidos();
+  }, [subtabMercado]);
+
   // Lookup O(1) por jugador_id — evita joins embebidas en plantillas/pendientes
   const jugadoresMap = useMemo(() => {
     const m = new Map();
@@ -1814,27 +1835,6 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
   // Fichajes pendientes del equipo actual
   const misFichajes = todasPendientes.filter(p => p.participante_id === participanteId);
-
-  const cargarEscogidos = async () => {
-    const partIds = (participantes || []).map(p => p.id);
-    if (!partIds.length) { setEscogidos([]); return; }
-    const { data } = await sb.from('plantillas')
-      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre), lesionado')
-      .in('participante_id', partIds);
-    const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
-    setEscogidos((data || [])
-      .filter(r => r.jugadores)
-      .map(r => ({ jugador: r.jugadores, equipo_fantasy: r.participantes?.nombre || '—', lesionado: r.lesionado || false }))
-      .sort((a, b) =>
-        (POS_ORDEN[a.jugador.posicion] ?? 4) - (POS_ORDEN[b.jugador.posicion] ?? 4) ||
-        (a.jugador.nombre || a.jugador.equipo || '').localeCompare(b.jugador.nombre || b.jugador.equipo || '')
-      )
-    );
-  };
-
-  useEffect(() => {
-    if (subtabMercado === 'escogidos' && escogidos === null && sb) cargarEscogidos();
-  }, [subtabMercado]);
 
   // Presupuesto comprometido en pujas activas + ofertas pendientes enviadas
   const pujasTot     = Object.values(misPujas).reduce((s, p) => s + (p.cantidad || 0), 0);

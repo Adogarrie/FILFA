@@ -486,9 +486,33 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     ];
     const clip = secciones.map(s => [s.titulo, ...s.items].join('\n')).join('\n\n');
     await navigator.clipboard.writeText(clip);
-    setDraftResultado(secciones);
-    setDraftCopiado(true);
-    setTimeout(() => setDraftCopiado(false), 2500);
+
+    const seccionesHtml = secciones.map(s => `
+      <section>
+        <h2>${s.titulo}</h2>
+        ${s.items.map(item => `<p>${item}</p>`).join('')}
+      </section>`).join('');
+    const html = `<!DOCTYPE html><html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Draft FILFA</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8f9fa;color:#212529;padding:1rem;max-width:520px;margin:auto}
+h1{font-size:1.3rem;font-weight:800;color:#0d6efd;margin-bottom:.2rem}
+.sub{font-size:.78rem;color:#6c757d;margin-bottom:1.25rem}
+section{background:#fff;border-radius:10px;padding:1rem;margin-bottom:.85rem;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+h2{font-size:.95rem;font-weight:700;color:#0d6efd;margin-bottom:.55rem;padding-bottom:.35rem;border-bottom:2px solid #e9ecef}
+p{font-size:.88rem;padding:.22rem 0;border-bottom:1px solid #f1f3f5}
+p:last-child{border-bottom:none}
+</style></head><body>
+<h1>Draft FILFA</h1>
+<p class="sub">Copiado al portapapeles &middot; ${new Date().toLocaleString('es-ES')}</p>
+${seccionesHtml}
+</body></html>`;
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
   };
 
   const abrirEditar = () => {
@@ -1045,38 +1069,6 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
               <div className="modal-btns">
                 <button className="btn-cancel" onClick={() => setEditModal(false)}>Cancelar</button>
                 <button className="btn-ok" onClick={guardarPerfil} disabled={subiendoEscudo}>Guardar</button>
-              </div>
-            </div>
-          </div>
-        )}
-        {draftResultado && (
-          <div className="overlay" onClick={() => setDraftResultado(null)}>
-            <div className="modal" style={{maxWidth:520, width:'100%', maxHeight:'80vh',
-                                           display:'flex', flexDirection:'column'}}
-                 onClick={e => e.stopPropagation()}>
-              <h3 style={{marginBottom:'.75rem'}}>Draft generado</h3>
-              <div style={{overflowY:'auto', flex:1, marginBottom:'1rem'}}>
-                {draftResultado.map(s => (
-                  <div key={s.titulo} style={{marginBottom:'1rem'}}>
-                    <div style={{fontWeight:700, fontSize:'.95rem', marginBottom:'.35rem',
-                                 color:'var(--acento)', letterSpacing:'.03em'}}>{s.titulo}</div>
-                    {s.items.map((item, i) => (
-                      <div key={i} style={{fontSize:'.87rem', padding:'.18rem 0',
-                                           borderBottom:'1px solid var(--borde)'}}>{item}</div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <div className="modal-btns">
-                <button className={draftCopiado ? 'btn-ok' : 'btn-ok'} onClick={async () => {
-                  const clip = draftResultado.map(s => [s.titulo, ...s.items].join('\n')).join('\n\n');
-                  await navigator.clipboard.writeText(clip);
-                  setDraftCopiado(true);
-                  setTimeout(() => setDraftCopiado(false), 2500);
-                }} style={draftCopiado ? {background:'#198754'} : {}}>
-                  {draftCopiado ? '¡Copiado!' : 'Copiar'}
-                </button>
-                <button className="btn-cancel" onClick={() => setDraftResultado(null)}>Cerrar</button>
               </div>
             </div>
           </div>

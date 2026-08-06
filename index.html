@@ -1220,6 +1220,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [todasPendientes, setTodasPendientes] = useState([]);
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
+  const [escogidos, setEscogidos]           = useState(null);
   const [sustLesion, setSustLesion]         = useState(0);
   const [presupuesto, setPresupuesto]       = useState(null);
   const [misOfertas, setMisOfertas]         = useState([]);
@@ -1814,6 +1815,27 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   // Fichajes pendientes del equipo actual
   const misFichajes = todasPendientes.filter(p => p.participante_id === participanteId);
 
+  const cargarEscogidos = async () => {
+    const partIds = (participantes || []).map(p => p.id);
+    if (!partIds.length) { setEscogidos([]); return; }
+    const { data } = await sb.from('plantillas')
+      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre), lesionado')
+      .in('participante_id', partIds);
+    const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+    setEscogidos((data || [])
+      .filter(r => r.jugadores)
+      .map(r => ({ jugador: r.jugadores, equipo_fantasy: r.participantes?.nombre || '—', lesionado: r.lesionado || false }))
+      .sort((a, b) =>
+        (POS_ORDEN[a.jugador.posicion] ?? 4) - (POS_ORDEN[b.jugador.posicion] ?? 4) ||
+        (a.jugador.nombre || a.jugador.equipo || '').localeCompare(b.jugador.nombre || b.jugador.equipo || '')
+      )
+    );
+  };
+
+  useEffect(() => {
+    if (subtabMercado === 'escogidos' && escogidos === null && sb) cargarEscogidos();
+  }, [subtabMercado]);
+
   // Presupuesto comprometido en pujas activas + ofertas pendientes enviadas
   const pujasTot     = Object.values(misPujas).reduce((s, p) => s + (p.cantidad || 0), 0);
   const ofertasTot   = misOfertas.reduce((s, o) => s + (o.cantidad || 0), 0);
@@ -1885,6 +1907,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
             Liberar jugadores ({misFichajes.length})
           </button>
         )}
+        <button className={`tab ${subtabMercado==='escogidos'?'active':''}`}
+                onClick={() => setSubtabMercado('escogidos')}>Escogidos</button>
         <button className={`tab ${subtabMercado==='ofertas'?'active':''}`}
                 onClick={() => setSubtabMercado('ofertas')}
                 style={{position:'relative'}}>
@@ -2322,6 +2346,57 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
               <button className="btn-ok" onClick={() => setResultadoSorteo(null)}>Cerrar</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {subtabMercado === 'escogidos' && (
+        <div className="card">
+          <h2 style={{marginBottom:'.75rem'}}>Jugadores escogidos</h2>
+          {escogidos === null
+            ? <Spinner />
+            : escogidos.length === 0
+            ? <div className="empty">No hay jugadores fichados en esta federación.</div>
+            : <table>
+                <thead>
+                  <tr>
+                    <th>Jugador</th>
+                    <th>Pos</th>
+                    <th>Equipo real</th>
+                    <th>Equipo fantasy</th>
+                    <th style={{textAlign:'right'}}>Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {escogidos.map((r, i) => {
+                    const j = r.jugador;
+                    const nom = j.posicion === 'POR'
+                      ? <><em style={{color:'var(--texto2)'}}>Portería</em> {j.equipo}</>
+                      : j.nombre;
+                    return (
+                      <tr key={i}>
+                        <td style={{fontWeight:600}}>
+                          <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                            {nom}
+                            {r.lesionado && (
+                              <span style={{background:'#dc3545', color:'#fff', borderRadius:4,
+                                            fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>
+                                LES
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                        <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                        <td style={{display:'flex', alignItems:'center', gap:5}}>
+                          <Escudo equipo={j.equipo} size={ESCUDO_SIZE} />{j.equipo}
+                        </td>
+                        <td style={{color:'var(--texto2)', fontSize:'.88rem'}}>{r.equipo_fantasy}</td>
+                        <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{fmt(j.valor_mercado || 0)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+          }
         </div>
       )}
 

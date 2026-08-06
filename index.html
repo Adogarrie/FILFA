@@ -1221,6 +1221,9 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [liberarSel, setLiberarSel]         = useState({}); // pendiente_id → jugador_id a liberar
   const [subtabMercado, setSubtabMercado]   = useState('jugadores');
   const [escogidos, setEscogidos]           = useState(null);
+  const [filtroEscNombre, setFiltroEscNombre]   = useState('');
+  const [filtroEscEquipo, setFiltroEscEquipo]   = useState('');
+  const [filtroEscFantasy, setFiltroEscFantasy] = useState('');
   const [sustLesion, setSustLesion]         = useState(0);
   const [presupuesto, setPresupuesto]       = useState(null);
   const [misOfertas, setMisOfertas]         = useState([]);
@@ -1311,12 +1314,17 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const partIds = (participantes || []).map(p => p.id);
     if (!partIds.length) { setEscogidos([]); return; }
     const { data } = await sb.from('plantillas')
-      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre), lesionado')
+      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre, escudo_url), lesionado')
       .in('participante_id', partIds);
     const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
     setEscogidos((data || [])
       .filter(r => r.jugadores)
-      .map(r => ({ jugador: r.jugadores, equipo_fantasy: r.participantes?.nombre || '—', lesionado: r.lesionado || false }))
+      .map(r => ({
+        jugador: r.jugadores,
+        equipo_fantasy: r.participantes?.nombre || '—',
+        escudo_fantasy: r.participantes?.escudo_url || null,
+        lesionado: r.lesionado || false,
+      }))
       .sort((a, b) =>
         (POS_ORDEN[a.jugador.posicion] ?? 4) - (POS_ORDEN[b.jugador.posicion] ?? 4) ||
         (a.jugador.nombre || a.jugador.equipo || '').localeCompare(b.jugador.nombre || b.jugador.equipo || '')
@@ -1897,18 +1905,16 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
   return (
     <div>
-      {/* ── Subtabs: Jugadores / Liberar / Ofertas ── */}
+      {/* ── Subtabs: Jugadores / Ofertas / Fichados ── */}
       <div className="tabs" style={{marginBottom:'1rem'}}>
         <button className={`tab ${subtabMercado==='jugadores'?'active':''}`}
-                onClick={() => setSubtabMercado('jugadores')}>Jugadores</button>
+                onClick={() => setSubtabMercado('jugadores')}>Jugadores Libres</button>
         {misFichajes.length > 0 && (
           <button className={`tab ${subtabMercado==='pendientes'?'active':''}`}
                   onClick={() => setSubtabMercado('pendientes')}>
             Liberar jugadores ({misFichajes.length})
           </button>
         )}
-        <button className={`tab ${subtabMercado==='escogidos'?'active':''}`}
-                onClick={() => setSubtabMercado('escogidos')}>Escogidos</button>
         <button className={`tab ${subtabMercado==='ofertas'?'active':''}`}
                 onClick={() => setSubtabMercado('ofertas')}
                 style={{position:'relative'}}>
@@ -1924,6 +1930,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
             </span>
           )}
         </button>
+        <button className={`tab ${subtabMercado==='escogidos'?'active':''}`}
+                onClick={() => setSubtabMercado('escogidos')}>Jugadores Fichados</button>
       </div>
 
       {/* ── Sección: Liberar jugadores ── */}
@@ -2354,48 +2362,86 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
           <h2 style={{marginBottom:'.75rem'}}>Jugadores escogidos</h2>
           {escogidos === null
             ? <Spinner />
-            : escogidos.length === 0
-            ? <div className="empty">No hay jugadores fichados en esta federación.</div>
-            : <table>
-                <thead>
-                  <tr>
-                    <th>Jugador</th>
-                    <th>Pos</th>
-                    <th>Equipo real</th>
-                    <th>Equipo fantasy</th>
-                    <th style={{textAlign:'right'}}>Valor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {escogidos.map((r, i) => {
-                    const j = r.jugador;
-                    const nom = j.posicion === 'POR'
-                      ? <><em style={{color:'var(--texto2)'}}>Portería</em> {j.equipo}</>
-                      : j.nombre;
-                    return (
-                      <tr key={i}>
-                        <td style={{fontWeight:600}}>
-                          <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
-                            {nom}
-                            {r.lesionado && (
-                              <span style={{background:'#dc3545', color:'#fff', borderRadius:4,
-                                            fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>
-                                LES
-                              </span>
-                            )}
-                          </span>
-                        </td>
-                        <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                        <td style={{display:'flex', alignItems:'center', gap:5}}>
-                          <Escudo equipo={j.equipo} size={ESCUDO_SIZE} />{j.equipo}
-                        </td>
-                        <td style={{color:'var(--texto2)', fontSize:'.88rem'}}>{r.equipo_fantasy}</td>
-                        <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{fmt(j.valor_mercado || 0)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            : (() => {
+                const equiposReales  = [...new Set(escogidos.map(r => r.jugador.equipo))].sort();
+                const equiposFantasy = [...new Set(escogidos.map(r => r.equipo_fantasy).filter(n => n !== '—'))].sort();
+                const texBus = filtroEscNombre.toLowerCase();
+                const escFiltrados = escogidos.filter(r => {
+                  const j = r.jugador;
+                  const matchNom     = !texBus || j.nombre?.toLowerCase().includes(texBus) || j.equipo?.toLowerCase().includes(texBus);
+                  const matchEquipo  = !filtroEscEquipo  || j.equipo === filtroEscEquipo;
+                  const matchFantasy = !filtroEscFantasy || r.equipo_fantasy === filtroEscFantasy;
+                  return matchNom && matchEquipo && matchFantasy;
+                });
+                const inputSt  = {padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)', fontSize:'.85rem', background:'var(--fondo)', color:'var(--texto)'};
+                return (
+                  <>
+                    <div style={{display:'flex', gap:'.5rem', marginBottom:'.75rem', flexWrap:'wrap'}}>
+                      <input type="text" placeholder="Buscar jugador…" value={filtroEscNombre}
+                             onChange={e => setFiltroEscNombre(e.target.value)}
+                             style={{...inputSt, flex:'1 1 150px', minWidth:0}} />
+                      <select value={filtroEscEquipo} onChange={e => setFiltroEscEquipo(e.target.value)} style={inputSt}>
+                        <option value="">Todos los equipos reales</option>
+                        {equiposReales.map(eq => <option key={eq} value={eq}>{eq}</option>)}
+                      </select>
+                      <select value={filtroEscFantasy} onChange={e => setFiltroEscFantasy(e.target.value)} style={inputSt}>
+                        <option value="">Todos los equipos fantasy</option>
+                        {equiposFantasy.map(eq => <option key={eq} value={eq}>{eq}</option>)}
+                      </select>
+                    </div>
+                    {escFiltrados.length === 0
+                      ? <div className="empty">No hay jugadores que coincidan con los filtros.</div>
+                      : <table>
+                          <thead>
+                            <tr>
+                              <th>Jugador</th>
+                              <th>Pos</th>
+                              <th>Equipo real</th>
+                              <th>Equipo fantasy</th>
+                              <th style={{textAlign:'right'}}>Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {escFiltrados.map((r, i) => {
+                              const j = r.jugador;
+                              const nom = j.posicion === 'POR'
+                                ? <><em style={{color:'var(--texto2)'}}>Portería</em> {j.equipo}</>
+                                : j.nombre;
+                              return (
+                                <tr key={i}>
+                                  <td style={{fontWeight:600}}>
+                                    <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                                      {nom}
+                                      {r.lesionado && (
+                                        <span style={{background:'#dc3545', color:'#fff', borderRadius:4,
+                                                      fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>
+                                          LES
+                                        </span>
+                                      )}
+                                    </span>
+                                  </td>
+                                  <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                                  <td>
+                                    <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                                      <Escudo equipo={j.equipo} size={ESCUDO_SIZE} />{j.equipo}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem', fontSize:'.88rem', color:'var(--texto2)'}}>
+                                      {r.escudo_fantasy && <img src={r.escudo_fantasy} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
+                                      {r.equipo_fantasy}
+                                    </span>
+                                  </td>
+                                  <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{fmt(j.valor_mercado || 0)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                    }
+                  </>
+                );
+              })()
           }
         </div>
       )}

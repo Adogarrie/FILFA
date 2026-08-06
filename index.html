@@ -1224,6 +1224,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [filtroEscNombre, setFiltroEscNombre]   = useState('');
   const [filtroEscEquipo, setFiltroEscEquipo]   = useState('');
   const [filtroEscFantasy, setFiltroEscFantasy] = useState('');
+  const [escCopiadoMsg, setEscCopiadoMsg]       = useState(false);
   const [sustLesion, setSustLesion]         = useState(0);
   const [presupuesto, setPresupuesto]       = useState(null);
   const [misOfertas, setMisOfertas]         = useState([]);
@@ -2359,7 +2360,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
       {subtabMercado === 'escogidos' && (
         <div className="card">
-          <h2 style={{marginBottom:'.75rem'}}>Jugadores escogidos</h2>
+          <h2 style={{marginBottom:'.75rem'}}>Jugadores Fichados</h2>
           {escogidos === null
             ? <Spinner />
             : (() => {
@@ -2374,8 +2375,35 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                   return matchNom && matchEquipo && matchFantasy;
                 });
                 const inputSt  = {padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)', fontSize:'.85rem', background:'var(--fondo)', color:'var(--texto)'};
+                const copiarListado = async () => {
+                  const grupos = {};
+                  escFiltrados.forEach(r => {
+                    const eq = r.equipo_fantasy;
+                    if (!grupos[eq]) grupos[eq] = [];
+                    grupos[eq].push(r);
+                  });
+                  const lineas = Object.entries(grupos).map(([eq, rows]) => {
+                    const jRows = rows.map(r => {
+                      const j = r.jugador;
+                      const nom = j.posicion === 'POR' ? `Portería ${j.equipo}` : `${j.nombre} (${j.equipo})`;
+                      return `  · ${nom} — ${j.posicion} — ${fmt(j.valor_mercado || 0)}`;
+                    });
+                    return `[${eq}]\n${jRows.join('\n')}`;
+                  });
+                  await navigator.clipboard.writeText(`JUGADORES FICHADOS\n\n${lineas.join('\n\n')}`);
+                  setEscCopiadoMsg(true);
+                  setTimeout(() => setEscCopiadoMsg(false), 2000);
+                };
                 return (
                   <>
+                    <div style={{display:'flex', gap:'.5rem', marginBottom:'.75rem', flexWrap:'wrap', alignItems:'center'}}>
+                      <button onClick={copiarListado}
+                              style={{marginLeft:'auto', padding:'.3rem .75rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                      background: escCopiadoMsg ? 'var(--verde)' : 'var(--fondo)', color: escCopiadoMsg ? '#fff' : 'var(--texto)',
+                                      fontSize:'.82rem', cursor:'pointer', fontWeight:600, flexShrink:0, transition:'background .2s,color .2s'}}>
+                        {escCopiadoMsg ? 'Copiado ✓' : '📋 Copiar listado'}
+                      </button>
+                    </div>
                     <div style={{display:'flex', gap:'.5rem', marginBottom:'.75rem', flexWrap:'wrap'}}>
                       <input type="text" placeholder="Buscar jugador…" value={filtroEscNombre}
                              onChange={e => setFiltroEscNombre(e.target.value)}

@@ -486,6 +486,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     ];
     const clip = secciones.map(s => [s.titulo, ...s.items].join('\n')).join('\n\n');
     await navigator.clipboard.writeText(clip);
+    publicar(federacion?.id, 'admin', `🎲 DRAFT HISTÓRICO. ${participanteNombre || 'Un equipo'} ha delegado su futuro al azar y ha generado un draft aleatorio. La fortuna ciega tomará las decisiones esta temporada. Suerte… la van a necesitar.`, participanteNombre);
 
     const seccionesHtml = secciones.map(s => `
       <section>
@@ -5185,7 +5186,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     setHeredadaDe(null);
     setMsg('✓ Alineación aleatoria guardada');
     setTimeout(() => setMsg(''), 3000);
-    publicar(federacionId, 'alineacion', `${participanteNombre || 'Un equipo'} ha modificado su alineación (J${jornada})`);
+    publicar(federacionId, 'alineacion', `🎲 El míster de ${participanteNombre || 'un equipo'} ha llegado tarde al entrenamiento y ha alineado a quien pillaba en el vestuario. Once sorpresa para la J${jornada}. Los rivales no sabrán qué esperar… ni ellos mismos.`);
   };
 
   const guardar = async () => {

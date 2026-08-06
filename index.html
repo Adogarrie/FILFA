@@ -12055,7 +12055,9 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Límite de jugadores', `Cada equipo puede tener como máximo ${maxJugadores} jugadores en su plantilla activa. Si ya tienes ${maxJugadores} y fichas uno nuevo, el jugador queda en "Fichajes pendientes" hasta que liberes un hueco.`],
         ['Presupuesto', 'Cada equipo dispone de un presupuesto inicial fijado por el admin. Cada fichaje descuenta su precio de tu presupuesto. Si vendes o liberas un jugador, recuperas su valor de mercado actual.'],
         ['Liberar jugadores', 'Puedes vender un jugador desde Mi Plantilla. Recibirás su valor de mercado actual (no necesariamente lo que pagaste por él).'],
-        ['Perfil del equipo', 'Puedes editar el nombre de tu equipo, el nombre del entrenador y el nombre del estadio desde Equipos → Editar perfil. También puedes subir una imagen como escudo. Todos estos cambios quedan reflejados automáticamente en el tablón de anuncios.'],
+        ['Perfil del equipo', 'Puedes editar el nombre de tu equipo, el nombre del entrenador, el nombre del estadio y el escudo directamente desde Mi Plantilla, pulsando el botón "✏ Editar perfil" en la tarjeta superior. También puedes hacerlo desde Equipos. Todos los cambios quedan reflejados automáticamente en el tablón de anuncios.'],
+        ['Jugadores lesionados', 'El admin puede marcar a un jugador de tu plantilla como lesionado. Los jugadores lesionados muestran el badge LES en rojo. Un jugador lesionado no puede ser alineado ni como titular ni como suplente, y queda excluido del sorteo. Puedes fichar un sustituto directamente desde Mi Plantilla pulsando "Fichar sustituto" en la fila del jugador lesionado, siempre que tengas presupuesto suficiente.'],
+        ['Generar Draft', 'Si el admin lo habilita, aparece el botón "🎲 Generar Draft" en Mi Plantilla. Al pulsarlo se genera un listado aleatorio de 10 porterías, 25 defensas, 25 centrocampistas y 25 delanteros (excluyendo lesionados), se copia automáticamente al portapapeles y se abre una nueva pestaña con el listado formateado para consultarlo cómodamente.'],
       ]
     },
     {
@@ -12066,6 +12068,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Condiciones', `Necesitas presupuesto suficiente y tener menos de ${maxJugadores} jugadores, o aceptar que quede como fichaje pendiente si ya tienes la plantilla completa.`],
         ['Mercado habilitado', 'El admin puede abrir o cerrar el mercado. Si está cerrado, no podrás fichar ni poner jugadores a la venta.'],
         ['Jugadores duplicados', 'Si el admin ha activado los jugadores duplicados, algunos jugadores ya fichados por otro equipo pueden seguir disponibles en el mercado. Aparecerá un indicador "X/N equipos" mostrando cuántas copias hay y cuántas quedan disponibles.'],
+        ['Filtros avanzados', 'En la barra de filtros del Mercado puedes filtrar por nombre o equipo real, posición, equipo real, valor mínimo (M€) y valor máximo (M€). Todos los filtros son opcionales y se combinan entre sí.'],
+        ['Ordenar jugadores', 'Pulsa cualquier cabecera de la tabla (Jugador, Pos, Equipo, Valor mín., Pujas) para ordenar la lista por ese criterio. Un segundo clic invierte el orden (↑ / ↓). La columna activa muestra una flecha indicando la dirección.'],
       ]
     },
     {
@@ -12094,7 +12098,9 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
       id: 'alineacion',
       titulo: '📋 Alineación',
       contenido: [
-        ['Titulares y suplentes', 'Cada jornada debes configurar tu alineación en la pestaña Alineación. Tienes 11 titulares y el resto son suplentes.'],
+        ['Titulares y suplentes', 'Cada jornada debes configurar tu alineación en la pestaña Alineación. Tienes 11 titulares y un máximo de 3 suplentes.'],
+        ['Alineación aleatoria', 'Puedes pulsar "🎲 Alinear aleatoriamente" para que el sistema genere y guarde una alineación válida al azar con tus jugadores disponibles. Los jugadores lesionados quedan excluidos. Si no existe ninguna combinación válida tras varios intentos, el sistema lo indica.'],
+        ['Jugadores lesionados en alineación', 'Los jugadores marcados como lesionados muestran el badge LES en tu alineación y no pueden ser puestos como titulares ni suplentes. Si un jugador ya estaba alineado cuando fue marcado como lesionado, pasa automáticamente al estado fuera de la alineación.'],
         ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],
         ['Jugadores con doble posición', 'Si un jugador tiene una posición alternativa asignada por el admin, verás dos badges pulsables junto a su nombre cuando sea titular. Pulsa el que prefieras para elegir en qué posición computa ese jugador en tu formación. Los suplentes muestran ambas posiciones como referencia pero sin toggle.'],
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
@@ -12193,7 +12199,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno. Esta opción está en Admin → Ajustes Generales.'],
         ['Cierres de pujas', 'La hora de cierre automático y la ejecución manual del cierre están en Admin → Ajustes Generales → Cierres.'],
         ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos desde Admin → Equipos.'],
-        ['Gestión de jugadores', 'Desde Admin → Jugadores el admin puede añadir, eliminar y marcar como lesionado a cualquier jugador. También puede asignar o quitar la posición alternativa (doble posición) de jugadores no porteros.'],
+        ['Gestión de jugadores', 'Desde Admin → Jugadores el admin puede añadir, eliminar y marcar como lesionado a cualquier jugador que pertenezca a un equipo de la federación. También puede asignar o quitar la posición alternativa (doble posición) de jugadores no porteros.'],
+        ['Draft', 'El admin puede habilitar o deshabilitar el botón "Generar Draft" desde Admin → Ajustes Generales. Cuando está activo, todos los usuarios lo ven en Mi Plantilla y pueden generar un listado aleatorio de jugadores para el draft de la temporada.'],
         ['Doble posición', 'El admin (y los moderadores) pueden asignar una posición alternativa a cualquier jugador no portero desde Admin → Jugadores. Los jugadores con doble posición pueden ser alineados en cualquiera de sus dos posiciones por su equipo fantasy.'],
         ['Introducir puntuaciones', 'Desde Admin → Pts Jugadores el admin introduce los puntos de cada jugador por jornada. Los partidos aplazados se marcan por equipo real: al pulsar "⏸ Aplazar" en la cabecera de un equipo, todos sus jugadores quedan marcados como aplazados y los usuarios pueden modificar su alineación aunque la jornada esté cerrada.'],
         ['Pujas, fichajes y cesiones', 'Todas las operaciones de mercado están agrupadas en Admin → Mercado: sub-pestañas Pujas (ver y resolver adjudicaciones), Fich. Pendientes (activar o descartar fichajes en espera) y Cesiones (aprobar o rechazar solicitudes de préstamo).'],

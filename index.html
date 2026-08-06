@@ -356,7 +356,7 @@ function Spinner() {
 }
 
 // ── PLANTILLA ──────────────────────────────────────────────────
-function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId }) {
+function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, miParticipanteId, onPerfilUpdate }) {
   const [jugadores, setJugadores]           = useState(null);
   const [presupuesto, setPresupuesto]       = useState(null);
   const [sustLesion, setSustLesion]         = useState(0);
@@ -376,6 +376,11 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [fichandoId, setFichandoId]           = useState(null);
   const [draftCopiado, setDraftCopiado]       = useState(false);
   const [draftResultado, setDraftResultado]   = useState(null);
+  const [editModal, setEditModal]             = useState(false);
+  const [editForm, setEditForm]               = useState({});
+  const [editMsg, setEditMsg]                 = useState('');
+  const [subiendoEscudo, setSubiendoEscudo]   = useState(false);
+  const [perfilActual, setPerfilActual]       = useState({});
 
   const maxJug = federacion?.max_jugadores ?? 14;
 
@@ -385,11 +390,16 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       sb.from('plantillas')
         .select('id, jugador_id, precio_compra, fecha_fichaje, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
         .eq('participante_id', participanteId),
-      sb.from('participantes').select('presupuesto, escudo_url, sustituciones_lesion').eq('id', participanteId).single(),
+      sb.from('participantes').select('presupuesto, escudo_url, sustituciones_lesion, nombre, estadio, entrenador').eq('id', participanteId).single(),
     ]);
     if (error) { console.error(error); setJugadores([]); }
     else setJugadores(pl || []);
-    if (pres) { setPresupuesto(pres.presupuesto); setEscudoUrl(pres.escudo_url || null); setSustLesion(pres.sustituciones_lesion || 0); }
+    if (pres) {
+      setPresupuesto(pres.presupuesto);
+      setEscudoUrl(pres.escudo_url || null);
+      setSustLesion(pres.sustituciones_lesion || 0);
+      setPerfilActual({ nombre: pres.nombre || '', estadio: pres.estadio || '', entrenador: pres.entrenador || '', escudo_url: pres.escudo_url || '' });
+    }
 
     // Fichajes pendientes — intenta con traspaso_de_id, fallback si columna no existe aún
     let { data: fp, error: fpErr } = await sb.from('fichajes_pendientes')
@@ -479,6 +489,55 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     setDraftResultado(secciones);
     setDraftCopiado(true);
     setTimeout(() => setDraftCopiado(false), 2500);
+  };
+
+  const abrirEditar = () => {
+    setEditForm({ ...perfilActual });
+    setEditMsg('');
+    setEditModal(true);
+  };
+
+  const subirEscudo = async (file) => {
+    setSubiendoEscudo(true);
+    const ext = file.name.split('.').pop();
+    const path = `${participanteId}/${Date.now()}.${ext}`;
+    const { error: upErr } = await sb.storage
+      .from('escudos-participantes')
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (upErr) { alert('Error subiendo escudo: ' + upErr.message); setSubiendoEscudo(false); return; }
+    const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
+    await sb.from('participantes').update({ escudo_url: publicUrl }).eq('id', participanteId);
+    setEditForm(f => ({ ...f, escudo_url: publicUrl }));
+    setEscudoUrl(publicUrl);
+    setSubiendoEscudo(false);
+  };
+
+  const guardarPerfil = async () => {
+    if (!sb || !participanteId) return;
+    const newNom = editForm.nombre.trim();
+    const newEst = editForm.estadio.trim();
+    const newEnt = editForm.entrenador.trim();
+    const { error } = await sb.from('participantes')
+      .update({ nombre: newNom, estadio: newEst, entrenador: newEnt, escudo_url: editForm.escudo_url.trim() })
+      .eq('id', participanteId);
+    if (error) { setEditMsg('Error: ' + error.message); return; }
+    const nomEquipo = newNom || perfilActual.nombre;
+    if (newEnt && newEnt !== perfilActual.entrenador)
+      publicar(federacion?.id, 'perfil', perfilActual.entrenador
+        ? `ÚLTIMA HORA: ${nomEquipo} despide al entrenador ${perfilActual.entrenador} y nombra nuevo entrenador: ${newEnt}.`
+        : `ÚLTIMA HORA: ${nomEquipo} nombra nuevo entrenador: ${newEnt}.`
+      , nomEquipo);
+    if (newEst && newEst !== perfilActual.estadio)
+      publicar(federacion?.id, 'perfil', perfilActual.estadio
+        ? `${nomEquipo} cambia de estadio: ahora juega en ${newEst}.`
+        : `${nomEquipo} fija su estadio: ${newEst}.`
+      , nomEquipo);
+    if (newNom && newNom !== perfilActual.nombre)
+      publicar(federacion?.id, 'perfil', `REBRANDING. El equipo "${perfilActual.nombre}" pasa a llamarse "${newNom}".`, nomEquipo);
+    setPerfilActual({ nombre: newNom, estadio: newEst, entrenador: newEnt, escudo_url: editForm.escudo_url.trim() });
+    onPerfilUpdate && onPerfilUpdate();
+    setEditMsg('Guardado');
+    setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
   };
 
   const activarPendiente = async (fp) => {
@@ -688,16 +747,24 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
             )}
           </div>
         </div>
-        {federacion?.draft_habilitado && (
-          <div style={{marginLeft:'auto'}}>
+        <div style={{marginLeft:'auto', display:'flex', gap:'.6rem', flexWrap:'wrap', alignItems:'center'}}>
+          {participanteId === miParticipanteId && (
+            <button onClick={abrirEditar}
+                    style={{background:'var(--fondo)', color:'var(--texto)', border:'1.5px solid var(--borde)',
+                            padding:'.45rem .9rem', borderRadius:'8px',
+                            cursor:'pointer', fontSize:'.85rem', fontWeight:600}}>
+              ✏ Editar perfil
+            </button>
+          )}
+          {federacion?.draft_habilitado && (
             <button onClick={generarDraft}
                     style={{background:'#0d6efd', color:'#fff', border:'none',
                             padding:'.5rem 1.1rem', borderRadius:'8px',
                             cursor:'pointer', fontSize:'.88rem', fontWeight:600}}>
               🎲 Generar Draft
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       <div className="card">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
@@ -930,6 +997,54 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
               }
               <div className="modal-btns" style={{marginTop:'1rem'}}>
                 <button className="btn-cancel" onClick={() => setModalSustituto(null)}>Cerrar</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {editModal && (
+          <div className="overlay" onClick={() => setEditModal(false)}>
+            <div className="modal" style={{maxWidth:440, width:'100%'}} onClick={e => e.stopPropagation()}>
+              <h3 style={{marginBottom:'1rem'}}>Editar perfil del equipo</h3>
+              <div className="campo">
+                <label>Nombre del club</label>
+                <input value={editForm.nombre || ''} onChange={e => setEditForm(f => ({...f, nombre: e.target.value}))}
+                       placeholder="Nombre del club" style={{width:'100%'}} />
+              </div>
+              <div className="campo">
+                <label>Entrenador</label>
+                <input value={editForm.entrenador || ''} onChange={e => setEditForm(f => ({...f, entrenador: e.target.value}))}
+                       placeholder="Nombre del entrenador" style={{width:'100%'}} />
+              </div>
+              <div className="campo">
+                <label>Estadio</label>
+                <input value={editForm.estadio || ''} onChange={e => setEditForm(f => ({...f, estadio: e.target.value}))}
+                       placeholder="Nombre del estadio" style={{width:'100%'}} />
+              </div>
+              <div className="campo">
+                <label>Escudo</label>
+                <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+                  {editForm.escudo_url && (
+                    <img src={editForm.escudo_url} alt="Escudo"
+                         style={{width:48, height:48, objectFit:'contain', borderRadius:6,
+                                 border:'1.5px solid var(--borde)', flexShrink:0}} />
+                  )}
+                  <label style={{cursor:'pointer', background:'var(--fondo)', border:'1.5px solid var(--borde)',
+                                 borderRadius:8, padding:'.35rem .8rem', fontSize:'.85rem', fontWeight:600}}>
+                    {subiendoEscudo ? 'Subiendo…' : 'Subir imagen'}
+                    <input type="file" accept="image/*" style={{display:'none'}}
+                           onChange={e => e.target.files[0] && subirEscudo(e.target.files[0])} />
+                  </label>
+                </div>
+              </div>
+              {editMsg && (
+                <div style={{color: editMsg === 'Guardado' ? 'var(--verde)' : '#dc3545',
+                             fontSize:'.88rem', fontWeight:600, marginBottom:'.5rem'}}>
+                  {editMsg}
+                </div>
+              )}
+              <div className="modal-btns">
+                <button className="btn-cancel" onClick={() => setEditModal(false)}>Cancelar</button>
+                <button className="btn-ok" onClick={guardarPerfil} disabled={subiendoEscudo}>Guardar</button>
               </div>
             </div>
           </div>
@@ -10215,7 +10330,8 @@ function App() {
                      participanteNombre={participanteActual?.nombre}
                      federacion={federacion}
                      isAdmin={isAdmin}
-                     miParticipanteId={session?.participante_id} />
+                     miParticipanteId={session?.participante_id}
+                     onPerfilUpdate={recargarParticipantes} />
         )}
         {/* Mercado se mantiene montado para no relanzar queries al volver */}
         <div style={{display: vista === 'Mercado' ? '' : 'none'}}>

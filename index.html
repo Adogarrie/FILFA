@@ -4037,7 +4037,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                 <>
                   <div style={{fontWeight:700, fontSize:'.78rem', color:'#fd7e14',
                                textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
-                    Suplentes ({suplentes.length}/3)
+                    Suplentes ({suplentes.length})
                   </div>
                   <table style={{width:'100%'}}>
                     <tbody>
@@ -5211,7 +5211,6 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     if (lesionadosSet.has(id) && (op === 'T' || op === 'S')) { alert('No puedes alinear a un jugador lesionado.'); return; }
     const prev = estado[id];
     if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
-    if (op === 'S' && nS >= 3  && prev !== 'S') { alert('Máximo 3 suplentes.'); return; }
     setEstado(e => ({ ...e, [id]: op }));
     if (prev === 'T' && op !== 'T') setPosicionUsada(p => { const n = {...p}; delete n[id]; return n; });
     if (op === 'S' && prev !== 'S') {
@@ -5304,7 +5303,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     const { titulares, asignados } = resultado;
     const titIds = new Set(titulares.map(j => j.id));
     const porElegido = pors[0];
-    const suplentes = mezclar(disponibles.filter(j => !titIds.has(j.id) && j.id !== porElegido.id)).slice(0, 3);
+    const suplentes = mezclar(disponibles.filter(j => !titIds.has(j.id) && j.id !== porElegido.id));
     const newEstado = {};
     for (const j of todos) newEstado[j.id] = 'F';
     newEstado[porElegido.id] = 'T';
@@ -11325,7 +11324,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       : jornadasBase;
     const nuevaInicio   = ultimaJornada + 1;
     const nuevaVuelta   = (sorted[sorted.length - 1]?.vuelta_num ?? 2) + 1;
-    const divIdExtra    = nuevaDivisionExtra || null; // null = todas las divisiones
+    const divIdExtra    = nuevaDivisionExtra ? Number(nuevaDivisionExtra) : null; // null = todas las divisiones
 
     // Copiar partidos de la vuelta base elegida, filtrados por división si procede
     const inicioBase = nuevaBase === 1 ? 1 : porVuelta + 1;
@@ -12274,7 +12273,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
       id: 'alineacion',
       titulo: '📋 Alineación',
       contenido: [
-        ['Titulares y suplentes', 'Cada jornada debes configurar tu alineación en la pestaña Alineación. Tienes 11 titulares y un máximo de 3 suplentes.'],
+        ['Titulares y suplentes', 'Cada jornada debes configurar tu alineación en la pestaña Alineación. Tienes 11 titulares y puedes añadir tantos suplentes como quieras del resto de tu plantilla.'],
         ['Alineación aleatoria', 'Puedes pulsar "🎲 Alinear aleatoriamente" para que el sistema genere y guarde una alineación válida al azar con tus jugadores disponibles. Los jugadores lesionados quedan excluidos. Si no existe ninguna combinación válida tras varios intentos, el sistema lo indica.'],
         ['Jugadores lesionados en alineación', 'Los jugadores marcados como lesionados muestran el badge LES en tu alineación y no pueden ser puestos como titulares ni suplentes. Si un jugador ya estaba alineado cuando fue marcado como lesionado, pasa automáticamente al estado fuera de la alineación.'],
         ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],

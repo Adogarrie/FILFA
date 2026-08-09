@@ -10722,7 +10722,8 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
       if (m.pts_local === null || m.pts_visitante === null) return;
-      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, vueltasExtra);
+      const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, veDiv);
       if (ptsLocal !== 0) return;
       const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
       const L = stats[m.local_id], V = stats[m.visitante_id];
@@ -10755,7 +10756,8 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
     ms.forEach(m => {
       if (m.pts_local === null || m.pts_visitante === null) return;
-      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, vueltasExtra);
+      const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, veDiv);
       if (ptsLocal === 0) return; // campo neutro, no computa local/visitante
       const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
       const T = stats[side === 'local' ? m.local_id : m.visitante_id];
@@ -11264,9 +11266,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   const [msgCfg,        setMsgCfg]        = useState('');
   const [jornadaH2HAct, setJornadaH2HAct] = useState(federacion?.jornada_h2h_actual || 1);
   // Vueltas extra
-  const [vueltasExtra,  setVueltasExtra]  = useState([]);
-  const [nuevaBase,     setNuevaBase]     = useState(1);   // 1 o 2
-  const [nuevaPtsLocal, setNuevaPtsLocal] = useState(5);
+  const [vueltasExtra,       setVueltasExtra]       = useState([]);
+  const [nuevaBase,          setNuevaBase]          = useState(1);   // 1 o 2
+  const [nuevaPtsLocal,      setNuevaPtsLocal]      = useState(5);
+  const [nuevaDivisionExtra, setNuevaDivisionExtra] = useState('');  // '' = todas
 
   // Agrupar participantes por división (calculado una sola vez en render)
   const grupos = React.useMemo(() => {
@@ -11322,12 +11325,14 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       : jornadasBase;
     const nuevaInicio   = ultimaJornada + 1;
     const nuevaVuelta   = (sorted[sorted.length - 1]?.vuelta_num ?? 2) + 1;
+    const divIdExtra    = nuevaDivisionExtra || null; // null = todas las divisiones
 
-    // Copiar partidos de la vuelta base elegida
+    // Copiar partidos de la vuelta base elegida, filtrados por división si procede
     const inicioBase = nuevaBase === 1 ? 1 : porVuelta + 1;
     const finBase    = nuevaBase === 1 ? porVuelta : jornadasBase;
     const copias     = partidos
-      .filter(m => m.jornada >= inicioBase && m.jornada <= finBase)
+      .filter(m => m.jornada >= inicioBase && m.jornada <= finBase
+                && (!divIdExtra || m.division_id === divIdExtra))
       .map(m => ({
         federacion_id: federacion.id,
         division_id:   m.division_id,
@@ -11336,11 +11341,16 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
         visitante_id:  m.visitante_id,
       }));
 
-    if (copias.length === 0) { setMsgCfg('No hay partidos en la vuelta base seleccionada.'); return; }
+    if (copias.length === 0) { setMsgCfg('No hay partidos en la vuelta base seleccionada para esa división.'); return; }
+
+    const divNombre = divIdExtra
+      ? (divisiones.find(d => d.id === divIdExtra)?.nombre || divIdExtra)
+      : 'todas las divisiones';
 
     const { error: errV } = await sb.from('h2h_vueltas_extra').insert({
       federacion_id: federacion.id, vuelta_num: nuevaVuelta,
       basada_en: nuevaBase, pts_local: nuevaPtsLocal, jornada_inicio: nuevaInicio,
+      division_id: divIdExtra,
     });
     if (errV) { setMsgCfg('Error: ' + errV.message); return; }
 
@@ -11350,8 +11360,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       setMsgCfg('Error al insertar partidos: ' + errP.message); return;
     }
 
-    publicar(federacion?.id, 'admin', `Vuelta extra H2H añadida: Vuelta ${nuevaVuelta} (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`, actorNombre);
-    setMsgCfg(`Vuelta ${nuevaVuelta} añadida (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`);
+    publicar(federacion?.id, 'admin', `Vuelta extra H2H añadida: Vuelta ${nuevaVuelta} — ${divNombre} (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`, actorNombre);
+    setMsgCfg(`Vuelta ${nuevaVuelta} añadida — ${divNombre} (J${nuevaInicio}–J${nuevaInicio + porVuelta - 1}).`);
     setTimeout(() => setMsgCfg(''), 3500);
     await cargar(); await cargarConfig();
   };
@@ -11361,9 +11371,11 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     const jornadasBase = federacion?.h2h_jornadas_base ?? 0;
     const porVuelta    = Math.round(jornadasBase / 2);
     const jFin         = ve.jornada_inicio + porVuelta - 1;
-    await sb.from('h2h_partidos').delete()
+    let q = sb.from('h2h_partidos').delete()
       .eq('federacion_id', federacion.id)
       .gte('jornada', ve.jornada_inicio).lte('jornada', jFin);
+    if (ve.division_id) q = q.eq('division_id', ve.division_id);
+    await q;
     await sb.from('h2h_vueltas_extra').delete().eq('id', ve.id);
     setMsgCfg(`Vuelta ${ve.vuelta_num} eliminada.`);
     setTimeout(() => setMsgCfg(''), 2500);
@@ -11423,7 +11435,6 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     if (Object.values(divToJf).every(v => !v)) return;
 
     setCalculando(j_h2h);
-    const { ptsLocal } = getVueltaInfo(j_h2h, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, vueltasExtra);
 
     // Participantes agrupados por jornada fantasy (según su división)
     const pidToDiv  = Object.fromEntries(participantes.map(p => [p.id, p.division_id ?? null]));
@@ -11478,6 +11489,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
     await Promise.all(ms.map(m => {
       if (!divToJf[m.division_id]) return Promise.resolve();
+      const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+      const { ptsLocal } = getVueltaInfo(j_h2h, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, veDiv);
       const gl = ptsToGoles((ptsMap[m.local_id] ?? 0) + ptsLocal, baremo);
       const gv = ptsToGoles(ptsMap[m.visitante_id] ?? 0, baremo);
       return sb.from('h2h_partidos').update({
@@ -11693,10 +11706,11 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   };
 
   const generarPlantillaEnDirecto = (j) => {
-    const { ptsLocal: ptsL } = getVueltaInfo(j, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, vueltasExtra);
     const ms = partidos.filter(p => p.jornada === j);
     const lineas = [`EN DIRECTO J${j}`];
     ms.forEach((m, i) => {
+      const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+      const { ptsLocal: ptsL } = getVueltaInfo(j, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, veDiv);
       lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} 0 (${ptsL}) - 0 (0) ${nomMap[m.visitante_id] || '—'}`);
     });
     return lineas.join('\n');
@@ -11928,7 +11942,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
                                            flexWrap:'wrap'}}>
                     <span style={{fontWeight:700, minWidth:72}}>Vuelta {ve.vuelta_num}</span>
                     <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>
-                      Basada en vuelta {ve.basada_en} · J{ve.jornada_inicio}–J{jFin}
+                      {ve.division_id
+                        ? (divisiones.find(d => d.id === ve.division_id)?.nombre || ve.division_id)
+                        : 'Todas las divisiones'
+                      } · Basada en V{ve.basada_en} · J{ve.jornada_inicio}–J{jFin}
                     </span>
                     <label style={{display:'flex', alignItems:'center', gap:'.35rem', fontSize:'.84rem', marginLeft:'auto'}}>
                       Pts local:
@@ -11952,6 +11969,15 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
           {federacion?.h2h_jornadas_base
             ? (
               <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
+                <label style={{display:'flex', alignItems:'center', gap:'.4rem', fontSize:'.87rem', fontWeight:600}}>
+                  División:
+                  <select value={nuevaDivisionExtra} onChange={e => setNuevaDivisionExtra(e.target.value)}
+                          style={{padding:'.3rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)',
+                                  fontSize:'.87rem', background:'var(--fondo)'}}>
+                    <option value="">Todas las divisiones</option>
+                    {divisiones.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                  </select>
+                </label>
                 <label style={{display:'flex', alignItems:'center', gap:'.4rem', fontSize:'.87rem', fontWeight:600}}>
                   Basada en:
                   <select value={nuevaBase} onChange={e => setNuevaBase(Number(e.target.value))}

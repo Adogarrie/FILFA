@@ -11244,8 +11244,9 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   const [guardando,  setGuardando]  = useState(false);
   const [msg,        setMsg]        = useState('');
   // Sorteo físico
-  const [modoSorteo,   setModoSorteo]   = useState(false);
-  const [asignaciones, setAsignaciones] = useState({}); // { divKey: [participante_id, ...] }
+  const [modoSorteo,           setModoSorteo]           = useState(false);
+  const [asignaciones,         setAsignaciones]         = useState({}); // { divKey: [participante_id, ...] }
+  const [numVueltasPorDiv, setNumVueltasPorDiv] = useState({});  // { divKey: 2|4 }
   // Criterios de desempate
   const CRITERIOS_H2H = { h2h: 'Gol average particular', gf: 'Goles a favor', dif: 'Diferencia de goles', pf: 'Puntos Fantasy a Favor' };
   const TODOS_CRITERIOS_H2H = ['h2h', 'gf', 'dif', 'pf'];
@@ -11591,7 +11592,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   // ── Insertar filas en la DB ─────────────────────────────────
   // sorteoFisico=true → reordena para J1=E1vsE2,E3vsE4...
   // sorteoFisico=false → mezcla aleatoriamente
-  const insertarCalendario = async (gruposOrdenados, sorteoFisico = false) => {
+  const insertarCalendario = async (gruposOrdenados, sorteoFisico = false, numVueltasPorDiv = {}) => {
     const { error: delErr } = await sb.from('h2h_partidos').delete().eq('federacion_id', federacion.id);
     if (delErr) { setMsg('Error al borrar: ' + delErr.message); return false; }
 
@@ -11601,7 +11602,10 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       if (equips.length < 2) return;
       const divId = key === '__' ? null : Number(key);
       const ordenados = sorteoFisico ? reorderParaSorteo(equips) : shuffle(equips);
-      generarRR(ordenados).forEach((ronda, idx) => {
+      const numVueltas  = numVueltasPorDiv[key] ?? 2;
+      const rondas = generarRR(ordenados);
+      const todasRondas = numVueltas === 4 ? [...rondas, ...rondas] : rondas;
+      todasRondas.forEach((ronda, idx) => {
         const j = idx + 1;
         if (j > maxJornada) maxJornada = j;
         ronda.forEach(p => rows.push({
@@ -11635,7 +11639,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
   const generarCalendario = async () => {
     if (!confirm('¿Generar nuevo calendario? Se eliminarán todos los partidos y resultados actuales.')) return;
     setGenerando(true); setMsg('');
-    await insertarCalendario(grupos);
+    await insertarCalendario(grupos, false, numVueltasPorDiv);
     setGenerando(false);
   };
 
@@ -11668,7 +11672,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
         .filter(Boolean);
     });
 
-    const ok = await insertarCalendario(gruposOrdenados, true);
+    const ok = await insertarCalendario(gruposOrdenados, true, numVueltasPorDiv);
     setGenerando(false);
     if (ok) setModoSorteo(false);
   };
@@ -12010,8 +12014,28 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
           <div style={{padding:'1rem 0'}}>
             <div style={{fontWeight:700, marginBottom:'.3rem'}}>Generar calendario</div>
             <div style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-              Calendario a doble vuelta por división. La segunda vuelta es simétrica a la primera (mismo rival, campo invertido).
+              Calendario por división. La segunda vuelta es simétrica a la primera (mismo rival, campo invertido).
               <strong style={{color:'#dc3545'}}> Se eliminarán los resultados existentes.</strong>
+            </div>
+            <div style={{display:'flex', flexDirection:'column', gap:'.4rem', marginBottom:'.75rem'}}>
+              {Object.entries(grupos).map(([divKey, equips]) => {
+                const divNom = divKey === '__'
+                  ? null
+                  : divisiones.find(d => String(d.id) === divKey)?.nombre || `División ${divKey}`;
+                const selSt = {padding:'.3rem .6rem', borderRadius:7, border:'1.5px solid var(--borde)',
+                                fontSize:'.87rem', background:'var(--fondo)'};
+                return (
+                  <label key={divKey} style={{display:'flex', alignItems:'center', gap:'.5rem', fontSize:'.87rem', fontWeight:600}}>
+                    {divNom ? `${divNom} —` : ''} Vueltas:
+                    <select value={numVueltasPorDiv[divKey] ?? 2}
+                            onChange={e => setNumVueltasPorDiv(v => ({...v, [divKey]: Number(e.target.value)}))}
+                            style={selSt}>
+                      <option value={2}>2 vueltas (ida y vuelta)</option>
+                      <option value={4}>4 vueltas</option>
+                    </select>
+                  </label>
+                );
+              })}
             </div>
             <div style={{display:'flex', gap:'.75rem', flexWrap:'wrap'}}>
               <button className="btn-ok" disabled={generando} onClick={generarCalendario}>

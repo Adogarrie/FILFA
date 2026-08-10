@@ -8232,6 +8232,15 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     }
   };
 
+  const cambiarPosicion = async (j, nuevaPos) => {
+    const updates = { posicion: nuevaPos, posicion_alt: nuevaPos === j.posicion_alt ? null : j.posicion_alt };
+    const { error } = await sb.from('jugadores').update(updates).eq('id', j.id);
+    if (error) { alert('Error: ' + error.message); return; }
+    const nomJug = j.nombre;
+    publicar(federacion?.id, 'admin', `${nomJug}: posición cambiada de ${j.posicion} a ${nuevaPos}.`, actorNombre);
+    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, posicion: nuevaPos, posicion_alt: updates.posicion_alt } : p));
+  };
+
   const cambiarPosAlt = async (j, nuevaAlt) => {
     const val = nuevaAlt || null;
     const { error } = await sb.from('jugadores').update({ posicion_alt: val }).eq('id', j.id);
@@ -8410,7 +8419,18 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                       <td style={{ display:'flex', alignItems:'center', gap:6 }}>
                         <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
                       </td>
-                      <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td>
+                        {j.posicion === 'POR'
+                          ? <span className="badge POR">POR</span>
+                          : <select value={j.posicion}
+                                    onChange={e => cambiarPosicion(j, e.target.value)}
+                                    style={{ padding:'.2rem .4rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                             fontSize:'.8rem', background:'var(--fondo)', color:'var(--texto)',
+                                             cursor:'pointer', fontWeight:700 }}>
+                              {['DEF','MED','DEL'].map(p => <option key={p} value={p}>{p}</option>)}
+                            </select>
+                        }
+                      </td>
                       <td>
                         {j.posicion === 'POR'
                           ? <span style={{ color:'var(--texto2)', fontSize:'.78rem' }}>—</span>

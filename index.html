@@ -6635,6 +6635,13 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [compsConfig, setCompsConfig] = useState([]);
   const [msgComodin,   setMsgComodin]    = useState('');
 
+  const [divisionesColores, setDivisionesColores] = useState([]);
+  useEffect(() => {
+    if (!sb || !federacion?.id) return;
+    sb.from('divisiones').select('id, nombre').order('id')
+      .then(({ data }) => setDivisionesColores(data || []));
+  }, [federacion?.id]);
+
   const [colores, setColores] = useState(() => {
     const c = federacion?.clasif_colores || {};
     return { fantasia: [], h2h: [], grupos: [], ...c };
@@ -7162,7 +7169,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
               <span style={{fontSize:'.72rem', color:'var(--texto2)', fontWeight:700, minWidth:80}}>FILFA H2H</span>
               {btnTab('h2h', 'Todas las divisiones')}
-              {divisiones.map(d => btnTab('h2h_div_' + d.id, d.nombre))}
+              {divisionesColores.map(d => btnTab('h2h_div_' + d.id, d.nombre))}
             </div>
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
               <span style={{fontSize:'.72rem', color:'var(--texto2)', fontWeight:700, minWidth:80}}>Torneos</span>

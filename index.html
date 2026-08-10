@@ -3378,20 +3378,21 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const generarYCopiarListado = async () => {
     const partIds = participantes.map(p => p.id);
     const { data: alis } = await sb.from('alineaciones')
-      .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, posicion)')
+      .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, equipo, posicion)')
       .eq('jornada', jornada).in('participante_id', partIds);
     const jugM = {};
     for (const a of (alis || [])) { if (a.jugadores) jugM[a.jugador_id] = a.jugadores; }
     const labPos = { POR: 'PO', DEF: 'DF', MED: 'MC', DEL: 'DEL' };
+    const nomJug = (jug) => jug.posicion === 'POR' ? `Portería ${jug.equipo}` : jug.nombre;
     const porEquipo = {};
     for (const a of (alis || [])) {
       const jug = jugM[a.jugador_id]; if (!jug) continue;
       if (!porEquipo[a.participante_id]) porEquipo[a.participante_id] = { POR:[], DEF:[], MED:[], DEL:[], suplentes:[] };
       if (a.es_titular) {
         const pos = a.posicion_usada ?? jug.posicion;
-        if (porEquipo[a.participante_id][pos] !== undefined) porEquipo[a.participante_id][pos].push(jug.nombre);
+        if (porEquipo[a.participante_id][pos] !== undefined) porEquipo[a.participante_id][pos].push(nomJug(jug));
       } else if (a.orden_suplente != null) {
-        porEquipo[a.participante_id].suplentes.push({ nombre: jug.nombre, orden: a.orden_suplente });
+        porEquipo[a.participante_id].suplentes.push({ nombre: nomJug(jug), orden: a.orden_suplente });
       }
     }
     const bloques = participantes

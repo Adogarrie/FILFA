@@ -9824,7 +9824,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
 }
 
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador, actorNombre }) {
-  const TABS_DEF = [
+  const TABS_DEF_ALL = [
     ['federacion',   'Mi Federación'],
     ['equipos',      'Equipos'],
     ['ptsjug',       'Pts Jugadores'],
@@ -9835,6 +9835,11 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['h2h',          'Liga FILFA'],
     ['torneos',      'Torneos'],
   ];
+  // Moderadores: solo pueden introducir puntos y calcular resultados
+  const TABS_MODERADOR = ['ptsjug', 'h2h'];
+  const TABS_DEF = isModerador
+    ? TABS_DEF_ALL.filter(([k]) => TABS_MODERADOR.includes(k))
+    : TABS_DEF_ALL;
   const primera = TABS_DEF[0][0];
   const [subtab, setSubtab] = useState(primera);
 

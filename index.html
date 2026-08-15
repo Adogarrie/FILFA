@@ -8885,54 +8885,52 @@ function calcularSustitucionesAuto(alisData, noJugoSet, jugadoresMap, posicionUs
       posicionEfectiva[tid] = posicionUsadaMap[tid] ?? jugadoresMap[tid]?.posicion;
     }
 
-    // Ordenar titulares a sustituir por su posición efectiva
-    const titOrdenados = [...titulars].sort((a, b) =>
-      (posOrder[posicionEfectiva[a]] ?? 3) - (posOrder[posicionEfectiva[b]] ?? 3)
-    );
+    // Vacantes a cubrir: titulares que no jugaron (los porteros se gestionan
+    // aparte). Se ordenan por posición solo como desempate secundario, para
+    // cuando un mismo suplente pudiera cubrir más de una vacante a la vez.
+    const pendientes = titulars
+      .filter(tid => noJugoSet.has(tid) && posicionEfectiva[tid] !== 'POR')
+      .sort((a, b) => (posOrder[posicionEfectiva[a]] ?? 3) - (posOrder[posicionEfectiva[b]] ?? 3));
 
     const efectivos = [...titulars];
     const usados = new Set();
+    const cubiertas = new Set();
 
-    for (const jid of titOrdenados) {
-      if (!noJugoSet.has(jid)) continue;
-      if (posicionEfectiva[jid] === 'POR') continue;
+    // Recorre el banquillo en el ORDEN elegido por el usuario (orden_suplente):
+    // el primer suplente de la lista tiene prioridad para cubrir la primera
+    // vacante en la que encaje, luego el segundo, etc. Un suplente que también
+    // jugó 0 minutos nunca entra (sustituir un 0 por otro 0 no aporta nada).
+    for (const sid of benchIds) {
+      if (usados.has(sid) || noJugoSet.has(sid)) continue;
 
-      let candidato = null;
-      let candidatoPosUsada = null;
+      for (const jid of pendientes) {
+        if (cubiertas.has(jid)) continue;
 
-      // Intenta entrar con sid usando posicion indicada; devuelve true si es válido.
-      const intentarCon = (sid, posCandidata) => {
-        const nuevos = efectivos.map(t => t === jid ? sid : t);
-        return esValidaConMapa(nuevos, { ...posicionEfectiva, [sid]: posCandidata });
-      };
+        // Intenta entrar con sid usando la posición indicada; true si el
+        // once resultante sigue siendo una formación válida.
+        const intentarCon = posCandidata => {
+          const nuevos = efectivos.map(t => t === jid ? sid : t);
+          return esValidaConMapa(nuevos, { ...posicionEfectiva, [sid]: posCandidata });
+        };
 
-      // Prueba un suplente: primero con posición primaria, luego con alt.
-      const probar = (sid) => {
-        if (usados.has(sid)) return false;
+        // Prueba primero la posición primaria del suplente, luego la alternativa.
         const posPrim = jugadoresMap[sid]?.posicion;
-        if (posPrim && intentarCon(sid, posPrim)) {
-          candidato = sid; candidatoPosUsada = posPrim; return true;
-        }
-        const posAlt = jugadoresMap[sid]?.posicion_alt;
-        if (posAlt && intentarCon(sid, posAlt)) {
-          candidato = sid; candidatoPosUsada = posAlt; return true;
-        }
-        return false;
-      };
+        const posAlt  = jugadoresMap[sid]?.posicion_alt;
+        let posUsada = null;
+        if (posPrim && intentarCon(posPrim)) posUsada = posPrim;
+        else if (posAlt && intentarCon(posAlt)) posUsada = posAlt;
 
-      // 1ª pasada: solo suplentes que jugaron
-      benchIds.some(sid => !noJugoSet.has(sid) && probar(sid));
-      // 2ª pasada: también suplentes que no jugaron
-      if (!candidato) benchIds.some(sid => probar(sid));
-
-      if (candidato) {
-        resultado.push({ participante_id: partId, jugador_sale_id: jid, jugador_entra_id: candidato });
-        usados.add(candidato);
-        const idx = efectivos.indexOf(jid);
-        if (idx !== -1) efectivos[idx] = candidato;
-        // Actualizar el mapa para cascadas correctas
-        posicionEfectiva[candidato] = candidatoPosUsada;
-        delete posicionEfectiva[jid];
+        if (posUsada) {
+          resultado.push({ participante_id: partId, jugador_sale_id: jid, jugador_entra_id: sid });
+          usados.add(sid);
+          cubiertas.add(jid);
+          const idx = efectivos.indexOf(jid);
+          if (idx !== -1) efectivos[idx] = sid;
+          // Actualizar el mapa para cascadas correctas
+          posicionEfectiva[sid] = posUsada;
+          delete posicionEfectiva[jid];
+          break; // este suplente ya ha entrado; pasar al siguiente
+        }
       }
     }
   }
@@ -8972,13 +8970,15 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
     setJugMap(mapa);
     setAlisData(alis || []);
 
-    const uniqueTit = new Map();
+    // Candidatos marcables como "no jugó": titulares Y suplentes (los
+    // porteros se gestionan aparte, ver nota en el render de abajo).
+    const uniqueCand = new Map();
     for (const a of (alis || [])) {
-      if (a.es_titular && a.jugadores && a.jugadores.posicion !== 'POR') {
-        uniqueTit.set(a.jugador_id, a.jugadores);
+      if (a.jugadores && a.jugadores.posicion !== 'POR') {
+        uniqueCand.set(a.jugador_id, { ...a.jugadores, es_titular: a.es_titular });
       }
     }
-    setTitulares([...uniqueTit.values()]);
+    setTitulares([...uniqueCand.values()]);
     const njSet = new Set((njData || []).map(r => r.jugador_id));
     setNoJugo(njSet);
     setCargando(false);
@@ -9088,7 +9088,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
     setTimeout(() => setMsg(''), 5000);
   };
 
-  // Agrupar titulares por equipo real
+  // Agrupar candidatos (titulares y suplentes) por equipo real
   const equipos = [...new Set(titulares.map(j => j.equipo))].sort();
   const partMap = Object.fromEntries((participantes || []).map(p => [p.id, p]));
 
@@ -9135,8 +9135,10 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
               Marcar jugadores que jugaron 0 minutos en J{jornada}
             </div>
             <p style={{fontSize:'.82rem', color:'var(--texto-2)', marginBottom:'1rem'}}>
-              Los porteros no aparecen aquí (la portería se gestiona automáticamente).
-              Al guardar se calculan las sustituciones y se recalculan los puntos de equipo.
+              Incluye titulares y suplentes (marcados con "· supl."). Los porteros no aparecen
+              aquí (la portería se gestiona automáticamente). Un suplente marcado como "no jugó"
+              nunca entrará como sustituto de otro jugador. Al guardar se calculan las
+              sustituciones y se recalculan los puntos de equipo.
             </p>
             {equipos.map(eq => {
               const jugsEq = titulares.filter(j => j.equipo === eq);
@@ -9161,7 +9163,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
                           <input type="checkbox" checked={marcado} onChange={() => toggleNoJugo(j.id)}
                                  style={{accentColor:'#ef4444'}} />
                           <span style={{fontWeight: marcado ? 700 : 400}}>{j.nombre}</span>
-                          <span style={{fontSize:'.72rem', opacity:.6}}>{j.posicion}</span>
+                          <span style={{fontSize:'.72rem', opacity:.6}}>{j.posicion}{!j.es_titular ? ' · supl.' : ''}</span>
                         </label>
                       );
                     })}
@@ -12399,7 +12401,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Jugadores con doble posición', 'Si un jugador tiene una posición alternativa asignada por el admin, verás dos badges pulsables junto a su nombre cuando sea titular. Pulsa el que prefieras para elegir en qué posición computa ese jugador en tu formación. Los suplentes muestran ambas posiciones como referencia pero sin toggle.'],
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
         ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
-        ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al primer suplente cuya posición sea compatible con alguna de las formaciones permitidas. Se da prioridad a los suplentes que hayan jugado algún minuto. Si el suplente tiene doble posición, puede entrar en cualquiera de sus dos posiciones siempre que una encaje con la formación. Los porteros no participan en este mecanismo.'],
+        ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al suplente disponible más prioritario (según el orden en que los colocaste en el banquillo) cuya posición sea compatible con alguna de las formaciones permitidas. Un suplente que también haya disputado 0 minutos nunca entra como sustituto. Si el suplente tiene doble posición, puede entrar en cualquiera de sus dos posiciones siempre que una encaje con la formación. Los porteros no participan en este mecanismo.'],
         ['Partidos aplazados', 'Si el partido de un equipo real queda aplazado, el admin lo marca y los jugadores afectados muestran el indicador ⏸ APL en tu alineación. Puedes cambiar esos jugadores aunque la jornada ya esté cerrada.'],
       ]
     },

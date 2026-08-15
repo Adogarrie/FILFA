@@ -6314,7 +6314,14 @@ function AdminCierres({ federacion, actorNombre }) {
     if (!sb || !fedId) return;
     sb.from('jornadas_cierre').select('cierre')
       .eq('federacion_id', fedId).eq('jornada', jornada).maybeSingle()
-      .then(({ data }) => setCierre(data?.cierre ? data.cierre.slice(0, 16) : ''));
+      .then(({ data }) => {
+        if (!data?.cierre) { setCierre(''); return; }
+        const d = new Date(data.cierre); // parsea el UTC guardado correctamente
+        const pad = n => String(n).padStart(2, '0');
+        // Reconstruye "YYYY-MM-DDTHH:mm" en hora LOCAL del navegador — simétrico
+        // con new Date(cierre).toISOString() que usa guardar().
+        setCierre(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+      });
   };
   useEffect(cargar, [jornada, fedId]);
 
@@ -11829,9 +11836,13 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     const ms = partidos.filter(p => p.jornada === j);
     const lineas = [`RESULTADOS JORNADA ${j}`];
     ms.forEach((m, i) => {
+      // Mismo bono de localía que se sumó al calcular los goles (ver calcularDesdeFantasy),
+      // para que los puntos fantasy mostrados entre paréntesis cuadren con esos goles.
+      const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+      const { ptsLocal: ptsL } = getVueltaInfo(j, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, veDiv);
       const gL  = m.pts_local      ?? '?';
       const gV  = m.pts_visitante  ?? '?';
-      const pL  = m.fantasy_local    != null ? Math.round(m.fantasy_local)    : '?';
+      const pL  = m.fantasy_local    != null ? Math.round(m.fantasy_local + ptsL) : '?';
       const pV  = m.fantasy_visitante != null ? Math.round(m.fantasy_visitante) : '?';
       lineas.push(`${i + 1}. ${nomMap[m.local_id] || '—'} ${gL} (${pL}) - ${gV} (${pV}) ${nomMap[m.visitante_id] || '—'}`);
     });

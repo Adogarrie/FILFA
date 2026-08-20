@@ -3656,6 +3656,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [enviandoOf, setEnviandoOf]   = useState(false);
   const [msgOferta, setMsgOferta]     = useState('');
   const [miPresupuesto, setMiPresupuesto] = useState(null);
+  const [puntosHistorial, setPuntosHistorial] = useState({}); // jugador_id → { jornada: pts }
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -3665,12 +3666,39 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     if (!equipoId || !sb) return;
     setJugadores(null);
     setPresupuesto(null);
-    sb.from('plantillas')
-      .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
-      .eq('participante_id', equipoId)
-      .then(({ data, error }) => setJugadores(error ? [] : (data || [])));
-    sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
-      .then(({ data }) => setPresupuesto(data?.presupuesto ?? null));
+    setPuntosHistorial({});
+
+    const cargar = async () => {
+      const [{ data, error }, { data: presData }] = await Promise.all([
+        sb.from('plantillas')
+          .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
+          .eq('participante_id', equipoId),
+        sb.from('participantes').select('presupuesto').eq('id', equipoId).single(),
+      ]);
+      setJugadores(error ? [] : (data || []));
+      setPresupuesto(presData?.presupuesto ?? null);
+
+      // Cargar puntos de las últimas 5 jornadas completadas
+      const jugIds = (data || []).map(p => p.jugador_id).filter(Boolean);
+      const jActual = jornadaActual || 1;
+      const jornadasQ = [];
+      for (let i = 1; i <= 5; i++) { if (jActual - i >= 1) jornadasQ.push(jActual - i); }
+
+      if (jugIds.length && jornadasQ.length && federacion?.id) {
+        const { data: ptsData } = await sb.from('puntos_jugador')
+          .select('jugador_id, jornada, pts')
+          .eq('federacion_id', federacion.id)
+          .in('jugador_id', jugIds)
+          .in('jornada', jornadasQ);
+        const mapa = {};
+        for (const r of (ptsData || [])) {
+          if (!mapa[r.jugador_id]) mapa[r.jugador_id] = {};
+          mapa[r.jugador_id][r.jornada] = Number(r.pts);
+        }
+        setPuntosHistorial(mapa);
+      }
+    };
+    cargar();
   }, [equipoId]);
 
   useEffect(() => {
@@ -3761,6 +3789,21 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
       publicar(federacion?.id, 'perfil', `REBRANDING. El equipo "${oldNom}" pasa a llamarse "${newNom}". ¿Os gusta el cambio de nombre?`, nomEquipo);
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
+  };
+
+  // Jornadas a mostrar en la columna "Forma" (las más recientes primero)
+  const jActual = jornadaActual || 1;
+  const jornadasForma = [];
+  for (let i = 1; i <= 5; i++) { if (jActual - i >= 1) jornadasForma.push(jActual - i); }
+
+  const colorPts = (pts) => {
+    if (pts === undefined || pts === null) return { bg: 'var(--gris)', text: 'var(--texto2)', label: '—' };
+    if (pts < 0)  return { bg: '#7b1113', text: '#fff',  label: String(pts) };
+    if (pts === 0) return { bg: '#dc3545', text: '#fff',  label: '0' };
+    if (pts <= 2) return { bg: '#fd7e14', text: '#fff',  label: String(pts) };
+    if (pts <= 5) return { bg: '#ffc107', text: '#000',  label: String(pts) };
+    if (pts <= 9) return { bg: '#5cb85c', text: '#fff',  label: String(pts) };
+    return            { bg: '#198754', text: '#fff',  label: String(pts) };
   };
 
   const POS_ORDER_EQ = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
@@ -3971,6 +4014,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
+                  {jornadasForma.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
                   {puedeOfrecer && <th></th>}
                 </tr>
               </thead>
@@ -3997,6 +4041,29 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
+                      {jornadasForma.length > 0 && (
+                        <td style={{textAlign:'center'}}>
+                          <div style={{display:'inline-flex', gap:3}}>
+                            {jornadasForma.map(jn => {
+                              const pts = puntosHistorial[j.jugador_id]?.[jn];
+                              const c   = colorPts(pts);
+                              return (
+                                <span key={jn}
+                                      title={`J${jn}: ${pts !== undefined ? pts + ' pts' : 'sin datos'}`}
+                                      style={{
+                                        display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                        width:22, height:22, borderRadius:4,
+                                        background: c.bg, color: c.text,
+                                        fontSize:'.62rem', fontWeight:700,
+                                        fontVariantNumeric:'tabular-nums', flexShrink:0,
+                                      }}>
+                                  {c.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      )}
                       {puedeOfrecer && (
                         <td style={{textAlign:'right'}}>
                           <button onClick={() => { setModalOferta(j); setCantOferta(String((j.valor || 0) / 1_000_000)); setMsgOferta(''); }}

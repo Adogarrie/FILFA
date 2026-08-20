@@ -448,7 +448,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       partIds.length ? sb.from('fichajes_pendientes').select('jugador_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
     ]);
     const ocupados = new Set([...(enPl||[]).map(r => r.jugador_id), ...(enFp||[]).map(r => r.jugador_id)]);
-    const { data: jugs } = await sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true).order('posicion').order('nombre');
+    const { data: jugs } = await sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true).eq('baja', false).order('posicion').order('nombre');
     setJugadoresLibres((jugs || []).filter(jg => !ocupados.has(jg.id)));
   };
 
@@ -482,7 +482,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacion?.id);
     const partIds = (parts || []).map(p => p.id);
     const [{ data: jugs }, { data: lesData }] = await Promise.all([
-      sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').eq('activo', true),
+      sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').eq('activo', true).eq('baja', false),
       partIds.length
         ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds).eq('lesionado', true)
         : Promise.resolve({ data: [] }),
@@ -1286,7 +1286,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }, { data: lesData }] = await Promise.all([
-      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true),
+      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true).eq('baja', false),
       partIds.length
         ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
@@ -8239,13 +8239,14 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const [filtroNom, setFiltroNom]   = useState('');
   const [filtroEq, setFiltroEq]     = useState('');
   const [filtroLes, setFiltroLes]   = useState('');
+  const [verBaja, setVerBaja]       = useState(false);
   const [borrando, setBorrando]     = useState(null);
   const [propietarios, setPropietarios] = useState({});
 
   const cargarJugadores = async () => {
     const partIds = participantes.map(p => p.id);
     const [{ data }, { data: pl }] = await Promise.all([
-      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado').order('equipo').order('nombre'),
+      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, baja').order('equipo').order('nombre'),
       partIds.length ? sb.from('plantillas').select('jugador_id, participante_id, lesionado').in('participante_id', partIds) : Promise.resolve({ data: [] }),
     ]);
     const mapaLesion = {};
@@ -8343,18 +8344,35 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     cargarJugadores();
   };
 
-  const borrar = async (j) => {
-    if (!confirm(`¿Eliminar a "${j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.`)) return;
-    setBorrando(j.id);
+  const darDeBaja = async (j) => {
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
-    const { error } = await sb.from('jugadores').delete().eq('id', j.id);
+    if (!confirm(`¿Dar de baja a "${nomJug}" (${j.equipo})?\nSe eliminará de plantillas y pujas activas.\nEl historial de puntos y alineaciones se conservará.`)) return;
+    setBorrando(j.id);
+    // 1. Marcar baja lógica
+    const { error } = await sb.from('jugadores').update({ baja: true }).eq('id', j.id);
+    if (error) { setBorrando(null); alert('Error: ' + error.message); return; }
+    // 2. Sacar de plantillas
+    await sb.from('plantillas').delete().eq('jugador_id', j.id);
+    // 3. Cancelar pujas activas
+    await sb.from('pujas').delete().eq('jugador_id', j.id).eq('resuelta', false);
+    // 4. Cancelar fichajes pendientes
+    await sb.from('fichajes_pendientes').delete().eq('jugador_id', j.id);
     setBorrando(null);
+    publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) dado de baja de la liga.`, actorNombre);
+    cargarJugadores();
+  };
+
+  const reactivar = async (j) => {
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    if (!confirm(`¿Reactivar a "${nomJug}"? Volverá a estar disponible en el mercado.`)) return;
+    const { error } = await sb.from('jugadores').update({ baja: false }).eq('id', j.id);
     if (error) { alert('Error: ' + error.message); return; }
-    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo}) deja LaLiga.`, actorNombre);
+    publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) reactivado.`, actorNombre);
     cargarJugadores();
   };
 
   const listaFiltrada = (jugadores || []).filter(j => {
+    if (!verBaja && j.baja) return false;
     const nom = (j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre).toLowerCase();
     if (!nom.includes(filtroNom.toLowerCase())) return false;
     if (!j.equipo.toLowerCase().includes(filtroEq.toLowerCase())) return false;
@@ -8449,6 +8467,13 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
               </button>
             ))}
           </div>
+          <button onClick={() => setVerBaja(v => !v)}
+                  style={{ padding:'.3rem .65rem', borderRadius:7, fontSize:'.8rem', fontWeight:600,
+                           border:'1.5px solid var(--borde)', cursor:'pointer',
+                           background: verBaja ? '#6c757d' : 'var(--fondo)',
+                           color: verBaja ? '#fff' : 'var(--texto2)' }}>
+            {verBaja ? '👁 Ocultando bajas' : '👁 Ver bajas'}
+          </button>
         </div>
         {jugadores === null
           ? <Spinner />
@@ -8461,8 +8486,9 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                 <tbody>
                   {listaFiltrada.map(j => (
                     <tr key={j.id}>
-                      <td style={{ fontWeight:600 }}>
+                      <td style={{ fontWeight:600, opacity: j.baja ? .55 : 1 }}>
                         {j.posicion === 'POR' ? <em style={{ color:'var(--texto2)' }}>Portería</em> : j.nombre}
+                        {j.baja && <span style={{ marginLeft:6, background:'#6c757d', color:'#fff', borderRadius:4, fontSize:'.7rem', padding:'1px 5px', fontWeight:700 }}>BAJA</span>}
                         {j.lesionado && <span style={{ marginLeft:6, background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.7rem', padding:'1px 5px', fontWeight:700 }}>LES</span>}
                       </td>
                       <td style={{ display:'flex', alignItems:'center', gap:6 }}>
@@ -8512,12 +8538,20 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                         }
                       </td>
                       <td style={{ textAlign:'right' }}>
-                        <button onClick={() => borrar(j)} disabled={borrando === j.id}
-                                style={{ background:'#dc3545', color:'#fff', border:'none',
-                                         padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
-                                         fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
-                          {borrando === j.id ? '…' : 'Eliminar'}
-                        </button>
+                        {j.baja
+                          ? <button onClick={() => reactivar(j)}
+                                    style={{ background:'var(--verde)', color:'#fff', border:'none',
+                                             padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                             fontSize:'.8rem', fontWeight:600 }}>
+                              Reactivar
+                            </button>
+                          : <button onClick={() => darDeBaja(j)} disabled={borrando === j.id}
+                                    style={{ background:'#dc3545', color:'#fff', border:'none',
+                                             padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                             fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
+                              {borrando === j.id ? '…' : 'Dar de baja'}
+                            </button>
+                        }
                       </td>
                     </tr>
                   ))}
@@ -8574,7 +8608,7 @@ function Cesiones({ federacion, miParticipanteId, miNombre }) {
     for (const p of [...(ces || []), ...(pl || []), ...(pend || [])]) ocupados.add(p.jugador_id);
     const { data: jugs } = await sb.from('jugadores')
       .select('id, nombre, equipo, posicion, valor_mercado')
-      .eq('activo', true)
+      .eq('activo', true).eq('baja', false)
       .order('nombre');
     setJugadoresLibres((jugs || []).filter(j => j.posicion !== 'POR' && !ocupados.has(j.id)));
     setCargandoMercado(false);

@@ -4110,10 +4110,13 @@ function getClasifColor(reglas, pos) {
 function posEfec(j, overrides) {
   const o = overrides?.[j.id];
   if (!o) return j;
+  // posicion:     null en override → usar global
+  // posicion_alt: null en override → explícitamente eliminada para esta federación
+  //               (no caer al global; si no hay fila override, ya devolvemos j sin cambios)
   return {
     ...j,
-    posicion:     o.posicion     ?? j.posicion,
-    posicion_alt: o.posicion_alt ?? j.posicion_alt ?? null,
+    posicion:     o.posicion ?? j.posicion,
+    posicion_alt: o.posicion_alt,
   };
 }
 

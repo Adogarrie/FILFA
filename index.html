@@ -8344,6 +8344,17 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     cargarJugadores();
   };
 
+  const borrar = async (j) => {
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    if (!confirm(`¿Eliminar definitivamente a "${nomJug}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.\nSi tiene historial de puntos, usa "Dar de baja" en su lugar.`)) return;
+    setBorrando(j.id);
+    const { error } = await sb.from('jugadores').delete().eq('id', j.id);
+    setBorrando(null);
+    if (error) { alert('Error: ' + error.message + '\n\nSi el jugador tiene alineaciones históricas usa el botón "Dar de baja".'); return; }
+    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo}).`, actorNombre);
+    cargarJugadores();
+  };
+
   const darDeBaja = async (j) => {
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
     if (!confirm(`¿Dar de baja a "${nomJug}" (${j.equipo})?\nSe eliminará de plantillas y pujas activas.\nEl historial de puntos y alineaciones se conservará.`)) return;
@@ -8538,20 +8549,28 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                         }
                       </td>
                       <td style={{ textAlign:'right' }}>
-                        {j.baja
-                          ? <button onClick={() => reactivar(j)}
-                                    style={{ background:'var(--verde)', color:'#fff', border:'none',
-                                             padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
-                                             fontSize:'.8rem', fontWeight:600 }}>
-                              Reactivar
-                            </button>
-                          : <button onClick={() => darDeBaja(j)} disabled={borrando === j.id}
-                                    style={{ background:'#dc3545', color:'#fff', border:'none',
-                                             padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
-                                             fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
-                              {borrando === j.id ? '…' : 'Dar de baja'}
-                            </button>
-                        }
+                        <div style={{ display:'flex', gap:'.35rem', justifyContent:'flex-end' }}>
+                          {j.baja
+                            ? <button onClick={() => reactivar(j)}
+                                      style={{ background:'var(--verde)', color:'#fff', border:'none',
+                                               padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                               fontSize:'.8rem', fontWeight:600 }}>
+                                Reactivar
+                              </button>
+                            : <button onClick={() => darDeBaja(j)} disabled={borrando === j.id}
+                                      style={{ background:'#6c757d', color:'#fff', border:'none',
+                                               padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                               fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
+                                {borrando === j.id ? '…' : 'Dar de baja'}
+                              </button>
+                          }
+                          <button onClick={() => borrar(j)} disabled={borrando === j.id}
+                                  style={{ background:'#dc3545', color:'#fff', border:'none',
+                                           padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                           fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
+                            {borrando === j.id ? '…' : 'Eliminar'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

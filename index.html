@@ -402,6 +402,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [editMsg, setEditMsg]                 = useState('');
   const [subiendoEscudo, setSubiendoEscudo]   = useState(false);
   const [perfilActual, setPerfilActual]       = useState({});
+  const [puntosHistorial, setPuntosHistorial] = useState({});
 
   const maxJug = federacion?.max_jugadores ?? 14;
 
@@ -432,6 +433,27 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         .eq('participante_id', participanteId));
     }
     setFichajesPend(fp || []);
+
+    // Cargar puntos de las últimas 5 jornadas completadas
+    const jugIds = (pl || []).map(p => p.jugador_id).filter(Boolean);
+    const jActualP = federacion?.jornada_actual || 1;
+    const jornadasQ = [];
+    for (let i = 1; i <= 5; i++) { if (jActualP - i >= 1) jornadasQ.push(jActualP - i); }
+    if (jugIds.length && jornadasQ.length && federacion?.id) {
+      const { data: ptsData } = await sb.from('puntos_jugador')
+        .select('jugador_id, jornada, pts')
+        .eq('federacion_id', federacion.id)
+        .in('jugador_id', jugIds)
+        .in('jornada', jornadasQ);
+      const mapa = {};
+      for (const r of (ptsData || [])) {
+        if (!mapa[r.jugador_id]) mapa[r.jugador_id] = {};
+        mapa[r.jugador_id][r.jornada] = Number(r.pts);
+      }
+      setPuntosHistorial(mapa);
+    } else {
+      setPuntosHistorial({});
+    }
   };
 
   useEffect(() => { cargar(); }, [participanteId]);
@@ -740,6 +762,21 @@ ${seccionesHtml}
   const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
 
   const POS_ORDER = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+
+  const jActualP = federacion?.jornada_actual || 1;
+  const jornadasFormaP = [];
+  for (let i = 1; i <= 5; i++) { if (jActualP - i >= 1) jornadasFormaP.push(jActualP - i); }
+
+  const colorPtsP = (pts) => {
+    if (pts === undefined || pts === null) return { bg: 'var(--gris)', text: 'var(--texto2)', label: '—' };
+    if (pts < 0)   return { bg: '#7b1113', text: '#fff', label: String(pts) };
+    if (pts === 0) return { bg: '#dc3545', text: '#fff', label: '0' };
+    if (pts <= 2)  return { bg: '#fd7e14', text: '#fff', label: String(pts) };
+    if (pts <= 5)  return { bg: '#ffc107', text: '#000', label: String(pts) };
+    if (pts <= 9)  return { bg: '#5cb85c', text: '#fff', label: String(pts) };
+    return              { bg: '#198754', text: '#fff', label: String(pts) };
+  };
+
   const lista = jugadores.map(p => ({
     id:         p.id,
     jugador_id: p.jugador_id,
@@ -842,6 +879,7 @@ ${seccionesHtml}
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
+                  {jornadasFormaP.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
                   {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j => j.lesionado)) && <th></th>}
                 </tr>
               </thead>
@@ -868,6 +906,29 @@ ${seccionesHtml}
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
+                      {jornadasFormaP.length > 0 && (
+                        <td style={{textAlign:'center'}}>
+                          <div style={{display:'inline-flex', gap:3}}>
+                            {jornadasFormaP.map(jn => {
+                              const pts = puntosHistorial[j.jugador_id]?.[jn];
+                              const c   = colorPtsP(pts);
+                              return (
+                                <span key={jn}
+                                      title={`J${jn}: ${pts !== undefined ? pts + ' pts' : 'sin datos'}`}
+                                      style={{
+                                        display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                        width:22, height:22, borderRadius:4,
+                                        background: c.bg, color: c.text,
+                                        fontSize:'.62rem', fontWeight:700,
+                                        fontVariantNumeric:'tabular-nums', flexShrink:0,
+                                      }}>
+                                  {c.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      )}
                       {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j2 => j2.lesionado)) && (
                         <td>
                           <div style={{display:'flex', flexDirection:'column', gap:'.3rem', alignItems:'flex-end'}}>

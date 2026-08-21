@@ -9173,7 +9173,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
   const cargar = async () => {
     setCargando(true);
     const partIds = participantes.map(p => p.id);
-    const [{ data: alis }, { data: njData }, { data: ovr }] = await Promise.all([
+    const [{ data: alisDirectas }, { data: njData }, { data: ovr }] = await Promise.all([
       sb.from('alineaciones')
         .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, equipo, posicion, posicion_alt)')
         .eq('jornada', jornada)
@@ -9187,11 +9187,40 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
         .eq('federacion_id', federacionId),
     ]);
 
+    // Equipos sin alineación guardada esta jornada → buscar fallback en jornadas anteriores
+    const partsConAli = new Set((alisDirectas || []).map(a => a.participante_id));
+    const partsSinAli = partIds.filter(id => !partsConAli.has(id));
+    let alisFallback = [];
+    if (partsSinAli.length > 0 && jornada > 1) {
+      // 1. Obtener la jornada más reciente guardada por cada equipo sin alineación
+      const { data: refData } = await sb.from('alineaciones')
+        .select('participante_id, jornada')
+        .lt('jornada', jornada)
+        .in('participante_id', partsSinAli)
+        .order('jornada', { ascending: false });
+      // Tomar solo la jornada más reciente por participante
+      const ultimaJornada = {};
+      for (const r of (refData || [])) {
+        if (!ultimaJornada[r.participante_id]) ultimaJornada[r.participante_id] = r.jornada;
+      }
+      // 2. Cargar las alineaciones de esa jornada para cada equipo (en paralelo)
+      const fallbackResults = await Promise.all(
+        Object.entries(ultimaJornada).map(([partId, jRef]) =>
+          sb.from('alineaciones')
+            .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, equipo, posicion, posicion_alt)')
+            .eq('participante_id', partId)
+            .eq('jornada', jRef)
+        )
+      );
+      for (const { data } of fallbackResults) alisFallback = alisFallback.concat(data || []);
+    }
+
+    const alis = [...(alisDirectas || []), ...alisFallback];
     const ovrMap = Object.fromEntries((ovr || []).map(o => [o.jugador_id, o]));
     const mapa = {};
-    for (const a of (alis || [])) { if (a.jugadores) mapa[a.jugador_id] = posEfec(a.jugadores, ovrMap); }
+    for (const a of alis) { if (a.jugadores) mapa[a.jugador_id] = posEfec(a.jugadores, ovrMap); }
     setJugMap(mapa);
-    setAlisData(alis || []);
+    setAlisData(alis);
 
     // Candidatos marcables como "no jugó": titulares Y suplentes (los
     // porteros se gestionan aparte, ver nota en el render de abajo).

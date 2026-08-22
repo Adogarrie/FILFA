@@ -402,6 +402,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [editMsg, setEditMsg]                 = useState('');
   const [subiendoEscudo, setSubiendoEscudo]   = useState(false);
   const [perfilActual, setPerfilActual]       = useState({});
+  const [puntosHistorial, setPuntosHistorial] = useState({});
 
   const maxJug = federacion?.max_jugadores ?? 14;
 
@@ -432,6 +433,27 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
         .eq('participante_id', participanteId));
     }
     setFichajesPend(fp || []);
+
+    // Cargar puntos de las últimas 5 jornadas completadas
+    const jugIds = (pl || []).map(p => p.jugador_id).filter(Boolean);
+    const jActualP = federacion?.jornada_actual || 1;
+    const jornadasQ = [];
+    for (let i = 1; i <= 5; i++) { if (jActualP - i >= 1) jornadasQ.push(jActualP - i); }
+    if (jugIds.length && jornadasQ.length && federacion?.id) {
+      const { data: ptsData } = await sb.from('puntos_jugador')
+        .select('jugador_id, jornada, pts')
+        .eq('federacion_id', federacion.id)
+        .in('jugador_id', jugIds)
+        .in('jornada', jornadasQ);
+      const mapa = {};
+      for (const r of (ptsData || [])) {
+        if (!mapa[r.jugador_id]) mapa[r.jugador_id] = {};
+        mapa[r.jugador_id][r.jornada] = Number(r.pts);
+      }
+      setPuntosHistorial(mapa);
+    } else {
+      setPuntosHistorial({});
+    }
   };
 
   useEffect(() => { cargar(); }, [participanteId]);
@@ -448,7 +470,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       partIds.length ? sb.from('fichajes_pendientes').select('jugador_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
     ]);
     const ocupados = new Set([...(enPl||[]).map(r => r.jugador_id), ...(enFp||[]).map(r => r.jugador_id)]);
-    const { data: jugs } = await sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true).order('posicion').order('nombre');
+    const { data: jugs } = await sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado').eq('activo', true).eq('baja', false).order('posicion').order('nombre');
     setJugadoresLibres((jugs || []).filter(jg => !ocupados.has(jg.id)));
   };
 
@@ -482,7 +504,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     const { data: parts } = await sb.from('participantes').select('id').eq('federacion_id', federacion?.id);
     const partIds = (parts || []).map(p => p.id);
     const [{ data: jugs }, { data: lesData }] = await Promise.all([
-      sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').eq('activo', true),
+      sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado').eq('activo', true).eq('baja', false),
       partIds.length
         ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds).eq('lesionado', true)
         : Promise.resolve({ data: [] }),
@@ -740,6 +762,21 @@ ${seccionesHtml}
   const isActingAsAdmin = isAdmin && participanteId !== miParticipanteId;
 
   const POS_ORDER = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
+
+  const jActualP = federacion?.jornada_actual || 1;
+  const jornadasFormaP = [];
+  for (let i = 1; i <= 5; i++) { if (jActualP - i >= 1) jornadasFormaP.push(jActualP - i); }
+
+  const colorPtsP = (pts) => {
+    if (pts === undefined || pts === null) return { bg: 'var(--gris)', text: 'var(--texto2)', label: '—' };
+    if (pts < 0)   return { bg: '#7b1113', text: '#fff', label: String(pts) };
+    if (pts === 0) return { bg: '#dc3545', text: '#fff', label: '0' };
+    if (pts <= 2)  return { bg: '#fd7e14', text: '#fff', label: String(pts) };
+    if (pts <= 5)  return { bg: '#ffc107', text: '#000', label: String(pts) };
+    if (pts <= 9)  return { bg: '#5cb85c', text: '#fff', label: String(pts) };
+    return              { bg: '#198754', text: '#fff', label: String(pts) };
+  };
+
   const lista = jugadores.map(p => ({
     id:         p.id,
     jugador_id: p.jugador_id,
@@ -842,6 +879,7 @@ ${seccionesHtml}
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
+                  {jornadasFormaP.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
                   {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j => j.lesionado)) && <th></th>}
                 </tr>
               </thead>
@@ -868,6 +906,29 @@ ${seccionesHtml}
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
+                      {jornadasFormaP.length > 0 && (
+                        <td style={{textAlign:'center'}}>
+                          <div style={{display:'inline-flex', gap:3}}>
+                            {jornadasFormaP.map(jn => {
+                              const pts = puntosHistorial[j.jugador_id]?.[jn];
+                              const c   = colorPtsP(pts);
+                              return (
+                                <span key={jn}
+                                      title={`J${jn}: ${pts !== undefined ? pts + ' pts' : 'sin datos'}`}
+                                      style={{
+                                        display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                        width:22, height:22, borderRadius:4,
+                                        background: c.bg, color: c.text,
+                                        fontSize:'.62rem', fontWeight:700,
+                                        fontVariantNumeric:'tabular-nums', flexShrink:0,
+                                      }}>
+                                  {c.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      )}
                       {(isActingAsAdmin || federacion?.ventas_habilitadas || lista.some(j2 => j2.lesionado)) && (
                         <td>
                           <div style={{display:'flex', flexDirection:'column', gap:'.3rem', alignItems:'flex-end'}}>
@@ -1286,7 +1347,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }, { data: lesData }] = await Promise.all([
-      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true),
+      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true).eq('baja', false),
       partIds.length
         ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
@@ -3656,6 +3717,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [enviandoOf, setEnviandoOf]   = useState(false);
   const [msgOferta, setMsgOferta]     = useState('');
   const [miPresupuesto, setMiPresupuesto] = useState(null);
+  const [puntosHistorial, setPuntosHistorial] = useState({}); // jugador_id → { jornada: pts }
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -3665,12 +3727,39 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     if (!equipoId || !sb) return;
     setJugadores(null);
     setPresupuesto(null);
-    sb.from('plantillas')
-      .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
-      .eq('participante_id', equipoId)
-      .then(({ data, error }) => setJugadores(error ? [] : (data || [])));
-    sb.from('participantes').select('presupuesto').eq('id', equipoId).single()
-      .then(({ data }) => setPresupuesto(data?.presupuesto ?? null));
+    setPuntosHistorial({});
+
+    const cargar = async () => {
+      const [{ data, error }, { data: presData }] = await Promise.all([
+        sb.from('plantillas')
+          .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
+          .eq('participante_id', equipoId),
+        sb.from('participantes').select('presupuesto').eq('id', equipoId).single(),
+      ]);
+      setJugadores(error ? [] : (data || []));
+      setPresupuesto(presData?.presupuesto ?? null);
+
+      // Cargar puntos de las últimas 5 jornadas completadas
+      const jugIds = (data || []).map(p => p.jugador_id).filter(Boolean);
+      const jActual = jornadaActual || 1;
+      const jornadasQ = [];
+      for (let i = 1; i <= 5; i++) { if (jActual - i >= 1) jornadasQ.push(jActual - i); }
+
+      if (jugIds.length && jornadasQ.length && federacion?.id) {
+        const { data: ptsData } = await sb.from('puntos_jugador')
+          .select('jugador_id, jornada, pts')
+          .eq('federacion_id', federacion.id)
+          .in('jugador_id', jugIds)
+          .in('jornada', jornadasQ);
+        const mapa = {};
+        for (const r of (ptsData || [])) {
+          if (!mapa[r.jugador_id]) mapa[r.jugador_id] = {};
+          mapa[r.jugador_id][r.jornada] = Number(r.pts);
+        }
+        setPuntosHistorial(mapa);
+      }
+    };
+    cargar();
   }, [equipoId]);
 
   useEffect(() => {
@@ -3761,6 +3850,21 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
       publicar(federacion?.id, 'perfil', `REBRANDING. El equipo "${oldNom}" pasa a llamarse "${newNom}". ¿Os gusta el cambio de nombre?`, nomEquipo);
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
+  };
+
+  // Jornadas a mostrar en la columna "Forma" (las más recientes primero)
+  const jActual = jornadaActual || 1;
+  const jornadasForma = [];
+  for (let i = 1; i <= 5; i++) { if (jActual - i >= 1) jornadasForma.push(jActual - i); }
+
+  const colorPts = (pts) => {
+    if (pts === undefined || pts === null) return { bg: 'var(--gris)', text: 'var(--texto2)', label: '—' };
+    if (pts < 0)  return { bg: '#7b1113', text: '#fff',  label: String(pts) };
+    if (pts === 0) return { bg: '#dc3545', text: '#fff',  label: '0' };
+    if (pts <= 2) return { bg: '#fd7e14', text: '#fff',  label: String(pts) };
+    if (pts <= 5) return { bg: '#ffc107', text: '#000',  label: String(pts) };
+    if (pts <= 9) return { bg: '#5cb85c', text: '#fff',  label: String(pts) };
+    return            { bg: '#198754', text: '#fff',  label: String(pts) };
   };
 
   const POS_ORDER_EQ = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
@@ -3971,6 +4075,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                   <th>Jugador</th><th>Pos</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
+                  {jornadasForma.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
                   {puedeOfrecer && <th></th>}
                 </tr>
               </thead>
@@ -3997,6 +4102,29 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                           className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
                         {dif >= 0 ? '+' : ''}{fmt(dif)}
                       </td>
+                      {jornadasForma.length > 0 && (
+                        <td style={{textAlign:'center'}}>
+                          <div style={{display:'inline-flex', gap:3}}>
+                            {jornadasForma.map(jn => {
+                              const pts = puntosHistorial[j.jugador_id]?.[jn];
+                              const c   = colorPts(pts);
+                              return (
+                                <span key={jn}
+                                      title={`J${jn}: ${pts !== undefined ? pts + ' pts' : 'sin datos'}`}
+                                      style={{
+                                        display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                        width:22, height:22, borderRadius:4,
+                                        background: c.bg, color: c.text,
+                                        fontSize:'.62rem', fontWeight:700,
+                                        fontVariantNumeric:'tabular-nums', flexShrink:0,
+                                      }}>
+                                  {c.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      )}
                       {puedeOfrecer && (
                         <td style={{textAlign:'right'}}>
                           <button onClick={() => { setModalOferta(j); setCantOferta(String((j.valor || 0) / 1_000_000)); setMsgOferta(''); }}
@@ -4102,6 +4230,22 @@ function getClasifColor(reglas, pos) {
   if (r.bg)   s.background = r.bg;
   if (r.text) s.color      = r.text;
   return s;
+}
+
+// Devuelve el jugador con posicion/posicion_alt efectivos para una federación.
+// overrides: mapa jugador_id → { posicion, posicion_alt } de jugadores_posicion_fed.
+// Si no hay override para el jugador, devuelve j sin cambios.
+function posEfec(j, overrides) {
+  const o = overrides?.[j.id];
+  if (!o) return j;
+  // posicion:     null en override → usar global
+  // posicion_alt: null en override → explícitamente eliminada para esta federación
+  //               (no caer al global; si no hay fila override, ya devolvemos j sin cambios)
+  return {
+    ...j,
+    posicion:     o.posicion ?? j.posicion,
+    posicion_alt: o.posicion_alt,
+  };
 }
 
 function renderMd(text) {
@@ -5093,18 +5237,25 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
   const [heredadaDe, setHeredadaDe]   = useState(null); // jornada de la que se hereda la alineación
+  const [posOverrides, setPosOverrides] = useState({});  // jugador_id → {posicion, posicion_alt} per-fed
 
   useEffect(() => {
     if (!sb || !participanteId) return;
-    sb.from('plantillas')
-      .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt)')
-      .eq('participante_id', participanteId)
-      .then(({ data }) => {
-        setLesionadosSet(new Set((data || []).filter(p => p.lesionado).map(p => p.jugador_id)));
-        const jugs = (data || []).map(p => p.jugadores).filter(Boolean);
-        jugs.sort((a, b) => POS_ORDEN[a.posicion] - POS_ORDEN[b.posicion]);
-        setPlantilla(jugs);
-      });
+    Promise.all([
+      sb.from('plantillas')
+        .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt)')
+        .eq('participante_id', participanteId),
+      sb.from('jugadores_posicion_fed')
+        .select('jugador_id, posicion, posicion_alt')
+        .eq('federacion_id', federacionId),
+    ]).then(([{ data }, { data: ovr }]) => {
+      const ovrMap = Object.fromEntries((ovr || []).map(o => [o.jugador_id, o]));
+      setPosOverrides(ovrMap);
+      setLesionadosSet(new Set((data || []).filter(p => p.lesionado).map(p => p.jugador_id)));
+      const jugs = (data || []).map(p => p.jugadores).filter(Boolean).map(j => posEfec(j, ovrMap));
+      jugs.sort((a, b) => POS_ORDEN[a.posicion] - POS_ORDEN[b.posicion]);
+      setPlantilla(jugs);
+    });
   }, [participanteId]);
 
   useEffect(() => {
@@ -5143,7 +5294,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 
       const idsPlantilla = new Set(plantilla.map(j => j.id));
       const cedidos = (cesData || [])
-        .map(c => c.jugadores ? { ...c.jugadores, _esCedido: true } : null)
+        .map(c => c.jugadores ? { ...posEfec(c.jugadores, posOverrides), _esCedido: true } : null)
         .filter(j => j && j.id && !idsPlantilla.has(j.id));
       setJugadoresCedidos(cedidos);
 
@@ -8239,14 +8390,16 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const [filtroNom, setFiltroNom]   = useState('');
   const [filtroEq, setFiltroEq]     = useState('');
   const [filtroLes, setFiltroLes]   = useState('');
+  const [verBaja, setVerBaja]       = useState(false);
   const [borrando, setBorrando]     = useState(null);
   const [propietarios, setPropietarios] = useState({});
 
   const cargarJugadores = async () => {
     const partIds = participantes.map(p => p.id);
-    const [{ data }, { data: pl }] = await Promise.all([
-      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado').order('equipo').order('nombre'),
+    const [{ data }, { data: pl }, { data: ovr }] = await Promise.all([
+      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, baja').order('equipo').order('nombre'),
       partIds.length ? sb.from('plantillas').select('jugador_id, participante_id, lesionado').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+      sb.from('jugadores_posicion_fed').select('jugador_id, posicion, posicion_alt').eq('federacion_id', federacion?.id),
     ]);
     const mapaLesion = {};
     const mapa = {};
@@ -8259,7 +8412,8 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
         mapaLesion[r.jugador_id] = r.lesionado;
       }
     }
-    setJugadores((data || []).map(j => ({ ...j, lesionado: mapaLesion[j.id] ?? false })));
+    const ovrMap = Object.fromEntries((ovr || []).map(o => [o.jugador_id, o]));
+    setJugadores((data || []).map(j => ({ ...posEfec(j, ovrMap), lesionado: mapaLesion[j.id] ?? false })));
     setPropietarios(mapa);
   };
 
@@ -8282,17 +8436,23 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   };
 
   const cambiarPosicion = async (j, nuevaPos) => {
-    const updates = { posicion: nuevaPos, posicion_alt: nuevaPos === j.posicion_alt ? null : j.posicion_alt };
-    const { error } = await sb.from('jugadores').update(updates).eq('id', j.id);
+    const posAltActual = nuevaPos === j.posicion_alt ? null : j.posicion_alt;
+    const { error } = await sb.from('jugadores_posicion_fed').upsert(
+      { federacion_id: federacion.id, jugador_id: j.id, posicion: nuevaPos, posicion_alt: posAltActual },
+      { onConflict: 'federacion_id,jugador_id' }
+    );
     if (error) { alert('Error: ' + error.message); return; }
     const nomJug = j.nombre;
     publicar(federacion?.id, 'admin', `${nomJug}: posición cambiada de ${j.posicion} a ${nuevaPos}.`, actorNombre);
-    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, posicion: nuevaPos, posicion_alt: updates.posicion_alt } : p));
+    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, posicion: nuevaPos, posicion_alt: posAltActual } : p));
   };
 
   const cambiarPosAlt = async (j, nuevaAlt) => {
     const val = nuevaAlt || null;
-    const { error } = await sb.from('jugadores').update({ posicion_alt: val }).eq('id', j.id);
+    const { error } = await sb.from('jugadores_posicion_fed').upsert(
+      { federacion_id: federacion.id, jugador_id: j.id, posicion_alt: val },
+      { onConflict: 'federacion_id,jugador_id' }
+    );
     if (error) { alert('Error: ' + error.message); return; }
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
     publicar(federacion?.id, 'admin',
@@ -8344,17 +8504,45 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   };
 
   const borrar = async (j) => {
-    if (!confirm(`¿Eliminar a "${j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.`)) return;
-    setBorrando(j.id);
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    if (!confirm(`¿Eliminar definitivamente a "${nomJug}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.\nSi tiene historial de puntos, usa "Dar de baja" en su lugar.`)) return;
+    setBorrando(j.id);
     const { error } = await sb.from('jugadores').delete().eq('id', j.id);
     setBorrando(null);
+    if (error) { alert('Error: ' + error.message + '\n\nSi el jugador tiene alineaciones históricas usa el botón "Dar de baja".'); return; }
+    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo}).`, actorNombre);
+    cargarJugadores();
+  };
+
+  const darDeBaja = async (j) => {
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    if (!confirm(`¿Dar de baja a "${nomJug}" (${j.equipo})?\nSe eliminará de plantillas y pujas activas.\nEl historial de puntos y alineaciones se conservará.`)) return;
+    setBorrando(j.id);
+    // 1. Marcar baja lógica
+    const { error } = await sb.from('jugadores').update({ baja: true }).eq('id', j.id);
+    if (error) { setBorrando(null); alert('Error: ' + error.message); return; }
+    // 2. Sacar de plantillas
+    await sb.from('plantillas').delete().eq('jugador_id', j.id);
+    // 3. Cancelar pujas activas
+    await sb.from('pujas').delete().eq('jugador_id', j.id).eq('resuelta', false);
+    // 4. Cancelar fichajes pendientes
+    await sb.from('fichajes_pendientes').delete().eq('jugador_id', j.id);
+    setBorrando(null);
+    publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) dado de baja de la liga.`, actorNombre);
+    cargarJugadores();
+  };
+
+  const reactivar = async (j) => {
+    const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
+    if (!confirm(`¿Reactivar a "${nomJug}"? Volverá a estar disponible en el mercado.`)) return;
+    const { error } = await sb.from('jugadores').update({ baja: false }).eq('id', j.id);
     if (error) { alert('Error: ' + error.message); return; }
-    publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo}) deja LaLiga.`, actorNombre);
+    publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) reactivado.`, actorNombre);
     cargarJugadores();
   };
 
   const listaFiltrada = (jugadores || []).filter(j => {
+    if (!verBaja && j.baja) return false;
     const nom = (j.posicion === 'POR' ? 'Portería ' + j.equipo : j.nombre).toLowerCase();
     if (!nom.includes(filtroNom.toLowerCase())) return false;
     if (!j.equipo.toLowerCase().includes(filtroEq.toLowerCase())) return false;
@@ -8449,6 +8637,13 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
               </button>
             ))}
           </div>
+          <button onClick={() => setVerBaja(v => !v)}
+                  style={{ padding:'.3rem .65rem', borderRadius:7, fontSize:'.8rem', fontWeight:600,
+                           border:'1.5px solid var(--borde)', cursor:'pointer',
+                           background: verBaja ? '#6c757d' : 'var(--fondo)',
+                           color: verBaja ? '#fff' : 'var(--texto2)' }}>
+            {verBaja ? '👁 Ocultando bajas' : '👁 Ver bajas'}
+          </button>
         </div>
         {jugadores === null
           ? <Spinner />
@@ -8461,8 +8656,9 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                 <tbody>
                   {listaFiltrada.map(j => (
                     <tr key={j.id}>
-                      <td style={{ fontWeight:600 }}>
+                      <td style={{ fontWeight:600, opacity: j.baja ? .55 : 1 }}>
                         {j.posicion === 'POR' ? <em style={{ color:'var(--texto2)' }}>Portería</em> : j.nombre}
+                        {j.baja && <span style={{ marginLeft:6, background:'#6c757d', color:'#fff', borderRadius:4, fontSize:'.7rem', padding:'1px 5px', fontWeight:700 }}>BAJA</span>}
                         {j.lesionado && <span style={{ marginLeft:6, background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.7rem', padding:'1px 5px', fontWeight:700 }}>LES</span>}
                       </td>
                       <td style={{ display:'flex', alignItems:'center', gap:6 }}>
@@ -8512,12 +8708,28 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                         }
                       </td>
                       <td style={{ textAlign:'right' }}>
-                        <button onClick={() => borrar(j)} disabled={borrando === j.id}
-                                style={{ background:'#dc3545', color:'#fff', border:'none',
-                                         padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
-                                         fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
-                          {borrando === j.id ? '…' : 'Eliminar'}
-                        </button>
+                        <div style={{ display:'flex', gap:'.35rem', justifyContent:'flex-end' }}>
+                          {j.baja
+                            ? <button onClick={() => reactivar(j)}
+                                      style={{ background:'var(--verde)', color:'#fff', border:'none',
+                                               padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                               fontSize:'.8rem', fontWeight:600 }}>
+                                Reactivar
+                              </button>
+                            : <button onClick={() => darDeBaja(j)} disabled={borrando === j.id}
+                                      style={{ background:'#6c757d', color:'#fff', border:'none',
+                                               padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                               fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
+                                {borrando === j.id ? '…' : 'Dar de baja'}
+                              </button>
+                          }
+                          <button onClick={() => borrar(j)} disabled={borrando === j.id}
+                                  style={{ background:'#dc3545', color:'#fff', border:'none',
+                                           padding:'.28rem .7rem', borderRadius:7, cursor:'pointer',
+                                           fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
+                            {borrando === j.id ? '…' : 'Eliminar'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -8574,7 +8786,7 @@ function Cesiones({ federacion, miParticipanteId, miNombre }) {
     for (const p of [...(ces || []), ...(pl || []), ...(pend || [])]) ocupados.add(p.jugador_id);
     const { data: jugs } = await sb.from('jugadores')
       .select('id, nombre, equipo, posicion, valor_mercado')
-      .eq('activo', true)
+      .eq('activo', true).eq('baja', false)
       .order('nombre');
     setJugadoresLibres((jugs || []).filter(j => j.posicion !== 'POR' && !ocupados.has(j.id)));
     setCargandoMercado(false);
@@ -8961,7 +9173,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
   const cargar = async () => {
     setCargando(true);
     const partIds = participantes.map(p => p.id);
-    const [{ data: alis }, { data: njData }] = await Promise.all([
+    const [{ data: alisDirectas }, { data: njData }, { data: ovr }] = await Promise.all([
       sb.from('alineaciones')
         .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, equipo, posicion, posicion_alt)')
         .eq('jornada', jornada)
@@ -8970,12 +9182,45 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
         .select('jugador_id')
         .eq('federacion_id', federacionId)
         .eq('jornada', jornada),
+      sb.from('jugadores_posicion_fed')
+        .select('jugador_id, posicion, posicion_alt')
+        .eq('federacion_id', federacionId),
     ]);
 
+    // Equipos sin alineación guardada esta jornada → buscar fallback en jornadas anteriores
+    const partsConAli = new Set((alisDirectas || []).map(a => a.participante_id));
+    const partsSinAli = partIds.filter(id => !partsConAli.has(id));
+    let alisFallback = [];
+    if (partsSinAli.length > 0 && jornada > 1) {
+      // 1. Obtener la jornada más reciente guardada por cada equipo sin alineación
+      const { data: refData } = await sb.from('alineaciones')
+        .select('participante_id, jornada')
+        .lt('jornada', jornada)
+        .in('participante_id', partsSinAli)
+        .order('jornada', { ascending: false });
+      // Tomar solo la jornada más reciente por participante
+      const ultimaJornada = {};
+      for (const r of (refData || [])) {
+        if (!ultimaJornada[r.participante_id]) ultimaJornada[r.participante_id] = r.jornada;
+      }
+      // 2. Cargar las alineaciones de esa jornada para cada equipo (en paralelo)
+      const fallbackResults = await Promise.all(
+        Object.entries(ultimaJornada).map(([partId, jRef]) =>
+          sb.from('alineaciones')
+            .select('jugador_id, participante_id, orden_suplente, es_titular, posicion_usada, jugadores(id, nombre, equipo, posicion, posicion_alt)')
+            .eq('participante_id', partId)
+            .eq('jornada', jRef)
+        )
+      );
+      for (const { data } of fallbackResults) alisFallback = alisFallback.concat(data || []);
+    }
+
+    const alis = [...(alisDirectas || []), ...alisFallback];
+    const ovrMap = Object.fromEntries((ovr || []).map(o => [o.jugador_id, o]));
     const mapa = {};
-    for (const a of (alis || [])) { if (a.jugadores) mapa[a.jugador_id] = a.jugadores; }
+    for (const a of alis) { if (a.jugadores) mapa[a.jugador_id] = posEfec(a.jugadores, ovrMap); }
     setJugMap(mapa);
-    setAlisData(alis || []);
+    setAlisData(alis);
 
     // Candidatos marcables como "no jugó": titulares Y suplentes (los
     // porteros se gestionan aparte, ver nota en el render de abajo).

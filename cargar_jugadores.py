@@ -98,10 +98,17 @@ def main():
     existentes = sb.table("jugadores").select("id", count="exact").execute()
     n_existentes = existentes.count or 0
 
+    bajas_guardadas = set()  # (nombre, equipo) de jugadores con baja=True
+
     if n_existentes > 0:
         print(f"\nLa tabla ya tiene {n_existentes} jugadores.")
         resp = input("Borrar y recargar desde cero? [s/N]: ").strip().lower()
         if resp == "s":
+            # Preservar jugadores dados de baja antes de vaciar
+            res_bajas = sb.table("jugadores").select("nombre, equipo").eq("baja", True).execute()
+            bajas_guardadas = {(r["nombre"], r["equipo"]) for r in (res_bajas.data or [])}
+            if bajas_guardadas:
+                print(f"  Guardando {len(bajas_guardadas)} jugadores dados de baja...")
             sb.table("jugadores").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
             print("  Tabla vaciada.")
         else:
@@ -120,6 +127,22 @@ def main():
         print(f"  Bloque {i//BLOQUE + 1}: {len(bloque)} jugadores subidos")
 
     print(f"\nTotal cargado en Supabase: {total_ok} jugadores")
+
+    # Restaurar bajas (preservadas antes del vaciado)
+    if bajas_guardadas:
+        res_todos = sb.table("jugadores").select("id, nombre, equipo").execute()
+        ids_baja = [
+            r["id"] for r in (res_todos.data or [])
+            if (r["nombre"], r["equipo"]) in bajas_guardadas
+        ]
+        if ids_baja:
+            for jid in ids_baja:
+                sb.table("jugadores").update({"baja": True}).eq("id", jid).execute()
+            print(f"  Bajas restauradas: {len(ids_baja)} jugadores.")
+        bajas_perdidas = len(bajas_guardadas) - len(ids_baja)
+        if bajas_perdidas:
+            print(f"  Aviso: {bajas_perdidas} jugadores dados de baja ya no están en el nuevo dataset.")
+
     print("Listo. Ya puedes cargar participantes y plantillas.")
 
 

@@ -388,7 +388,6 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [liberarSel, setLiberarSel]         = useState({});   // pendiente_id → jugador_id
   const [procesandoPend, setProcesandoPend] = useState(null);
   const [msgPend, setMsgPend]               = useState('');
-  const [escudoUrl, setEscudoUrl]           = useState(null);
   const [subtabPlantilla, setSubtabPlantilla] = useState('plantilla');
   const [modalSustituto, setModalSustituto]   = useState(null);
   const [jugadoresLibres, setJugadoresLibres] = useState(null);
@@ -400,7 +399,6 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
   const [editModal, setEditModal]             = useState(false);
   const [editForm, setEditForm]               = useState({});
   const [editMsg, setEditMsg]                 = useState('');
-  const [subiendoEscudo, setSubiendoEscudo]   = useState(false);
   const [perfilActual, setPerfilActual]       = useState({});
   const [puntosHistorial, setPuntosHistorial] = useState({});
 
@@ -412,15 +410,14 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
       sb.from('plantillas')
         .select('id, jugador_id, precio_compra, fecha_fichaje, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
         .eq('participante_id', participanteId),
-      sb.from('participantes').select('presupuesto, escudo_url, sustituciones_lesion, nombre, estadio, entrenador').eq('id', participanteId).single(),
+      sb.from('participantes').select('presupuesto, sustituciones_lesion, nombre, estadio, entrenador').eq('id', participanteId).single(),
     ]);
     if (error) { console.error(error); setJugadores([]); }
     else setJugadores(pl || []);
     if (pres) {
       setPresupuesto(pres.presupuesto);
-      setEscudoUrl(pres.escudo_url || null);
       setSustLesion(pres.sustituciones_lesion || 0);
-      setPerfilActual({ nombre: pres.nombre || '', estadio: pres.estadio || '', entrenador: pres.entrenador || '', escudo_url: pres.escudo_url || '' });
+      setPerfilActual({ nombre: pres.nombre || '', estadio: pres.estadio || '', entrenador: pres.entrenador || '' });
     }
 
     // Fichajes pendientes — intenta con traspaso_de_id, fallback si columna no existe aún
@@ -565,28 +562,13 @@ ${seccionesHtml}
     setEditModal(true);
   };
 
-  const subirEscudo = async (file) => {
-    setSubiendoEscudo(true);
-    const ext = file.name.split('.').pop();
-    const path = `${participanteId}/${Date.now()}.${ext}`;
-    const { error: upErr } = await sb.storage
-      .from('escudos-participantes')
-      .upload(path, file, { upsert: true, contentType: file.type });
-    if (upErr) { alert('Error subiendo escudo: ' + upErr.message); setSubiendoEscudo(false); return; }
-    const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
-    await sb.from('participantes').update({ escudo_url: publicUrl }).eq('id', participanteId);
-    setEditForm(f => ({ ...f, escudo_url: publicUrl }));
-    setEscudoUrl(publicUrl);
-    setSubiendoEscudo(false);
-  };
-
   const guardarPerfil = async () => {
     if (!sb || !participanteId) return;
     const newNom = editForm.nombre.trim();
     const newEst = editForm.estadio.trim();
     const newEnt = editForm.entrenador.trim();
     const { error } = await sb.from('participantes')
-      .update({ nombre: newNom, estadio: newEst, entrenador: newEnt, escudo_url: editForm.escudo_url.trim() })
+      .update({ nombre: newNom, estadio: newEst, entrenador: newEnt })
       .eq('id', participanteId);
     if (error) { setEditMsg('Error: ' + error.message); return; }
     const nomEquipo = newNom || perfilActual.nombre;
@@ -602,7 +584,7 @@ ${seccionesHtml}
       , nomEquipo);
     if (newNom && newNom !== perfilActual.nombre)
       publicar(federacion?.id, 'perfil', `REBRANDING. El equipo "${perfilActual.nombre}" pasa a llamarse "${newNom}".`, nomEquipo);
-    setPerfilActual({ nombre: newNom, estadio: newEst, entrenador: newEnt, escudo_url: editForm.escudo_url.trim() });
+    setPerfilActual({ nombre: newNom, estadio: newEst, entrenador: newEnt });
     onPerfilUpdate && onPerfilUpdate();
     setEditMsg('Guardado');
     setTimeout(() => { setEditModal(false); setEditMsg(''); }, 1200);
@@ -803,11 +785,6 @@ ${seccionesHtml}
       )}
       {subtabPlantilla === 'plantilla' && <>
       <div className="card" style={{display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'center'}}>
-        {escudoUrl && (
-          <img src={escudoUrl} alt="Escudo"
-               style={{width:64, height:64, objectFit:'contain', borderRadius:8,
-                       border:'1.5px solid var(--borde)', flexShrink:0}} />
-        )}
         <div>
           <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
           <div style={{fontSize:'1.4rem', fontWeight:800, color: presupuestoDisplay < 0 ? '#dc3545' : 'var(--verde)'}}>
@@ -1127,22 +1104,6 @@ ${seccionesHtml}
                 <input value={editForm.estadio || ''} onChange={e => setEditForm(f => ({...f, estadio: e.target.value}))}
                        placeholder="Nombre del estadio" style={{width:'100%'}} />
               </div>
-              <div className="campo">
-                <label>Escudo</label>
-                <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
-                  {editForm.escudo_url && (
-                    <img src={editForm.escudo_url} alt="Escudo"
-                         style={{width:48, height:48, objectFit:'contain', borderRadius:6,
-                                 border:'1.5px solid var(--borde)', flexShrink:0}} />
-                  )}
-                  <label style={{cursor:'pointer', background:'var(--fondo)', border:'1.5px solid var(--borde)',
-                                 borderRadius:8, padding:'.35rem .8rem', fontSize:'.85rem', fontWeight:600}}>
-                    {subiendoEscudo ? 'Subiendo…' : 'Subir imagen'}
-                    <input type="file" accept="image/*" style={{display:'none'}}
-                           onChange={e => e.target.files[0] && subirEscudo(e.target.files[0])} />
-                  </label>
-                </div>
-              </div>
               {editMsg && (
                 <div style={{color: editMsg === 'Guardado' ? 'var(--verde)' : '#dc3545',
                              fontSize:'.88rem', fontWeight:600, marginBottom:'.5rem'}}>
@@ -1151,7 +1112,7 @@ ${seccionesHtml}
               )}
               <div className="modal-btns">
                 <button className="btn-cancel" onClick={() => setEditModal(false)}>Cancelar</button>
-                <button className="btn-ok" onClick={guardarPerfil} disabled={subiendoEscudo}>Guardar</button>
+                <button className="btn-ok" onClick={guardarPerfil}>Guardar</button>
               </div>
             </div>
           </div>
@@ -1397,7 +1358,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     const partIds = (participantes || []).map(p => p.id);
     if (!partIds.length) { setEscogidos([]); return; }
     const { data } = await sb.from('plantillas')
-      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre, escudo_url), lesionado')
+      .select('jugadores(id, nombre, equipo, posicion, valor_mercado), participantes(nombre), lesionado')
       .in('participante_id', partIds);
     const POS_ORDEN = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
     setEscogidos((data || [])
@@ -1405,7 +1366,6 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       .map(r => ({
         jugador: r.jugadores,
         equipo_fantasy: r.participantes?.nombre || '—',
-        escudo_fantasy: r.participantes?.escudo_url || null,
         lesionado: r.lesionado || false,
       }))
       .sort((a, b) =>
@@ -2625,7 +2585,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   useEffect(() => { setAbierto(null); }, [jornada]);
 
   const filasJornada = [...participantes].map(p => ({
-    id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
+    id: p.id, nombre: p.nombre,
     pts: clas.find(r => r.participante_id === p.id && r.jornada === jornada)?.puntos_jornada ?? null,
   })).sort((a, b) => (b.pts ?? -1) - (a.pts ?? -1));
 
@@ -2683,7 +2643,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
       const regs = clasFiltradas.filter(r => r.participante_id === p.id);
       const scores = regs.map(r => r.puntos_jornada).sort((a, b) => b - a);
       return {
-        id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
+        id: p.id, nombre: p.nombre,
         total: regs.reduce((s, r) => s + r.puntos_jornada, 0),
         jornadas: regs.length, scores,
         jGanadas: j1MapLocal[p.id] || 0,
@@ -2716,7 +2676,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
     const minPts = Math.min(...scores);
     const regMax = regs.find(r => r.puntos_jornada === maxPts);
     return {
-      id: p.id, nombre: p.nombre, escudo_url: p.escudo_url || null,
+      id: p.id, nombre: p.nombre,
       n, total, media, stddev, maxPts, minPts,
       jornadaMax: regMax?.jornada ?? null,
       j1: jPos1Map[p.id] || 0,
@@ -2734,7 +2694,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
     .map(r => ({
       ...r,
       nombre:     participantes.find(p => p.id === r.participante_id)?.nombre     || '—',
-      escudo_url: participantes.find(p => p.id === r.participante_id)?.escudo_url || null,
     }));
 
   const btnJornada = (j) => ({
@@ -2876,7 +2835,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                       <td><Medalla pos={i + 1} /></td>
                       <td style={{fontWeight:600}}>
                         <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                          {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:20, height:20, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                           {abierto===e.id ? '▾ ' : '▸ '}{e.nombre}
                         </span>
                       </td>
@@ -2941,7 +2899,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                           <td><Medalla pos={i + 1} /></td>
                           <td style={{fontWeight:600}}>
                             <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                              {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:20, height:20, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                               {e.nombre}
                             </span>
                           </td>
@@ -2990,7 +2947,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                         <tr key={e.id}>
                           <td style={{fontWeight:600}}>
                             <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                              {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                               {e.nombre}
                             </span>
                           </td>
@@ -3034,7 +2990,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                           <tr key={e.id}>
                             <td style={{fontWeight:600}}>
                               <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                                {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                                 {e.nombre}
                               </span>
                             </td>
@@ -3080,7 +3035,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                             </td>
                             <td style={{fontWeight:600}}>
                               <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                                {r.escudo_url && <img src={r.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                                 {r.nombre}
                               </span>
                             </td>
@@ -3711,7 +3665,6 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [editModal, setEditModal]     = useState(false);
   const [editForm, setEditForm]       = useState({});
   const [editMsg, setEditMsg]         = useState('');
-  const [subiendoEscudo, setSubiendoEscudo] = useState(false);
   const [modalOferta, setModalOferta] = useState(null); // { jugador_id, nombre, posicion, equipo, valor }
   const [cantOferta, setCantOferta]   = useState('');
   const [enviandoOf, setEnviandoOf]   = useState(false);
@@ -3800,25 +3753,9 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const equipo = participantes.find(p => p.id === equipoId);
 
   const abrirEditar = () => {
-    setEditForm({ nombre: equipo?.nombre || '', estadio: equipo?.estadio || '', entrenador: equipo?.entrenador || '', escudo_url: equipo?.escudo_url || '' });
+    setEditForm({ nombre: equipo?.nombre || '', estadio: equipo?.estadio || '', entrenador: equipo?.entrenador || '' });
     setEditMsg('');
     setEditModal(true);
-  };
-
-  const subirEscudoEquipo = async (file) => {
-    setSubiendoEscudo(true);
-    const ext  = file.name.split('.').pop();
-    const path = `${equipoId}/${Date.now()}.${ext}`;
-    const { error: upErr } = await sb.storage
-      .from('escudos-participantes')
-      .upload(path, file, { upsert: true, contentType: file.type });
-    if (upErr) { alert('Error subiendo escudo: ' + upErr.message); setSubiendoEscudo(false); return; }
-    const { data: { publicUrl } } = sb.storage.from('escudos-participantes').getPublicUrl(path);
-    await sb.from('participantes').update({ escudo_url: publicUrl }).eq('id', equipoId);
-    setEditForm(f => ({ ...f, escudo_url: publicUrl }));
-    publicar(federacion?.id, 'perfil', `${equipo?.nombre || 'Un equipo'} estrena nuevo escudo.`, equipo?.nombre);
-    setSubiendoEscudo(false);
-    onParticipantesChange && onParticipantesChange();
   };
 
   const guardarPerfil = async () => {
@@ -3830,7 +3767,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     const oldEst  = equipo?.estadio?.trim() || '';
     const newEst  = editForm.estadio.trim();
     const { data, error } = await sb.from('participantes')
-      .update({ nombre: newNom, estadio: newEst, entrenador: newEnt, escudo_url: editForm.escudo_url.trim() })
+      .update({ nombre: newNom, estadio: newEst, entrenador: newEnt })
       .eq('id', equipoId).select().single();
     if (error) { setEditMsg('Error: ' + error.message); return; }
     onParticipantesChange && onParticipantesChange();
@@ -3919,7 +3856,6 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
               className={`tab ${equipoId === p.id ? 'active' : ''}`}
               onClick={() => setEquipoId(p.id)}>
               <span style={{display:'inline-flex', alignItems:'center', gap:'.3rem'}}>
-                {p.escudo_url && <img src={p.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                 {p.nombre}{p.id === miParticipanteId ? ' (tú)' : ''}
               </span>
             </button>
@@ -3929,11 +3865,6 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
 
       {equipo && (
         <div className="card" style={{display:'flex', gap:'1.5rem', flexWrap:'wrap', alignItems:'flex-start'}}>
-          {equipo.escudo_url && (
-            <img src={equipo.escudo_url} alt="Escudo"
-                 style={{width:72, height:72, borderRadius:10, objectFit:'cover',
-                         border:'1.5px solid var(--borde)', flexShrink:0}} />
-          )}
           <div style={{flex:1, display:'flex', gap:'2rem', flexWrap:'wrap', alignItems:'flex-end'}}>
             <div>
               <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.2rem'}}>Presupuesto disponible</div>
@@ -3986,41 +3917,6 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                        onChange={e => setEditForm(f => ({...f, [campo]: e.target.value}))} />
               </div>
             ))}
-            <div className="campo">
-              <label>Escudo del equipo</label>
-              <div style={{display:'flex', alignItems:'center', gap:'.75rem', marginTop:'.25rem'}}>
-                {editForm.escudo_url
-                  ? <img src={editForm.escudo_url} alt="Escudo"
-                         style={{width:52, height:52, objectFit:'contain', borderRadius:7,
-                                 border:'1.5px solid var(--borde)', flexShrink:0}} />
-                  : <div style={{width:52, height:52, borderRadius:7, border:'2px dashed var(--borde)',
-                                 display:'flex', alignItems:'center', justifyContent:'center',
-                                 color:'var(--texto2)', fontSize:'.6rem', textAlign:'center',
-                                 lineHeight:1.2, flexShrink:0}}>
-                      Sin<br/>escudo
-                    </div>
-                }
-                <div style={{display:'flex', flexDirection:'column', gap:'.3rem'}}>
-                  <label style={{cursor: subiendoEscudo ? 'wait' : 'pointer',
-                                 padding:'.3rem .75rem', borderRadius:7,
-                                 border:'1.5px solid var(--borde)', background:'var(--fondo)',
-                                 fontSize:'.8rem', fontWeight:600, textAlign:'center'}}>
-                    {subiendoEscudo ? 'Subiendo…' : editForm.escudo_url ? 'Cambiar imagen' : 'Subir imagen'}
-                    <input type="file" accept="image/*" style={{display:'none'}}
-                           disabled={subiendoEscudo}
-                           onChange={e => { if (e.target.files[0]) subirEscudoEquipo(e.target.files[0]); e.target.value=''; }} />
-                  </label>
-                  {editForm.escudo_url && (
-                    <button onClick={() => setEditForm(f => ({...f, escudo_url: ''}))}
-                            style={{padding:'.3rem .75rem', borderRadius:7,
-                                    border:'1.5px solid #dc3545', background:'var(--fondo)',
-                                    color:'#dc3545', cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
-                      Quitar
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
             {editMsg && <div style={{color: editMsg.startsWith('Error') ? '#dc3545' : '#198754', fontSize:'.85rem', marginBottom:'.5rem'}}>{editMsg}</div>}
             <div style={{display:'flex', gap:'.75rem', marginTop:'.5rem'}}>
               <button className="btn-cancel" onClick={() => setEditModal(false)}>Cancelar</button>
@@ -4984,9 +4880,6 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
   const [entrenador, setEntrenador]     = useState('');
   const [divisionId, setDivisionId]     = useState('');
   const [divisiones, setDivisiones]     = useState([]);
-  const [escudoFile, setEscudoFile]     = useState(null);
-  const [escudoPreview, setEscudoPreview] = useState(null);
-
   const [error, setError]     = useState('');
   const [cargando, setCargando] = useState(false);
 
@@ -5034,24 +4927,12 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
     if (!fedActual)           return;
     setCargando(true); setError('');
 
-    let escudo_url = null;
-    if (escudoFile) {
-      const path = `${fedActual.id}/${user.id}`;
-      const { error: errUp } = await sb.storage
-        .from('escudos').upload(path, escudoFile, { upsert: true, contentType: escudoFile.type });
-      if (!errUp) {
-        const { data: urlData } = sb.storage.from('escudos').getPublicUrl(path);
-        escudo_url = urlData.publicUrl;
-      }
-    }
-
     const { error: errPart } = await sb.from('participantes').insert({
       nombre:       nombreEquipo.trim(),
       division_id:  Number(divisionId),
       user_id:      user.id,
       federacion_id: fedActual.id,
       presupuesto:  fedActual.presupuesto_inicial ?? 100000000,
-      escudo_url,
       estadio:      estadio.trim()    || null,
       entrenador:   entrenador.trim() || null,
     });
@@ -5164,27 +5045,6 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
           <label>Nombre del equipo *</label>
           <input value={nombreEquipo} onChange={e => setNombreEquipo(e.target.value)}
                  placeholder="Ej: Los Galácticos" autoFocus />
-        </div>
-
-        <div className="campo">
-          <label>Escudo del equipo</label>
-          <div style={{display:'flex', alignItems:'center', gap:'1rem'}}>
-            {escudoPreview
-              ? <img src={escudoPreview} alt="Escudo"
-                     style={{width:56, height:56, borderRadius:8, objectFit:'cover',
-                             border:'1.5px solid var(--borde)', flexShrink:0}} />
-              : <div style={{width:56, height:56, borderRadius:8, background:'var(--gris)',
-                             border:'1.5px dashed var(--borde)', flexShrink:0}} />
-            }
-            <input type="file" accept="image/*"
-                   onChange={e => {
-                     const f = e.target.files[0];
-                     if (!f) return;
-                     setEscudoFile(f);
-                     setEscudoPreview(URL.createObjectURL(f));
-                   }}
-                   style={{fontSize:'.85rem'}} />
-          </div>
         </div>
 
         <div className="campo">
@@ -6805,7 +6665,6 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [nuevoEq, setNuevoEq]     = useState({ nombre:'', estadio:'', entrenador:'' });
   const [msgEq, setMsgEq]         = useState('');
   const [eliminando, setEliminando] = useState(null);
-  const [subiendo, setSubiendo]   = useState(false);
 
   const [mods, setMods]       = useState([]);   // [{id, participante_id}]
   const [selMod, setSelMod]   = useState('');
@@ -6972,83 +6831,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     setTimeout(() => setMsgComodin(''), 2500);
   };
 
-  const subirLogo = async (file) => {
-    if (!file || !sb || !federacion) return;
-    setSubiendo(true);
-    const ext  = file.name.split('.').pop().toLowerCase();
-    const path = `${federacion.id}/logo.${ext}`;
-    const { error: upErr } = await sb.storage
-      .from('logos-federacion')
-      .upload(path, file, { upsert: true, contentType: file.type });
-    if (upErr) { alert('Error al subir imagen: ' + upErr.message); setSubiendo(false); return; }
-    const { data: { publicUrl } } = sb.storage.from('logos-federacion').getPublicUrl(path);
-    // Añadir timestamp para forzar refresco de caché del navegador
-    const urlFinal = publicUrl + '?t=' + Date.now();
-    const { error, data } = await sb.from('federaciones')
-      .update({ logo_url: urlFinal })
-      .eq('id', federacion.id).select().single();
-    if (error) { alert('Error: ' + error.message); setSubiendo(false); return; }
-    onFederacionUpdate(data);
-    publicar(federacion.id, 'admin', 'El logo de la federación ha sido actualizado.', actorNombre);
-    setSubiendo(false);
-    setMsg('Logo actualizado');
-    setTimeout(() => setMsg(''), 3000);
-  };
-
-  const quitarLogo = async () => {
-    if (!sb || !federacion) return;
-    const { error, data } = await sb.from('federaciones')
-      .update({ logo_url: null })
-      .eq('id', federacion.id).select().single();
-    if (error) { alert('Error: ' + error.message); return; }
-    onFederacionUpdate(data);
-    publicar(federacion.id, 'admin', 'El logo de la federación ha sido eliminado.', actorNombre);
-    setMsg('Logo eliminado');
-    setTimeout(() => setMsg(''), 3000);
-  };
-
   return (
     <>
     <div className="card">
       <h2>Mi Federación</h2>
-
-      {/* ── Logo de la federación ── */}
-      <div style={{marginBottom:'1.25rem'}}>
-        <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.5rem', fontWeight:600}}>
-          Logo de la liga
-        </div>
-        <div style={{display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
-          {federacion?.logo_url
-            ? <img src={federacion.logo_url} alt="Logo"
-                   style={{height:56, maxWidth:120, objectFit:'contain',
-                           border:'1.5px solid var(--borde)', borderRadius:8, padding:4, background:'var(--fondo-alt)'}} />
-            : <div style={{height:56, width:56, borderRadius:8, border:'1.5px dashed var(--borde)',
-                           display:'flex', alignItems:'center', justifyContent:'center',
-                           fontSize:'.75rem', color:'var(--texto2)'}}>Sin logo</div>
-          }
-          <div style={{display:'flex', flexDirection:'column', gap:'.4rem'}}>
-            <label style={{display:'inline-block', padding:'.35rem .9rem', borderRadius:8,
-                           border:'1.5px solid var(--verde)', background:'var(--fondo-alt)', color:'var(--verde)',
-                           cursor: subiendo ? 'wait' : 'pointer', fontWeight:600, fontSize:'.85rem',
-                           opacity: subiendo ? .6 : 1}}>
-              {subiendo ? 'Subiendo…' : 'Subir imagen'}
-              <input type="file" accept="image/*" style={{display:'none'}} disabled={subiendo}
-                     onChange={e => { if (e.target.files[0]) subirLogo(e.target.files[0]); e.target.value = ''; }} />
-            </label>
-            {federacion?.logo_url && (
-              <button onClick={quitarLogo}
-                      style={{padding:'.3rem .75rem', borderRadius:8, border:'1.5px solid #d93025',
-                              background:'var(--fondo-alt)', color:'#d93025', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
-                Quitar logo
-              </button>
-            )}
-          </div>
-          <div style={{fontSize:'.78rem', color:'var(--texto2)'}}>
-            Se mostrará en la esquina superior izquierda.<br/>
-            Formatos: PNG, JPG, SVG. Recomendado: fondo transparente.
-          </div>
-        </div>
-      </div>
 
       <div style={{background:'var(--gris)', borderRadius:10, padding:'1rem 1.25rem', marginBottom:'1.25rem'}}>
         <div style={{fontSize:'.82rem', color:'var(--texto2)', marginBottom:'.35rem', fontWeight:600}}>
@@ -10192,9 +9978,7 @@ function SelectorFederacion({ misParticipantes, adminFeds, authUser, onSeleccion
                      onClick={() => onSeleccionar(p, fed)}>
                   <div style={{width:52, height:52, flexShrink:0, borderRadius:10, overflow:'hidden',
                                background:'var(--borde)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-                    {p.escudo_url
-                      ? <img src={p.escudo_url} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="" />
-                      : <span style={{fontSize:'1.5rem'}}>⚽</span>}
+                    <span style={{fontSize:'1.5rem'}}>⚽</span>
                   </div>
                   <div style={{flex:1, minWidth:0}}>
                     <div style={{fontWeight:700, fontSize:'1rem', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
@@ -10301,7 +10085,6 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
   const Equipo = ({pid}) => {
     const p=nomMap[pid];
     return (<span style={{display:'inline-flex',alignItems:'center',gap:'.3rem'}}>
-      {p?.escudo_url&&<img src={p.escudo_url} alt="" style={{width:15,height:15,objectFit:'contain'}} />}
       <span>{p?.nombre||'?'}</span>
     </span>);
   };
@@ -10444,7 +10227,6 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                           <tr key={row.pid} style={{borderTop:'1px solid var(--gris)', ...getClasifColor(federacion?.clasif_colores?.['grupos_' + compSel] || federacion?.clasif_colores?.grupos, i + 1)}}>
                             <td style={{padding:'.38rem .5rem',fontWeight:i===0?700:400}}>
                               <span style={{display:'inline-flex',alignItems:'center',gap:'.35rem'}}>
-                                {p?.escudo_url&&<img src={p.escudo_url} alt="" style={{width:15,height:15,objectFit:'contain'}} />}
                                 {p?.nombre||row.pid}
                               </span>
                             </td>
@@ -10597,7 +10379,7 @@ function App() {
     // Cargar TODOS los participantes del usuario
     const [{ data: parts }, { data: adminFedData }] = await Promise.all([
       sb.from('participantes')
-        .select('id, nombre, federacion_id, presupuesto, division_id, escudo_url')
+        .select('id, nombre, federacion_id, presupuesto, division_id')
         .eq('user_id', user.id).order('created_at'),
       sb.from('federaciones').select('*').eq('admin_user_id', user.id),
     ]);
@@ -10650,7 +10432,7 @@ function App() {
   const recargarParticipantes = async () => {
     if (!sb || !federacion?.id) { setParticipantes([]); return; }
     const { data } = await sb.from('participantes')
-      .select('id, nombre, division_id, escudo_url, estadio, entrenador, user_id')
+      .select('id, nombre, division_id, estadio, entrenador, user_id')
       .eq('federacion_id', federacion.id)
       .order('nombre');
     const lista = data || [];
@@ -10743,11 +10525,7 @@ function App() {
     <>
       <nav>
         <h1>
-          {federacion?.logo_url
-            ? <img src={federacion.logo_url} alt={federacion.nombre || ''}
-                   style={{height:38, maxWidth:120, objectFit:'contain', display:'block'}} />
-            : (federacion?.nombre || 'Fantasy LaLiga')
-          }
+          {federacion?.nombre || 'Fantasy LaLiga'}
         </h1>
         {VISTAS.map(v => (
           <button key={v} className={vista === v ? 'active' : ''} onClick={() => navegarA(v)}
@@ -10896,7 +10674,6 @@ function PosHistorialTable({ rows }) {
             <tr key={e.id}>
               <td style={{fontWeight:600}}>
                 <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                  {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
                   {e.nombre}
                 </span>
               </td>
@@ -10964,7 +10741,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       : participantes;
     const stats = {};
     equips.forEach(p => {
-      stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+      stats[p.id] = { id: p.id, nombre: p.nombre,
                       pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
     });
     const msBase = divId ? partidos.filter(m => m.division_id === divId) : partidos;
@@ -11061,7 +10838,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
     const stats  = {};
     equips.forEach(p => {
-      stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+      stats[p.id] = { id: p.id, nombre: p.nombre,
                       pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
     });
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
@@ -11095,7 +10872,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     const equips   = divId ? participantes.filter(p => p.division_id === divId) : participantes;
     const stats    = {};
     equips.forEach(p => {
-      stats[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+      stats[p.id] = { id: p.id, nombre: p.nombre,
                       pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
     });
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
@@ -11132,7 +10909,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     )].sort((a, b) => a - b);
 
     const cnt = {};
-    equips.forEach(p => { cnt[p.id] = { id: p.id, nombre: p.nombre, escudo_url: p.escudo_url,
+    equips.forEach(p => { cnt[p.id] = { id: p.id, nombre: p.nombre,
                                          j1:0, jpodio:0, jult:0, jult3:0 }; });
 
     jugadas.forEach(jEnd => {
@@ -11171,7 +10948,6 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                    padding:'.5rem .75rem', borderRadius:8,
                    background:'var(--gris)', marginBottom:'.35rem'}}>
         <div style={{display:'flex', alignItems:'center', gap:'.4rem', justifyContent:'flex-end'}}>
-          {L.escudo_url && <img src={L.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
           <span style={{fontWeight: lGana ? 800 : 600, fontSize:'.88rem',
                         color: lGana ? 'var(--verde)' : 'var(--texto)'}}>{L.nombre || '—'}</span>
         </div>
@@ -11183,7 +10959,6 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
         <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
           <span style={{fontWeight: vGana ? 800 : 600, fontSize:'.88rem',
                         color: vGana ? 'var(--verde)' : 'var(--texto)'}}>{V.nombre || '—'}</span>
-          {V.escudo_url && <img src={V.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3, flexShrink:0}} />}
         </div>
       </div>
     );
@@ -11217,7 +10992,6 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                 <td><Medalla pos={i + 1} /></td>
                 <td style={{fontWeight:600}}>
                   <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                    {e.escudo_url && <img src={e.escudo_url} alt="" style={{width:18, height:18, objectFit:'contain', borderRadius:3}} />}
                     {e.nombre}
                   </span>
                 </td>

@@ -12079,7 +12079,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
   const generarPlantillaResultados = (j) => {
     const ms = partidos.filter(p => p.jornada === j);
-    const lineas = [`RESULTADOS JORNADA ${j}`];
+    const lineas = [`EN DIRECTO JORNADA ${j}`];
     ms.forEach((m, i) => {
       // Mismo bono de localía que se sumó al calcular los goles (ver calcularDesdeFantasy),
       // para que los puntos fantasy mostrados entre paréntesis cuadren con esos goles.

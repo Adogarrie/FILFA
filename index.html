@@ -2572,13 +2572,29 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
     setAbierto(pid);
     const key = `${pid}_${jornada}`;
     if (detalle[key]) return;
-    const [{ data: alis }, { data: pts }, { data: subs }] = await Promise.all([
+    const [{ data: alisJornada }, { data: pts }, { data: subs }] = await Promise.all([
       sb.from('alineaciones').select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', jornada),
       sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion?.id),
       sb.from('sustituciones_auto').select('jugador_sale_id, jugador_entra_id').eq('participante_id', pid).eq('jornada', jornada).eq('federacion_id', federacion?.id),
     ]);
+    let alis = alisJornada || [];
+    let heredaDe = null;
+    // Si el equipo no guardó alineación esta jornada, hereda la de la jornada
+    // guardada más reciente anterior — igual que hace el cálculo real de
+    // puntos (ver AdminPtsJugadores.guardar), para que el desglose muestre
+    // los mismos jugadores que realmente puntuaron esa jornada.
+    if (alis.length === 0) {
+      const { data: ref } = await sb.from('alineaciones')
+        .select('jornada').eq('participante_id', pid)
+        .lt('jornada', jornada).order('jornada', { ascending: false }).limit(1);
+      if (ref?.length) {
+        const { data: prev } = await sb.from('alineaciones')
+          .select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', ref[0].jornada);
+        if (prev?.length) { alis = prev; heredaDe = ref[0].jornada; }
+      }
+    }
     const ptsMap = Object.fromEntries((pts || []).map(r => [r.jugador_id, Number(r.pts)]));
-    setDetalle(d => ({ ...d, [key]: { alis: alis || [], ptsMap, subs: subs || [] } }));
+    setDetalle(d => ({ ...d, [key]: { alis, ptsMap, subs: subs || [], heredaDe } }));
   };
 
   // Reset expanded row when jornada changes
@@ -2748,6 +2764,14 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
         {titulares.length === 0 && suplentes.length === 0
           ? <tr><td colSpan={3} style={{padding:'.4rem .4rem .4rem 2rem', color:'var(--texto2)', fontSize:'.8rem'}}>Sin alineación registrada esta jornada.</td></tr>
           : <>
+              {info.heredaDe && (
+                <tr><td colSpan={3} style={{padding:'.3rem .4rem .3rem 2rem'}}>
+                  <span style={{fontSize:'.72rem', fontWeight:600, padding:'.14rem .5rem',
+                                borderRadius:6, background:'#fff3cd', color:'#664d03'}}>
+                    Hereda J{info.heredaDe} — no se guardó alineación esta jornada
+                  </span>
+                </td></tr>
+              )}
               {titulares.length > 0 && <tr><td colSpan={3} style={{paddingLeft:'2rem', paddingTop:'.3rem', fontSize:'.72rem', fontWeight:700, color:'var(--verde)', letterSpacing:'.04em'}}>TITULARES</td></tr>}
               {titulares.map(jid => filaJug(jid, true))}
               {suplentes.length > 0 && <tr><td colSpan={3} style={{paddingLeft:'2rem', paddingTop:'.3rem', fontSize:'.72rem', fontWeight:700, color:'var(--texto2)', letterSpacing:'.04em'}}>SUPLENTES</td></tr>}

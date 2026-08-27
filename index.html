@@ -10261,7 +10261,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                             <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.gf}</td>
                             <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.gc}</td>
                             <td style={{textAlign:'right',padding:'.38rem .5rem',
-                              color:gd>=0?'var(--verde)':'#dc3545',fontWeight:600}}>
+                              color:'var(--texto)',fontWeight:600}}>
                               {gd>=0?'+':''}{gd}
                             </td>
                             <td style={{textAlign:'right',padding:'.38rem .5rem',fontWeight:800,fontSize:'.98rem'}}>{row.pts}</td>
@@ -11072,7 +11072,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                 <td style={{textAlign:'right'}}>{e.pp}</td>
                 <td style={{textAlign:'right'}}>{e.gf}</td>
                 <td style={{textAlign:'right'}}>{e.gc}</td>
-                <td style={{textAlign:'right', color: (e.gf-e.gc) >= 0 ? 'var(--verde)' : '#dc3545', fontWeight:600}}>
+                <td style={{textAlign:'right', color: 'var(--texto)', fontWeight:600}}>
                   {e.gf-e.gc >= 0 ? '+':''}{e.gf-e.gc}
                 </td>
                 <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>

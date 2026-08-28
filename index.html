@@ -11045,6 +11045,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
           <thead>
             <tr>
               <th>Pos</th><th>Equipo</th>
+              <th style={{textAlign:'right', color:'var(--verde)'}}>PTS</th>
               <th style={{textAlign:'right'}}>PJ</th>
               <th style={{textAlign:'right'}}>PG</th>
               <th style={{textAlign:'right'}}>PE</th>
@@ -11052,7 +11053,6 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
               <th style={{textAlign:'right'}}>GF</th>
               <th style={{textAlign:'right'}}>GC</th>
               <th style={{textAlign:'right'}}>DIF</th>
-              <th style={{textAlign:'right', color:'var(--verde)'}}>PTS</th>
               <th style={{textAlign:'right', borderLeft:'2px solid var(--borde)'}}>PF</th>
               <th style={{textAlign:'right'}}>PC</th>
             </tr>
@@ -11066,6 +11066,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                     {e.nombre}
                   </span>
                 </td>
+                <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
                 <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.pj}</td>
                 <td style={{textAlign:'right'}}>{e.pg}</td>
                 <td style={{textAlign:'right'}}>{e.pe}</td>
@@ -11075,7 +11076,6 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                 <td style={{textAlign:'right', color: 'var(--texto)', fontWeight:600}}>
                   {e.gf-e.gc >= 0 ? '+':''}{e.gf-e.gc}
                 </td>
-                <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
                 <td style={{textAlign:'right', borderLeft:'2px solid var(--borde)',
                             color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>
                   {e.pf > 0 ? e.pf : '—'}

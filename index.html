@@ -2572,13 +2572,29 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
     setAbierto(pid);
     const key = `${pid}_${jornada}`;
     if (detalle[key]) return;
-    const [{ data: alis }, { data: pts }, { data: subs }] = await Promise.all([
+    const [{ data: alisJornada }, { data: pts }, { data: subs }] = await Promise.all([
       sb.from('alineaciones').select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', jornada),
       sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion?.id),
       sb.from('sustituciones_auto').select('jugador_sale_id, jugador_entra_id').eq('participante_id', pid).eq('jornada', jornada).eq('federacion_id', federacion?.id),
     ]);
+    let alis = alisJornada || [];
+    let heredaDe = null;
+    // Si el equipo no guardó alineación esta jornada, hereda la de la jornada
+    // guardada más reciente anterior — igual que hace el cálculo real de
+    // puntos (ver AdminPtsJugadores.guardar), para que el desglose muestre
+    // los mismos jugadores que realmente puntuaron esa jornada.
+    if (alis.length === 0) {
+      const { data: ref } = await sb.from('alineaciones')
+        .select('jornada').eq('participante_id', pid)
+        .lt('jornada', jornada).order('jornada', { ascending: false }).limit(1);
+      if (ref?.length) {
+        const { data: prev } = await sb.from('alineaciones')
+          .select('jugador_id, es_titular').eq('participante_id', pid).eq('jornada', ref[0].jornada);
+        if (prev?.length) { alis = prev; heredaDe = ref[0].jornada; }
+      }
+    }
     const ptsMap = Object.fromEntries((pts || []).map(r => [r.jugador_id, Number(r.pts)]));
-    setDetalle(d => ({ ...d, [key]: { alis: alis || [], ptsMap, subs: subs || [] } }));
+    setDetalle(d => ({ ...d, [key]: { alis, ptsMap, subs: subs || [], heredaDe } }));
   };
 
   // Reset expanded row when jornada changes
@@ -2748,6 +2764,14 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
         {titulares.length === 0 && suplentes.length === 0
           ? <tr><td colSpan={3} style={{padding:'.4rem .4rem .4rem 2rem', color:'var(--texto2)', fontSize:'.8rem'}}>Sin alineación registrada esta jornada.</td></tr>
           : <>
+              {info.heredaDe && (
+                <tr><td colSpan={3} style={{padding:'.3rem .4rem .3rem 2rem'}}>
+                  <span style={{fontSize:'.72rem', fontWeight:600, padding:'.14rem .5rem',
+                                borderRadius:6, background:'#fff3cd', color:'#664d03'}}>
+                    Hereda J{info.heredaDe} — no se guardó alineación esta jornada
+                  </span>
+                </td></tr>
+              )}
               {titulares.length > 0 && <tr><td colSpan={3} style={{paddingLeft:'2rem', paddingTop:'.3rem', fontSize:'.72rem', fontWeight:700, color:'var(--verde)', letterSpacing:'.04em'}}>TITULARES</td></tr>}
               {titulares.map(jid => filaJug(jid, true))}
               {suplentes.length > 0 && <tr><td colSpan={3} style={{paddingLeft:'2rem', paddingTop:'.3rem', fontSize:'.72rem', fontWeight:700, color:'var(--texto2)', letterSpacing:'.04em'}}>SUPLENTES</td></tr>}
@@ -10237,7 +10261,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                             <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.gf}</td>
                             <td style={{textAlign:'right',padding:'.38rem .5rem'}}>{row.gc}</td>
                             <td style={{textAlign:'right',padding:'.38rem .5rem',
-                              color:gd>=0?'var(--verde)':'#dc3545',fontWeight:600}}>
+                              color:'var(--texto)',fontWeight:600}}>
                               {gd>=0?'+':''}{gd}
                             </td>
                             <td style={{textAlign:'right',padding:'.38rem .5rem',fontWeight:800,fontSize:'.98rem'}}>{row.pts}</td>
@@ -10735,6 +10759,121 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
   const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))];
   const hasDivs = divIds.length > 0;
 
+  // Orden de criterios de desempate configurado por el admin (con fallback a
+  // los 4 por defecto, y añadiendo al final cualquiera que falte por incluir).
+  const parseCriteriosH2H = () => {
+    const ALL = ['h2h', 'gf', 'dif', 'pf'];
+    try {
+      const parsed = JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif","pf"]');
+      return [...parsed, ...ALL.filter(c => !parsed.includes(c))];
+    } catch { return ALL; }
+  };
+
+  // Aplica los criterios de desempate configurados sobre un conjunto de filas
+  // de estadísticas ya calculadas (rows), usando msH2H (los partidos —jugados
+  // o no— del ámbito correspondiente) para resolver el criterio "h2h".
+  // Compartido por computeClasif, computeClasifNeutro y computeClasifSide para
+  // que las 4 vistas de clasificación se comporten de forma consistente.
+  const ordenarConDesempate = (rows, msH2H, criteriosOrden) => {
+    // Mini-liga h2h: puntos y goles, solo de los partidos entre los ids dados.
+    const calcH2H = (ids) => {
+      const idSet = new Set(ids);
+      const h = {};
+      ids.forEach(id => { h[id] = { pts: 0, gf: 0, gc: 0 }; });
+      msH2H.forEach(m => {
+        if (m.pts_local === null || m.pts_visitante === null) return;
+        if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
+        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+        h[m.local_id].gf += gl; h[m.local_id].gc += gv;
+        h[m.visitante_id].gf += gv; h[m.visitante_id].gc += gl;
+        if (gl > gv)        { h[m.local_id].pts     += 3; }
+        else if (gl === gv) { h[m.local_id].pts     += 1; h[m.visitante_id].pts += 1; }
+        else                { h[m.visitante_id].pts += 3; }
+      });
+      return h;
+    };
+
+    // ¿Han completado los equipos del grupo TODOS sus enfrentamientos directos
+    // programados entre sí (ida y vuelta / todas las vueltas configuradas)?
+    // Si falta alguno por jugar, el average particular no es un dato
+    // comparable entre todos y no se debe usar para desempatar este grupo.
+    const h2hCompleto = (ids) => {
+      const idSet = new Set(ids);
+      return msH2H.every(m => {
+        if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return true;
+        return m.pts_local !== null && m.pts_visitante !== null;
+      });
+    };
+
+    // Resuelve el average particular en sus 3 capas —puntos, diferencia de
+    // goles y goles a favor, todo dentro de los enfrentamientos directos—.
+    // Si tras las 3 capas sigue habiendo empate, continúa con el resto de
+    // criterios configurados.
+    const resolverH2H = (group, rest) => {
+      const h = calcH2H(group.map(r => r.id));
+      const capas = [r => h[r.id].pts, r => h[r.id].gf - h[r.id].gc, r => h[r.id].gf];
+      const aplicarCapas = (grupo, idx) => {
+        if (grupo.length <= 1) return grupo;
+        if (idx >= capas.length) return sortGroup(grupo, rest);
+        const byScore = {};
+        grupo.forEach(r => { const s = capas[idx](r); (byScore[s] = byScore[s] || []).push(r); });
+        const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
+        if (scores.length === 1) return aplicarCapas(grupo, idx + 1);
+        const out = [];
+        scores.forEach(s => out.push(...aplicarCapas(byScore[s], idx + 1)));
+        return out;
+      };
+      return aplicarCapas(group, 0);
+    };
+
+    // Ordena un grupo de equipos empatados de forma recursiva, criterio a
+    // criterio. Si un criterio separa a algunos pero no a todos, los
+    // sub-grupos que sigan empatados continúan con los criterios restantes.
+    const sortGroup = (group, criterios) => {
+      if (group.length <= 1 || !criterios.length) return group;
+      const [first, ...rest] = criterios;
+
+      if (first === 'h2h') {
+        // Enfrentamientos directos incompletos → no es comparable para todo
+        // el grupo todavía. Se pospone al final de la lista por si un
+        // criterio posterior reduce el grupo a un subconjunto que sí los
+        // tenga completos entre sí (y entonces sí se le vuelve a dar opción).
+        if (!h2hCompleto(group.map(r => r.id))) {
+          if (rest.length === 0) return group;
+          return sortGroup(group, [...rest, 'h2h']);
+        }
+        return resolverH2H(group, rest);
+      }
+
+      let scoreOf;
+      if      (first === 'gf')  scoreOf = r => r.gf;
+      else if (first === 'dif') scoreOf = r => r.gf - r.gc;
+      else if (first === 'pf')  scoreOf = r => r.pf;
+      else                      return sortGroup(group, rest);
+
+      const byScore = {};
+      group.forEach(r => { const s = scoreOf(r); (byScore[s] = byScore[s] || []).push(r); });
+      const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
+
+      // Este criterio no separa a nadie → pasar al siguiente
+      if (scores.length === 1) return sortGroup(group, rest);
+
+      // Hay separación: ordenar cada sub-grupo con los criterios restantes
+      const out = [];
+      scores.forEach(s => out.push(...sortGroup(byScore[s], rest)));
+      return out;
+    };
+
+    const byPts = {};
+    rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
+
+    const result = [];
+    Object.keys(byPts).map(Number).sort((a, b) => b - a).forEach(pts => {
+      result.push(...sortGroup(byPts[pts], criteriosOrden));
+    });
+    return result;
+  };
+
   const computeClasif = (divId, jEnd = null) => {
     const equips = divId
       ? participantes.filter(p => p.division_id === divId)
@@ -10762,73 +10901,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       else               { V.pg++; V.pts += 3; L.pp++; }
     });
 
-    // Mini-tabla H2H entre un conjunto de equipos
-    const calcH2H = (ids) => {
-      const idSet = new Set(ids);
-      const h = {};
-      ids.forEach(id => { h[id] = { pts: 0 }; });
-      ms.forEach(m => {
-        if (m.pts_local === null || m.pts_visitante === null) return;
-        if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
-        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
-        if (gl > gv)        { h[m.local_id].pts     += 3; }
-        else if (gl === gv) { h[m.local_id].pts     += 1; h[m.visitante_id].pts += 1; }
-        else                { h[m.visitante_id].pts += 3; }
-      });
-      return h;
-    };
-
-    // Ordena un grupo de equipos empatados de forma recursiva.
-    // Para h2h: si el criterio separa a algunos pero no a todos, los subgrupos
-    // aún empatados vuelven a intentar h2h con menos equipos (y luego el resto).
-    // Si el criterio no separa a nadie, se pasa al siguiente.
-    const sortGroup = (group, criterios) => {
-      if (group.length <= 1 || !criterios.length) return group;
-      const [first, ...rest] = criterios;
-
-      let scoreOf;
-      if      (first === 'h2h') { const h = calcH2H(group.map(r => r.id)); scoreOf = r => h[r.id].pts; }
-      else if (first === 'gf')  scoreOf = r => r.gf;
-      else if (first === 'dif') scoreOf = r => r.gf - r.gc;
-      else if (first === 'pf')  scoreOf = r => r.pf;
-      else                      return sortGroup(group, rest);
-
-      const byScore = {};
-      group.forEach(r => { const s = scoreOf(r); (byScore[s] = byScore[s] || []).push(r); });
-      const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
-
-      // Este criterio no separa a nadie → pasar al siguiente
-      if (scores.length === 1) return sortGroup(group, rest);
-
-      // Hay separación: ordenar sub-grupos
-      const out = [];
-      scores.forEach(s => {
-        const sub = byScore[s];
-        if (sub.length === 1) { out.push(sub[0]); return; }
-        // Para h2h: reiniciar con todos los criterios en el sub-grupo más pequeño.
-        // Para el resto: continuar con los criterios restantes.
-        out.push(...sortGroup(sub, first === 'h2h' ? criterios : rest));
-      });
-      return out;
-    };
-
-    const criterios = (() => {
-      const ALL = ['h2h','gf','dif','pf'];
-      try {
-        const parsed = JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif","pf"]');
-        return [...parsed, ...ALL.filter(c => !parsed.includes(c))];
-      } catch { return ALL; }
-    })();
-
-    const rows = Object.values(stats);
-    const byPts = {};
-    rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
-
-    const result = [];
-    Object.keys(byPts).map(Number).sort((a, b) => b - a).forEach(pts => {
-      result.push(...sortGroup(byPts[pts], criterios));
-    });
-    return result;
+    return ordenarConDesempate(Object.values(stats), ms, parseCriteriosH2H());
   };
 
   // Clasificación solo con partidos de campo neutro (vuelta con ventaja local = 0)
@@ -10860,8 +10933,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       else if (gl === gv) { L.pe++; L.pts++;    V.pe++; V.pts++; }
       else                { V.pg++; V.pts += 3; L.pp++; }
     });
-    return Object.values(stats).sort((a, b) =>
-      b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
+    return ordenarConDesempate(Object.values(stats), ms, parseCriteriosH2H());
   };
 
   // Clasificación solo con partidos jugados como local o como visitante.
@@ -10896,8 +10968,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       else if (tf === tc) { T.pe++; T.pts++; }
       else              { T.pp++; }
     });
-    return Object.values(stats).sort((a, b) =>
-      b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
+    return ordenarConDesempate(Object.values(stats), ms, parseCriteriosH2H());
   };
 
   // Contador histórico de posiciones tras cada jornada (dense rank)
@@ -10974,6 +11045,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
           <thead>
             <tr>
               <th>Pos</th><th>Equipo</th>
+              <th style={{textAlign:'right', color:'var(--verde)'}}>PTS</th>
               <th style={{textAlign:'right'}}>PJ</th>
               <th style={{textAlign:'right'}}>PG</th>
               <th style={{textAlign:'right'}}>PE</th>
@@ -10981,7 +11053,6 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
               <th style={{textAlign:'right'}}>GF</th>
               <th style={{textAlign:'right'}}>GC</th>
               <th style={{textAlign:'right'}}>DIF</th>
-              <th style={{textAlign:'right', color:'var(--verde)'}}>PTS</th>
               <th style={{textAlign:'right', borderLeft:'2px solid var(--borde)'}}>PF</th>
               <th style={{textAlign:'right'}}>PC</th>
             </tr>
@@ -10995,16 +11066,16 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                     {e.nombre}
                   </span>
                 </td>
+                <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
                 <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.pj}</td>
                 <td style={{textAlign:'right'}}>{e.pg}</td>
                 <td style={{textAlign:'right'}}>{e.pe}</td>
                 <td style={{textAlign:'right'}}>{e.pp}</td>
                 <td style={{textAlign:'right'}}>{e.gf}</td>
                 <td style={{textAlign:'right'}}>{e.gc}</td>
-                <td style={{textAlign:'right', color: (e.gf-e.gc) >= 0 ? 'var(--verde)' : '#dc3545', fontWeight:600}}>
+                <td style={{textAlign:'right', color: 'var(--texto)', fontWeight:600}}>
                   {e.gf-e.gc >= 0 ? '+':''}{e.gf-e.gc}
                 </td>
-                <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
                 <td style={{textAlign:'right', borderLeft:'2px solid var(--borde)',
                             color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>
                   {e.pf > 0 ? e.pf : '—'}
@@ -11853,7 +11924,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
   const generarPlantillaResultados = (j) => {
     const ms = partidos.filter(p => p.jornada === j);
-    const lineas = [`RESULTADOS JORNADA ${j}`];
+    const lineas = [`EN DIRECTO JORNADA ${j}`];
     ms.forEach((m, i) => {
       // Mismo bono de localía que se sumó al calcular los goles (ver calcularDesdeFantasy),
       // para que los puntos fantasy mostrados entre paréntesis cuadren con esos goles.

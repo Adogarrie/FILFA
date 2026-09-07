@@ -5459,7 +5459,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 
   const secciones = [
     { key: 'T', label: `Titulares (${nT}/11)`, color: '#198754' },
-    { key: 'S', label: `Suplentes (${nS}/3)`,  color: '#fd7e14' },
+    { key: 'S', label: `Suplentes`,  color: '#fd7e14' },
     { key: 'F', label: 'Sin convocar',           color: 'var(--texto2)' },
   ];
   const supsOrdenados = [...(plantilla || []), ...jugadoresHistoricos, ...jugadoresCedidos]
@@ -12476,7 +12476,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Cómo pujar', 'En la pestaña Mercado encontrarás jugadores disponibles para puja. Introduce tu oferta y confírmala. Puedes modificar o retirar tu puja mientras el mercado esté abierto.'],
         ['Cierre automático', 'El admin configura una hora de cierre diaria. En ese momento el sistema resuelve todas las pujas pendientes automáticamente.'],
         ['Resolución', 'Gana la puja más alta. En caso de empate, gana la puja más antigua (la que se registró antes).'],
-        ['Presupuesto insuficiente', 'Si en el momento del cierre no tienes suficiente presupuesto para cubrir tu puja ganadora, el jugador no se adjudica y el proceso queda desierto.'],
+        ['Presupuesto insuficiente', 'Puedes quedarte con un presupuesto negativo en algún momento del mercado, pero debes regularizar tus cuentas antes del inicio de una jornada para poder puntuar. Si estás en negativo cuando comienza una jornada, no sumarás nigún punto fantasy.'],
         ['Portería única', 'Dentro de la misma división, solo puede haber un equipo con la portería de cada club real. Si ya está asignada, las pujas por esa portería quedan desiertas.'],
         ['Jugadores duplicados', 'Si la opción está activa, varios equipos pueden pujar y ganar al mismo jugador (no porteros) hasta el límite configurado. El sistema comprueba en el momento de la adjudicación que no se supera ese límite.'],
         ['Resto de pujas', 'Al adjudicarse un jugador, el tablón muestra quién lo ganó, por cuánto, y el listado del resto de equipos que habían pujado y sus importes.'],

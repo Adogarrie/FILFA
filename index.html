@@ -53,8 +53,8 @@
           box-shadow: 0 2px 8px rgba(0,0,0,.25); position: sticky; top: 0; z-index: 100; }
     nav h1 { font-size: 1.05rem; font-weight: 700; flex: 1; padding: .5rem 0; }
     nav button { background: transparent; border: 1.5px solid rgba(255,255,255,.5);
-                 color: #fff; padding: .32rem .85rem; border-radius: 20px;
-                 cursor: pointer; font-size: .83rem; transition: background .15s; }
+                 color: #fff; padding: .28rem .65rem; border-radius: 20px;
+                 cursor: pointer; font-size: .76rem; transition: background .15s; }
     nav button:hover, nav button.active { background: rgba(255,255,255,.2); border-color: #fff; }
     .nav-selector { display: flex; align-items: center; gap: .5rem;
                     border-left: 1px solid rgba(255,255,255,.3); padding-left: .75rem; margin-left: .25rem; }
@@ -86,6 +86,11 @@
     td    { padding: .6rem .75rem; border-bottom: 1px solid var(--gris); color: var(--texto); }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: var(--gris); }
+
+    /* Tabla compacta — solo Clasificación H2H (Liga FILFA), no afecta a otras tablas */
+    .clasif-compacta table { font-size: .78rem; }
+    .clasif-compacta th    { padding: .4rem .5rem; font-size: .7rem; }
+    .clasif-compacta td    { padding: .4rem .5rem; }
 
     /* Badges posicion */
     .badge { display: inline-block; padding: .18rem .55rem; border-radius: 10px;
@@ -11075,12 +11080,11 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       : federacion?.clasif_colores?.h2h;
     const colorRacha = { V: 'var(--verde)', E: '#ffc107', D: '#dc3545' };
     return (
-      <div style={{overflowX:'auto'}}>
+      <div className="clasif-compacta" style={{overflowX:'auto'}}>
         <table>
           <thead>
             <tr>
               <th>Pos</th><th>Equipo</th>
-              {mostrarRacha && <th>Racha</th>}
               <th style={{textAlign:'right', color:'var(--verde)'}}>PTS</th>
               <th style={{textAlign:'right'}}>PJ</th>
               <th style={{textAlign:'right'}}>PG</th>
@@ -11098,24 +11102,22 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
               <tr key={e.id} style={getClasifColor(reglasCT, i + 1)}>
                 <td><Medalla pos={i + 1} /></td>
                 <td style={{fontWeight:600}}>
-                  <span style={{display:'inline-flex', alignItems:'center', gap:'.4rem'}}>
-                    {e.nombre}
-                  </span>
+                  <div style={{display:'flex', flexDirection:'column', gap:2}}>
+                    <span>{e.nombre}</span>
+                    {mostrarRacha && (
+                      <div style={{display:'flex', gap:2}}>
+                        {(e.racha || []).map((r, ri) => (
+                          <span key={ri} title={r === 'V' ? 'Victoria' : r === 'E' ? 'Empate' : 'Derrota'}
+                                style={{display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                        width:14, height:14, borderRadius:3, fontSize:'.58rem', fontWeight:700,
+                                        background: colorRacha[r], color: r === 'E' ? '#000' : '#fff'}}>
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </td>
-                {mostrarRacha && (
-                  <td>
-                    <div style={{display:'flex', gap:3}}>
-                      {(e.racha || []).map((r, ri) => (
-                        <span key={ri} title={r === 'V' ? 'Victoria' : r === 'E' ? 'Empate' : 'Derrota'}
-                              style={{display:'inline-flex', alignItems:'center', justifyContent:'center',
-                                      width:18, height:18, borderRadius:4, fontSize:'.68rem', fontWeight:700,
-                                      background: colorRacha[r], color: r === 'E' ? '#000' : '#fff'}}>
-                          {r}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                )}
                 <td style={{textAlign:'right', fontWeight:800, fontSize:'1.05rem'}}>{e.pts}</td>
                 <td style={{textAlign:'right', color:'var(--texto2)'}}>{e.pj}</td>
                 <td style={{textAlign:'right'}}>{e.pg}</td>

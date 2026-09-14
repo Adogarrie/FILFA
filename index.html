@@ -10786,13 +10786,17 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
   // o no— del ámbito correspondiente) para resolver el criterio "h2h".
   // Compartido por computeClasif, computeClasifNeutro y computeClasifSide para
   // que las 4 vistas de clasificación se comporten de forma consistente.
-  const ordenarConDesempate = (rows, msH2H, criteriosOrden) => {
+  const ordenarConDesempate = (rows, msH2H, criteriosOrden, jEnd = null) => {
     // Mini-liga h2h: puntos y goles, solo de los partidos entre los ids dados.
+    // Si jEnd no es null, se ignoran los partidos de jornadas posteriores: para
+    // ese corte en el tiempo, todavía no han sucedido (aunque msH2H incluya ya
+    // el calendario completo de la temporada para poder detectarlos abajo).
     const calcH2H = (ids) => {
       const idSet = new Set(ids);
       const h = {};
       ids.forEach(id => { h[id] = { pts: 0, gf: 0, gc: 0 }; });
       msH2H.forEach(m => {
+        if (jEnd !== null && m.jornada > jEnd) return;
         if (m.pts_local === null || m.pts_visitante === null) return;
         if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
         const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
@@ -10809,10 +10813,13 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     // programados entre sí (ida y vuelta / todas las vueltas configuradas)?
     // Si falta alguno por jugar, el average particular no es un dato
     // comparable entre todos y no se debe usar para desempatar este grupo.
+    // Un partido de una jornada posterior a jEnd cuenta como pendiente aunque
+    // ya tenga resultado real (aún no le tocaba en el corte que se está viendo).
     const h2hCompleto = (ids) => {
       const idSet = new Set(ids);
       return msH2H.every(m => {
         if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return true;
+        if (jEnd !== null && m.jornada > jEnd) return false;
         return m.pts_local !== null && m.pts_visitante !== null;
       });
     };
@@ -10913,7 +10920,11 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       else               { V.pg++; V.pts += 3; L.pp++; }
     });
 
-    return ordenarConDesempate(Object.values(stats), ms, parseCriteriosH2H());
+    // Se pasa msBase (calendario completo de la división, no recortado por
+    // jornada) para que ordenarConDesempate pueda detectar partidos de h2h
+    // aún pendientes en jornadas posteriores a jEnd; jEnd le dice hasta dónde
+    // contar puntos/goles y a partir de dónde considerar un partido "futuro".
+    return ordenarConDesempate(Object.values(stats), msBase, parseCriteriosH2H(), jEnd);
   };
 
   // Clasificación solo con partidos de campo neutro (vuelta con ventaja local = 0)

@@ -10983,7 +10983,11 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     return ordenarConDesempate(Object.values(stats), ms, parseCriteriosH2H());
   };
 
-  // Contador histórico de posiciones tras cada jornada (dense rank)
+  // Contador histórico de posiciones tras cada jornada.
+  // La posición de cada equipo se toma de computeClasif (misma clasificación
+  // acumulada que la tabla de Clasificación), que ya aplica los criterios de
+  // desempate configurados — así un empate a puntos solo cuenta como 1º/último
+  // para el equipo que quede realmente primero/último tras desempatar.
   const computePosHistorial = (divId) => {
     const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
     const ms     = divId ? partidos.filter(m => m.division_id === divId) : partidos;
@@ -10996,24 +11000,13 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                                          j1:0, jpodio:0, jult:0, jult3:0 }; });
 
     jugadas.forEach(jEnd => {
-      const pts = {};
-      equips.forEach(p => { pts[p.id] = 0; });
-      ms.filter(m => m.jornada <= jEnd && m.pts_local !== null && m.pts_visitante !== null)
-        .forEach(m => {
-          if (pts[m.local_id]    === undefined || pts[m.visitante_id] === undefined) return;
-          const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
-          if (gl > gv)        { pts[m.local_id]    += 3; }
-          else if (gl === gv) { pts[m.local_id]    += 1; pts[m.visitante_id] += 1; }
-          else                { pts[m.visitante_id] += 3; }
-        });
-      const arr = equips.map(p => ({ id: p.id, pts: pts[p.id] || 0 }));
-      arr.forEach(t => {
-        const above = arr.filter(o => o.pts > t.pts).length;
-        const below = arr.filter(o => o.pts < t.pts).length;
-        if (above === 0) cnt[t.id].j1++;
-        if (above < 3)  cnt[t.id].jpodio++;
-        if (below === 0) cnt[t.id].jult++;
-        if (below < 3)  cnt[t.id].jult3++;
+      const orden = computeClasif(divId, jEnd);
+      const n = orden.length;
+      orden.forEach((t, i) => {
+        if (i === 0)       cnt[t.id].j1++;
+        if (i < 3)          cnt[t.id].jpodio++;
+        if (i === n - 1)    cnt[t.id].jult++;
+        if (i >= n - 3)     cnt[t.id].jult3++;
       });
     });
     return Object.values(cnt).sort((a, b) => b.j1 - a.j1 || b.jpodio - a.jpodio);

@@ -81,8 +81,8 @@
 
     /* Tabla */
     table { width: 100%; border-collapse: collapse; font-size: .88rem; }
-    th    { text-align: left; padding: .6rem .75rem; border-bottom: 2px solid var(--borde);
-            color: var(--texto2); font-weight: 600; font-size: .8rem; text-transform: uppercase; }
+    th    { text-align: left; padding: .4rem .55rem; border-bottom: 3px solid var(--borde);
+            color: var(--texto2); font-weight: 750; font-size: .8rem; text-transform: uppercase; }
     td    { padding: .6rem .75rem; border-bottom: 1px solid var(--gris); color: var(--texto); }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: var(--gris); }
@@ -11109,7 +11109,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                         {(e.racha || []).map((r, ri) => (
                           <span key={ri} title={r === 'V' ? 'Victoria' : r === 'E' ? 'Empate' : 'Derrota'}
                                 style={{display:'inline-flex', alignItems:'center', justifyContent:'center',
-                                        width:8, height:8, borderRadius:2, fontSize:'.3rem', fontWeight:500,
+                                        width:9, height:9, borderRadius:2, fontSize:'.35rem', fontWeight:600,
                                         background: colorRacha[r], color: r === 'E' ? '#000' : '#fff'}}>
                             {r}
                           </span>

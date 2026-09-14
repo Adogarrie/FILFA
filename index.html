@@ -11078,7 +11078,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     const reglasCT = divId
       ? (federacion?.clasif_colores?.['h2h_div_' + divId] || federacion?.clasif_colores?.h2h)
       : federacion?.clasif_colores?.h2h;
-    const colorRacha = { V: 'var(--verde)', E: '#ffc107', D: '#dc3545' };
+    const colorRacha = { V: '#3f8029', E: '#ffc107', D: '#dc3545' };
     return (
       <div className="clasif-compacta" style={{overflowX:'auto'}}>
         <table>
@@ -11109,7 +11109,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                         {(e.racha || []).map((r, ri) => (
                           <span key={ri} title={r === 'V' ? 'Victoria' : r === 'E' ? 'Empate' : 'Derrota'}
                                 style={{display:'inline-flex', alignItems:'center', justifyContent:'center',
-                                        width:14, height:14, borderRadius:3, fontSize:'.58rem', fontWeight:700,
+                                        width:8, height:8, borderRadius:2, fontSize:'.3rem', fontWeight:500,
                                         background: colorRacha[r], color: r === 'E' ? '#000' : '#fff'}}>
                             {r}
                           </span>

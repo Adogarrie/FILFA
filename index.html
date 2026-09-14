@@ -3104,10 +3104,17 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     if (!sb || !participantes.length) return;
     (async () => {
       const partIds = participantes.map(p => p.id);
-      const { data: pl } = await sb.from('plantillas')
-        .select('jugador_id, participante_id')
-        .in('participante_id', partIds);
-      const ids = [...new Set((pl || []).map(r => r.jugador_id))];
+      const [{ data: pl }, { data: ces }] = await Promise.all([
+        sb.from('plantillas')
+          .select('jugador_id, participante_id')
+          .in('participante_id', partIds),
+        sb.from('cesiones')
+          .select('jugador_id, participante_id')
+          .eq('federacion_id', federacion?.id).eq('jornada', jornada).eq('estado', 'aprobada'),
+      ]);
+      const idsPlantilla = new Set((pl || []).map(r => r.jugador_id));
+      const idsCedidos = [...new Set((ces || []).map(r => r.jugador_id))].filter(id => !idsPlantilla.has(id));
+      const ids = [...idsPlantilla, ...idsCedidos];
       if (!ids.length) { setJugadores([]); setPropietarios({}); return; }
       const { data } = await sb.from('jugadores')
         .select('id, nombre, equipo, posicion')
@@ -3121,9 +3128,14 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
           ? mapa[r.jugador_id] + ', ' + part.nombre
           : part.nombre;
       }
+      // Cedidos para esta jornada: no están en ninguna plantilla, se identifican aparte
+      for (const r of (ces || [])) {
+        const part = participantes.find(p => p.id === r.participante_id);
+        if (part) mapa[r.jugador_id] = part.nombre + ' (cedido)';
+      }
       setPropietarios(mapa);
     })();
-  }, [federacion?.id, participantes.length]);
+  }, [federacion?.id, participantes.length, jornada]);
 
   useEffect(() => {
     if (!sb || !federacion?.id) return;

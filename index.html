@@ -10800,6 +10800,9 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p]));
   const jornadas = [...new Set(partidos.map(p => p.jornada))].sort((a, b) => a - b);
+  const jornadasJugadas = [...new Set(
+    partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)
+  )].sort((a, b) => a - b);
   const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))];
   const hasDivs = divIds.length > 0;
 
@@ -11042,6 +11045,39 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       else              { T.pp++; }
     });
     return ordenarConDesempate(Object.values(stats), ms, parseCriteriosH2H());
+  };
+
+  // Clasificación de forma reciente: para cada equipo, sus stats de solo sus
+  // últimos n partidos jugados (propios, no necesariamente las mismas
+  // jornadas entre equipos distintos). Se ordena por puntos/dif/gf sin
+  // desempate por enfrentamiento directo, que no tiene sentido aquí al no
+  // compararse todos los equipos en la misma ventana de jornadas.
+  const computeClasifUltimos = (divId, n) => {
+    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    const rows = equips.map(p => {
+      const jugados = ms
+        .filter(m => m.pts_local !== null && m.pts_visitante !== null)
+        .filter(m => m.local_id === p.id || m.visitante_id === p.id)
+        .sort((a, b) => a.jornada - b.jornada)
+        .slice(-n);
+      const s = { id: p.id, nombre: p.nombre, pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 };
+      jugados.forEach(m => {
+        const esLocal = m.local_id === p.id;
+        const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
+        const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
+        s.pj++; s.gf += gf; s.gc += gc;
+        if (m.fantasy_local != null && m.fantasy_visitante != null) {
+          s.pf += Number(esLocal ? m.fantasy_local : m.fantasy_visitante);
+          s.pc += Number(esLocal ? m.fantasy_visitante : m.fantasy_local);
+        }
+        if (gf > gc)        { s.pg++; s.pts += 3; }
+        else if (gf === gc) { s.pe++; s.pts++; }
+        else                 { s.pp++; }
+      });
+      return s;
+    });
+    return rows.sort((a, b) => b.pts - a.pts || (b.gf - b.gc) - (a.gf - a.gc) || b.gf - a.gf);
   };
 
   // Contador histórico de posiciones tras cada jornada.
@@ -11401,6 +11437,8 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
             <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
               {[['general','General'],['local','Local'],['visitante','Visitante'],
                 ...((federacion?.h2h_pts_local_v1 === 0 || federacion?.h2h_pts_local_v2 === 0) ? [['neutro','Neutro']] : []),
+                ...[5,10,15,20,25].filter(n => jornadasJugadas.length >= n)
+                                  .map(n => ['ult' + n, 'Últimos ' + n]),
                 ['historial','Por jornada']].map(([k,l]) => (
                 <button key={k} onClick={() => setSubTabClasif(k)}
                         style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
@@ -11464,8 +11502,9 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
             : (hasDivs
                 ? divIds.map(divId => {
                     const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
-                    const rows = subTabClasif === 'general'   ? computeClasif(divId)
-                               : subTabClasif === 'neutro'    ? computeClasifNeutro(divId)
+                    const rows = subTabClasif === 'general'      ? computeClasif(divId)
+                               : subTabClasif === 'neutro'       ? computeClasifNeutro(divId)
+                               : subTabClasif.startsWith('ult')  ? computeClasifUltimos(divId, Number(subTabClasif.slice(3)))
                                : computeClasifSide(divId, subTabClasif);
                     return (
                       <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
@@ -11475,8 +11514,9 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                     );
                   })
                 : (() => {
-                    const rows = subTabClasif === 'general'   ? computeClasif(null)
-                               : subTabClasif === 'neutro'    ? computeClasifNeutro(null)
+                    const rows = subTabClasif === 'general'      ? computeClasif(null)
+                               : subTabClasif === 'neutro'       ? computeClasifNeutro(null)
+                               : subTabClasif.startsWith('ult')  ? computeClasifUltimos(null, Number(subTabClasif.slice(3)))
                                : computeClasifSide(null, subTabClasif);
                     return <div className="card"><ClasifTable rows={rows} mostrarRacha={subTabClasif === 'general'} /></div>;
                   })()

@@ -11111,8 +11111,11 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
 
   // Rachas máximas de la temporada por equipo: partidos seguidos ganados,
   // partidos seguidos perdidos, partidos seguidos sin ganar (empate o
-  // derrota) y partidos seguidos sin perder (victoria o empate). Se recorre
-  // todo el historial jugado en orden de jornada.
+  // derrota) y partidos seguidos sin perder (victoria o empate). También la
+  // racha ACTUAL de victorias (curG al terminar el recorrido: se resetea a 0
+  // en cualquier resultado que no sea victoria, así que su valor final es la
+  // racha ganadora en curso a día de hoy). Se recorre todo el historial
+  // jugado en orden de jornada.
   const computeRachasMax = (divId) => {
     const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
@@ -11137,7 +11140,8 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
         maxSG = Math.max(maxSG, curSG);
         maxSP = Math.max(maxSP, curSP);
       });
-      return { id: p.id, nombre: p.nombre, rachaG: maxG, rachaP: maxP, rachaSG: maxSG, rachaSP: maxSP };
+      return { id: p.id, nombre: p.nombre, rachaG: maxG, rachaP: maxP, rachaSG: maxSG, rachaSP: maxSP,
+                rachaActualG: curG };
     });
   };
 
@@ -11187,6 +11191,10 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       <div>
         <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'var(--borde)'}}>Más partidos sin perder seguidos</h3>
         <RachaMaxTable rows={rows} field="rachaSP" color="var(--borde)" />
+      </div>
+      <div>
+        <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'var(--verde)'}}>Racha actual de victorias</h3>
+        <RachaMaxTable rows={rows} field="rachaActualG" color="var(--verde)" />
       </div>
     </div>
   );

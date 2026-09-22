@@ -2543,48 +2543,12 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [detalle, setDetalle]         = useState({});
   const [valoresPlantilla, setValoresPlantilla] = useState({});
   const [jornadaAcum, setJornadaAcum] = useState(null); // null = total temporada
-  const [puntosJugTotales, setPuntosJugTotales] = useState([]); // {jugador_id, jornada, pts}[]
-  const [propietariosJug, setPropietariosJug]   = useState({}); // jugador_id → participante_id propietario
-  const [divisionesJug, setDivisionesJug]       = useState([]);
-
-  // Filtros y orden de "Puntos de Jugadores Totales"
-  const [filtroPosJug,  setFiltroPosJug]  = useState('');
-  const [filtroEqJug,   setFiltroEqJug]   = useState('');   // equipo real
-  const [filtroFantJug, setFiltroFantJug] = useState('');   // participante_id propietario, o '__libre__'
-  const [filtroDivJug,  setFiltroDivJug]  = useState('');
-  const [filtroValMinJug, setFiltroValMinJug] = useState('');
-  const [filtroValMaxJug, setFiltroValMaxJug] = useState('');
-  const [sortColJug, setSortColJug] = useState('total');
-  const [sortDirJug, setSortDirJug] = useState('desc');
 
   useEffect(() => {
     if (!sb) return;
-    sb.from('jugadores').select('id, nombre, equipo, posicion, valor_mercado')
+    sb.from('jugadores').select('id, nombre, equipo, posicion')
       .then(({ data }) => setJugadores(data || []));
   }, []);
-
-  useEffect(() => {
-    if (!sb) return;
-    sb.from('divisiones').select('id, nombre').order('nombre')
-      .then(({ data }) => setDivisionesJug(data || []));
-  }, []);
-
-  useEffect(() => {
-    if (!sb || !federacion?.id) return;
-    sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id)
-      .then(({ data }) => setPuntosJugTotales(data || []));
-  }, [federacion?.id]);
-
-  useEffect(() => {
-    if (!sb || participantes.length === 0) return;
-    sb.from('plantillas').select('jugador_id, participante_id')
-      .in('participante_id', participantes.map(p => p.id))
-      .then(({ data }) => {
-        const mapa = {};
-        for (const r of (data || [])) mapa[r.jugador_id] = r.participante_id;
-        setPropietariosJug(mapa);
-      });
-  }, [participantes]);
 
   useEffect(() => {
     if (!sb || participantes.length === 0) return;
@@ -2753,57 +2717,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
       nombre:     participantes.find(p => p.id === r.participante_id)?.nombre     || '—',
     }));
 
-  // ── Ranking de puntos totales por jugador (todas las jornadas, no solo
-  // las de la liga fantástica) ──────────────────────────────────
-  const colorPts = (pts) => {
-    if (pts === undefined || pts === null) return { bg: 'var(--gris)', text: 'var(--texto2)', label: '—' };
-    if (pts < 0)  return { bg: '#7b1113', text: '#fff',  label: String(pts) };
-    if (pts === 0) return { bg: '#dc3545', text: '#fff',  label: '0' };
-    if (pts <= 2) return { bg: '#fd7e14', text: '#fff',  label: String(pts) };
-    if (pts <= 5) return { bg: '#ffc107', text: '#000',  label: String(pts) };
-    if (pts <= 9) return { bg: '#5cb85c', text: '#fff',  label: String(pts) };
-    return            { bg: '#198754', text: '#fff',  label: String(pts) };
-  };
-
-  const jugadoresMap = Object.fromEntries(jugadores.map(j => [j.id, j]));
-  const totalesJugador = {};
-  const histJugador = {};
-  puntosJugTotales.forEach(r => {
-    totalesJugador[r.jugador_id] = (totalesJugador[r.jugador_id] || 0) + Number(r.pts);
-    (histJugador[r.jugador_id] = histJugador[r.jugador_id] || []).push({ jornada: r.jornada, pts: Number(r.pts) });
-  });
-  const filasJugadoresTotales = Object.entries(totalesJugador)
-    .map(([jid, total]) => {
-      const j = jugadoresMap[jid];
-      if (!j) return null;
-      const ultimos = (histJugador[jid] || []).sort((a, b) => a.jornada - b.jornada).slice(-5);
-      const ownerId = propietariosJug[jid] || null;
-      const owner   = ownerId ? participantes.find(p => p.id === ownerId) : null;
-      return {
-        id: jid, nombre: j.nombre, equipo: j.equipo, posicion: j.posicion, valor: j.valor_mercado || 0,
-        total, ownerId, equipoFantastico: owner?.nombre || '', divisionId: owner?.division_id ?? null,
-        ultimos,
-      };
-    })
-    .filter(Boolean);
-
-  const equiposRealesJug = [...new Set(filasJugadoresTotales.map(j => j.equipo).filter(Boolean))].sort();
-  const divIdsJug = [...new Set(participantes.map(p => p.division_id).filter(Boolean))].sort((a, b) => a - b);
-
-  const filasJugadoresFiltradas = filasJugadoresTotales
-    .filter(j => !filtroPosJug  || j.posicion === filtroPosJug)
-    .filter(j => !filtroEqJug   || j.equipo === filtroEqJug)
-    .filter(j => !filtroFantJug || (filtroFantJug === '__libre__' ? !j.ownerId : String(j.ownerId) === filtroFantJug))
-    .filter(j => !filtroDivJug  || String(j.divisionId) === filtroDivJug)
-    .filter(j => !filtroValMinJug || j.valor >= Number(filtroValMinJug) * 1_000_000)
-    .filter(j => !filtroValMaxJug || j.valor <= Number(filtroValMaxJug) * 1_000_000)
-    .sort((a, b) => {
-      const dir = sortDirJug === 'asc' ? 1 : -1;
-      const va = a[sortColJug], vb = b[sortColJug];
-      if (typeof va === 'string' || typeof vb === 'string') return String(va).localeCompare(String(vb)) * dir;
-      return ((va ?? 0) - (vb ?? 0)) * dir;
-    });
-
   const btnJornada = (j) => ({
     padding: '.22rem .5rem', borderRadius: 6, fontSize: '.75rem', cursor: 'pointer',
     border: '1.5px solid ' + (jornadasConDatos.includes(j) ? 'var(--verde)' : 'var(--borde)'),
@@ -2880,7 +2793,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
         <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Clasificación</button>
         <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Clasificación Por Jornada</button>
         <button className={`tab ${vista==='estadisticas'?'active':''}`} onClick={() => setVista('estadisticas')}>Estadísticas</button>
-        <button className={`tab ${vista==='jugadoresTotales'?'active':''}`} onClick={() => setVista('jugadoresTotales')}>Puntos de Jugadores Totales</button>
         {isAdmin && <button onClick={() => {
           const sheetClasif = [
             ['Pos', 'Equipo', 'Total pts', 'Jornadas', 'Media'],
@@ -3171,116 +3083,6 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
             </>
       )}
 
-      {vista === 'jugadoresTotales' && (
-        filasJugadoresTotales.length === 0
-          ? <div className="card"><div className="empty">Aún no hay puntuaciones introducidas.</div></div>
-          : <div className="card">
-              <h2 style={{marginBottom:'.75rem'}}>Puntos de Jugadores Totales</h2>
-              <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                Ranking de jugadores por puntos totales aportados en la temporada, con su equipo real,
-                el equipo fantástico al que pertenecen actualmente (si lo tienen) y su forma en las
-                últimas 5 jornadas puntuadas. Pincha en una columna para ordenar por ella.
-              </p>
-              <div className="filtros">
-                <select value={filtroPosJug} onChange={e => setFiltroPosJug(e.target.value)}>
-                  <option value="">Todas las posiciones</option>
-                  <option value="POR">Portero</option>
-                  <option value="DEF">Defensa</option>
-                  <option value="MED">Centrocampista</option>
-                  <option value="DEL">Delantero</option>
-                </select>
-                <select value={filtroEqJug} onChange={e => setFiltroEqJug(e.target.value)}>
-                  <option value="">Todos los equipos reales</option>
-                  {equiposRealesJug.map(eq => <option key={eq} value={eq}>{eq}</option>)}
-                </select>
-                <select value={filtroFantJug} onChange={e => setFiltroFantJug(e.target.value)}>
-                  <option value="">Todos los equipos fantásticos</option>
-                  <option value="__libre__">Libres (sin equipo)</option>
-                  {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-                </select>
-                {divIdsJug.length > 0 && (
-                  <select value={filtroDivJug} onChange={e => setFiltroDivJug(e.target.value)}>
-                    <option value="">Todas las divisiones</option>
-                    {divIdsJug.map(did => (
-                      <option key={did} value={did}>
-                        {divisionesJug.find(d => d.id === did)?.nombre || `División ${did}`}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input type="number" min="0" step="0.5" placeholder="Precio mín (M)"
-                       value={filtroValMinJug} onChange={e => setFiltroValMinJug(e.target.value)}
-                       style={{width:'120px'}} />
-                <input type="number" min="0" step="0.5" placeholder="Precio máx (M)"
-                       value={filtroValMaxJug} onChange={e => setFiltroValMaxJug(e.target.value)}
-                       style={{width:'120px'}} />
-              </div>
-              {filasJugadoresFiltradas.length === 0
-                ? <div className="empty">Ningún jugador coincide con los filtros seleccionados.</div>
-                : <div style={{overflowX:'auto'}}>
-                    <table>
-                      <thead>
-                        <tr>
-                          {[
-                            ['nombre',            'Jugador',            {}],
-                            ['equipo',            'Equipo real',        {}],
-                            ['equipoFantastico',  'Equipo fantástico',  {}],
-                            ['valor',             'Precio',             {textAlign:'right'}],
-                            ['total',             'Total pts',          {textAlign:'right'}],
-                          ].map(([col, label, st]) => (
-                            <th key={col} style={{...st, cursor:'pointer', userSelect:'none', whiteSpace:'nowrap'}}
-                                onClick={() => { setSortDirJug(sortColJug === col && sortDirJug === 'asc' ? 'desc' : 'asc'); setSortColJug(col); }}>
-                              {label}{sortColJug === col ? (sortDirJug === 'asc' ? ' ↑' : ' ↓') : ''}
-                            </th>
-                          ))}
-                          <th style={{textAlign:'center'}}>Forma</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filasJugadoresFiltradas.map(j => (
-                          <tr key={j.id}>
-                            <td style={{fontWeight:600}}>
-                              {j.nombre}
-                              {j.posicion && <span className={`badge ${j.posicion}`} style={{marginLeft:'.4rem'}}>{j.posicion}</span>}
-                            </td>
-                            <td style={{color:'var(--texto2)'}}>
-                              <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
-                                <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
-                              </span>
-                            </td>
-                            <td style={{color: j.equipoFantastico ? 'var(--texto)' : 'var(--texto2)'}}>
-                              {j.equipoFantastico || 'Libre'}
-                            </td>
-                            <td style={{textAlign:'right', color:'var(--texto2)'}}>{fmt(j.valor)}</td>
-                            <td style={{textAlign:'right', fontWeight:800, fontSize:'1.02rem'}}>{j.total}</td>
-                            <td style={{textAlign:'center'}}>
-                              <div style={{display:'inline-flex', gap:3}}>
-                                {j.ultimos.map(u => {
-                                  const c = colorPts(u.pts);
-                                  return (
-                                    <span key={u.jornada}
-                                          title={`J${u.jornada}: ${u.pts} pts`}
-                                          style={{
-                                            display:'inline-flex', alignItems:'center', justifyContent:'center',
-                                            width:22, height:22, borderRadius:4,
-                                            background: c.bg, color: c.text,
-                                            fontSize:'.62rem', fontWeight:700,
-                                            fontVariantNumeric:'tabular-nums', flexShrink:0,
-                                          }}>
-                                      {c.label}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-              }
-            </div>
-      )}
     </div>
   );
 }

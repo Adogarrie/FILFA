@@ -11074,8 +11074,9 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
   };
 
   // Rachas máximas de la temporada por equipo: partidos seguidos ganados,
-  // partidos seguidos perdidos y partidos seguidos sin ganar (empate o
-  // derrota). Se recorre todo el historial jugado en orden de jornada.
+  // partidos seguidos perdidos, partidos seguidos sin ganar (empate o
+  // derrota) y partidos seguidos sin perder (victoria o empate). Se recorre
+  // todo el historial jugado en orden de jornada.
   const computeRachasMax = (divId) => {
     const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
     const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
@@ -11084,8 +11085,8 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
         .filter(m => m.pts_local !== null && m.pts_visitante !== null)
         .filter(m => m.local_id === p.id || m.visitante_id === p.id)
         .sort((a, b) => a.jornada - b.jornada);
-      let curG = 0, curP = 0, curSG = 0;
-      let maxG = 0, maxP = 0, maxSG = 0;
+      let curG = 0, curP = 0, curSG = 0, curSP = 0;
+      let maxG = 0, maxP = 0, maxSG = 0, maxSP = 0;
       jugados.forEach(m => {
         const esLocal = m.local_id === p.id;
         const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
@@ -11094,11 +11095,13 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
         curG  = res === 'V' ? curG + 1 : 0;
         curP  = res === 'D' ? curP + 1 : 0;
         curSG = res !== 'V' ? curSG + 1 : 0;
+        curSP = res !== 'D' ? curSP + 1 : 0;
         maxG  = Math.max(maxG, curG);
         maxP  = Math.max(maxP, curP);
         maxSG = Math.max(maxSG, curSG);
+        maxSP = Math.max(maxSP, curSP);
       });
-      return { id: p.id, nombre: p.nombre, rachaG: maxG, rachaP: maxP, rachaSG: maxSG };
+      return { id: p.id, nombre: p.nombre, rachaG: maxG, rachaP: maxP, rachaSG: maxSG, rachaSP: maxSP };
     });
   };
 
@@ -11144,6 +11147,10 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       <div>
         <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'#e0a800'}}>Más partidos sin ganar seguidos</h3>
         <RachaMaxTable rows={rows} field="rachaSG" color="#e0a800" />
+      </div>
+      <div>
+        <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'var(--borde)'}}>Más partidos sin perder seguidos</h3>
+        <RachaMaxTable rows={rows} field="rachaSP" color="var(--borde)" />
       </div>
     </div>
   );

@@ -10730,6 +10730,33 @@ function PosHistorialTable({ rows }) {
   );
 }
 
+// Tabla genérica de racha máxima (un único valor numérico por equipo, orden
+// descendente). Reutilizada para rachas de ganados/perdidos/sin ganar.
+function RachaMaxTable({ rows, field, color }) {
+  const sorted = [...rows].sort((a, b) => b[field] - a[field]);
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table>
+        <thead>
+          <tr>
+            <th>Equipo</th>
+            <th style={{textAlign:'right', color}}>Partidos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(e => (
+            <tr key={e.id}>
+              <td style={{fontWeight:600}}>{e.nombre}</td>
+              <td style={{textAlign:'right', fontWeight: e[field] > 0 ? 700 : 400,
+                          color: e[field] > 0 ? color : 'var(--texto2)'}}>{e[field]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes, isAdmin }) {
   const [tab,              setTab]             = useState('clasificacion');
@@ -11046,6 +11073,35 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     return Object.values(cnt).sort((a, b) => b.j1 - a.j1 || b.jpodio - a.jpodio);
   };
 
+  // Rachas máximas de la temporada por equipo: partidos seguidos ganados,
+  // partidos seguidos perdidos y partidos seguidos sin ganar (empate o
+  // derrota). Se recorre todo el historial jugado en orden de jornada.
+  const computeRachasMax = (divId) => {
+    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const ms = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    return equips.map(p => {
+      const jugados = ms
+        .filter(m => m.pts_local !== null && m.pts_visitante !== null)
+        .filter(m => m.local_id === p.id || m.visitante_id === p.id)
+        .sort((a, b) => a.jornada - b.jornada);
+      let curG = 0, curP = 0, curSG = 0;
+      let maxG = 0, maxP = 0, maxSG = 0;
+      jugados.forEach(m => {
+        const esLocal = m.local_id === p.id;
+        const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
+        const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
+        const res = gf > gc ? 'V' : gf === gc ? 'E' : 'D';
+        curG  = res === 'V' ? curG + 1 : 0;
+        curP  = res === 'D' ? curP + 1 : 0;
+        curSG = res !== 'V' ? curSG + 1 : 0;
+        maxG  = Math.max(maxG, curG);
+        maxP  = Math.max(maxP, curP);
+        maxSG = Math.max(maxSG, curSG);
+      });
+      return { id: p.id, nombre: p.nombre, rachaG: maxG, rachaP: maxP, rachaSG: maxSG };
+    });
+  };
+
   const PartidoFila = ({ m }) => {
     const L = nomMap[m.local_id] || {};
     const V = nomMap[m.visitante_id] || {};
@@ -11073,6 +11129,24 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
       </div>
     );
   };
+
+  // Las 3 tablas de rachas máximas de la temporada, lado a lado.
+  const RachasSeccion = ({ rows }) => (
+    <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:'1rem'}}>
+      <div>
+        <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'#3f8029'}}>Más partidos ganados seguidos</h3>
+        <RachaMaxTable rows={rows} field="rachaG" color="#3f8029" />
+      </div>
+      <div>
+        <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'#dc3545'}}>Más partidos perdidos seguidos</h3>
+        <RachaMaxTable rows={rows} field="rachaP" color="#dc3545" />
+      </div>
+      <div>
+        <h3 style={{fontSize:'.85rem', marginBottom:'.4rem', color:'#e0a800'}}>Más partidos sin ganar seguidos</h3>
+        <RachaMaxTable rows={rows} field="rachaSG" color="#e0a800" />
+      </div>
+    </div>
+  );
 
   const ClasifTable = ({ rows, divId, mostrarRacha = false }) => {
     const reglasCT = divId
@@ -11273,27 +11347,41 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
               ? divIds.map(divId => {
                   const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
                   const rows = computePosHistorial(divId);
+                  const rowsRachas = computeRachasMax(divId);
                   return (
-                    <div key={divId} className="card" style={{marginBottom:'.75rem'}}>
-                      <h2 style={{marginBottom:'.4rem'}}>{nombre}</h2>
-                      <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                        Contador de jornadas en cada posición de la clasificación acumulada H2H tras cada jornada.
-                        En caso de empate a puntos todos los equipos comparten la misma posición.
-                      </p>
-                      <PosHistorialTable rows={rows} />
+                    <div key={divId}>
+                      <div className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.4rem'}}>{nombre}</h2>
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          Contador de jornadas en cada posición de la clasificación acumulada H2H tras cada jornada.
+                          En caso de empate a puntos todos los equipos comparten la misma posición.
+                        </p>
+                        <PosHistorialTable rows={rows} />
+                      </div>
+                      <div className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.75rem'}}>{nombre} — Rachas</h2>
+                        <RachasSeccion rows={rowsRachas} />
+                      </div>
                     </div>
                   );
                 })
               : (() => {
                   const rows = computePosHistorial(null);
+                  const rowsRachas = computeRachasMax(null);
                   return (
-                    <div className="card">
-                      <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
-                        Contador de jornadas en cada posición de la clasificación acumulada H2H tras cada jornada.
-                        En caso de empate a puntos todos los equipos comparten la misma posición.
-                      </p>
-                      <PosHistorialTable rows={rows} />
-                    </div>
+                    <>
+                      <div className="card" style={{marginBottom:'.75rem'}}>
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          Contador de jornadas en cada posición de la clasificación acumulada H2H tras cada jornada.
+                          En caso de empate a puntos todos los equipos comparten la misma posición.
+                        </p>
+                        <PosHistorialTable rows={rows} />
+                      </div>
+                      <div className="card">
+                        <h2 style={{marginBottom:'.75rem'}}>Rachas</h2>
+                        <RachasSeccion rows={rowsRachas} />
+                      </div>
+                    </>
                   );
                 })()
             )

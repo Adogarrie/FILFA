@@ -4462,11 +4462,79 @@ function FederacionInfo({ federacionId, isAdmin, isModerador }) {
   );
 }
 
-function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilitados = true, onBadgeChange, refreshKey = 0 }) {
+function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId, mensajesHabilitados = true, onBadgeChange, refreshKey = 0 }) {
   const [tab, setTab]          = useState('anuncios');
   const [anuncios, setAnuncios] = useState(null);
   const [pagina, setPagina]    = useState(0);
   const POR_PAG = 20;
+
+  // Reacciones y comentarios por anuncio
+  const EMOJIS_REACCION = ['👍', '😂', '🔥', '😮', '😢', '👎', '❤️'];
+  const [reacciones, setReacciones]           = useState({}); // anuncio_id → [{participante_id, emoji}]
+  const [respuestas, setRespuestas]           = useState({}); // anuncio_id → [{id, participante_id, actor_nombre, texto, created_at}]
+  const [respuestaTexto, setRespuestaTexto]   = useState({}); // anuncio_id → texto en curso
+  const [enviandoResp, setEnviandoResp]       = useState(null);
+  const [comentariosAbiertos, setComentariosAbiertos] = useState(new Set());
+
+  const cargarInteracciones = async (ids) => {
+    if (!sb || ids.length === 0) return;
+    const [{ data: reacs }, { data: resps }] = await Promise.all([
+      sb.from('anuncio_reacciones').select('anuncio_id, participante_id, emoji').in('anuncio_id', ids),
+      sb.from('anuncio_respuestas').select('id, anuncio_id, participante_id, actor_nombre, texto, created_at')
+        .in('anuncio_id', ids).order('created_at', { ascending: true }),
+    ]);
+    const rMap = {}; ids.forEach(id => { rMap[id] = []; });
+    (reacs || []).forEach(r => { rMap[r.anuncio_id].push(r); });
+    const cMap = {}; ids.forEach(id => { cMap[id] = []; });
+    (resps || []).forEach(r => { cMap[r.anuncio_id].push(r); });
+    setReacciones(prev => ({ ...prev, ...rMap }));
+    setRespuestas(prev => ({ ...prev, ...cMap }));
+  };
+
+  useEffect(() => {
+    const ids = (anuncios || []).map(a => a.id);
+    if (ids.length) cargarInteracciones(ids);
+  }, [anuncios]);
+
+  const toggleReaccion = async (anuncioId, emoji) => {
+    if (!miParticipanteId) return;
+    const actuales = reacciones[anuncioId] || [];
+    const mia = actuales.find(r => r.participante_id === miParticipanteId && r.emoji === emoji);
+    if (mia) {
+      await sb.from('anuncio_reacciones').delete()
+        .eq('anuncio_id', anuncioId).eq('participante_id', miParticipanteId).eq('emoji', emoji);
+      setReacciones(prev => ({ ...prev, [anuncioId]: (prev[anuncioId] || []).filter(r => !(r.participante_id === miParticipanteId && r.emoji === emoji)) }));
+    } else {
+      const { error } = await sb.from('anuncio_reacciones').insert({ anuncio_id: anuncioId, participante_id: miParticipanteId, emoji });
+      if (!error) setReacciones(prev => ({ ...prev, [anuncioId]: [...(prev[anuncioId] || []), { anuncio_id: anuncioId, participante_id: miParticipanteId, emoji }] }));
+    }
+  };
+
+  const toggleComentarios = (anuncioId) => {
+    setComentariosAbiertos(prev => {
+      const next = new Set(prev);
+      next.has(anuncioId) ? next.delete(anuncioId) : next.add(anuncioId);
+      return next;
+    });
+  };
+
+  const enviarRespuesta = async (anuncioId) => {
+    const texto = (respuestaTexto[anuncioId] || '').trim();
+    if (!texto || !miParticipanteId || enviandoResp === anuncioId) return;
+    setEnviandoResp(anuncioId);
+    const { data, error } = await sb.from('anuncio_respuestas')
+      .insert({ anuncio_id: anuncioId, participante_id: miParticipanteId, actor_nombre: miNombre || null, texto })
+      .select('id, anuncio_id, participante_id, actor_nombre, texto, created_at').single();
+    setEnviandoResp(null);
+    if (error) return;
+    setRespuestas(prev => ({ ...prev, [anuncioId]: [...(prev[anuncioId] || []), data] }));
+    setRespuestaTexto(prev => ({ ...prev, [anuncioId]: '' }));
+  };
+
+  const borrarRespuesta = async (anuncioId, respId) => {
+    await sb.from('anuncio_respuestas').delete().eq('id', respId);
+    setRespuestas(prev => ({ ...prev, [anuncioId]: (prev[anuncioId] || []).filter(r => r.id !== respId) }));
+  };
 
   // Composición de mensaje (solo admin)
   const [texto, setTexto]       = useState('');
@@ -4573,7 +4641,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilita
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
     admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
-    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝',
+    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆',
   };
 
   const fmtFecha = ts => {
@@ -4706,51 +4774,127 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, mensajesHabilita
           ? <div className="empty">Sin actividad todavía.</div>
           : <>
               <div style={{display:'flex', flexDirection:'column', gap:'.6rem'}}>
-                {anuncios.map(a => (
-                  <div key={a.id} style={{display:'flex', gap:'.75rem', alignItems:'flex-start',
-                                          padding:'.65rem .9rem',
+                {anuncios.map(a => {
+                  const misReacciones = reacciones[a.id] || [];
+                  const misComentarios = respuestas[a.id] || [];
+                  const conteoPorEmoji = {};
+                  misReacciones.forEach(r => { conteoPorEmoji[r.emoji] = (conteoPorEmoji[r.emoji] || 0) + 1; });
+                  const abiertos = comentariosAbiertos.has(a.id);
+                  return (
+                  <div key={a.id} style={{padding:'.65rem .9rem',
                                           background: a.tipo === 'mensaje_admin'   ? '#eaf4ea'
                                                     : a.tipo === 'reinicio'        ? 'rgba(220,53,69,.06)'
                                                     : a.tipo === 'mensaje_usuario' ? 'rgba(99,179,237,.07)'
                                                     : a.tipo === 'mensaje_club'    ? 'rgba(13,110,253,.06)'
+                                                    : a.tipo === 'logro'           ? 'rgba(245,166,35,.08)'
                                                     : 'var(--gris)',
                                           border: a.tipo === 'mensaje_admin'   ? '1.5px solid var(--verde)'
                                                 : a.tipo === 'reinicio'        ? '1.5px solid #dc3545'
                                                 : a.tipo === 'mensaje_usuario' ? '1.5px solid rgba(99,179,237,.5)'
                                                 : a.tipo === 'mensaje_club'    ? '1.5px solid rgba(13,110,253,.4)'
+                                                : a.tipo === 'logro'           ? '1.5px solid rgba(245,166,35,.5)'
                                                 : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
-                    <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
-                    <div style={{flex:1}}>
-                      {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario')
-                        ? <div className="md-content"
-                               dangerouslySetInnerHTML={renderMd(a.texto)} />
-                        : <div style={{fontWeight: a.tipo === 'reinicio' ? 600 : 500,
-                                       whiteSpace:'pre-wrap'}}>{a.texto}</div>
-                      }
-                      {a.actor_nombre && (
-                        <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
-                          por <strong>{a.actor_nombre}</strong>
-                        </div>
-                      )}
-                    </div>
-                    <div style={{display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'.35rem', flexShrink:0}}>
-                      <div style={{fontSize:'.75rem', color:'var(--texto2)', whiteSpace:'nowrap'}}>
-                        {fmtFecha(a.created_at)}
+                    <div style={{display:'flex', gap:'.75rem', alignItems:'flex-start'}}>
+                      <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
+                      <div style={{flex:1}}>
+                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario')
+                          ? <div className="md-content"
+                                 dangerouslySetInnerHTML={renderMd(a.texto)} />
+                          : <div style={{fontWeight: a.tipo === 'reinicio' ? 600 : 500,
+                                         whiteSpace:'pre-wrap'}}>{a.texto}</div>
+                        }
+                        {a.actor_nombre && (
+                          <div style={{fontSize:'.78rem', color:'var(--texto2)', marginTop:'.2rem'}}>
+                            por <strong>{a.actor_nombre}</strong>
+                          </div>
+                        )}
                       </div>
-                      {isAdmin && (
-                        <button onClick={() => borrarAnuncio(a.id)}
-                                title="Eliminar mensaje"
-                                style={{background:'none', border:'none', cursor:'pointer',
-                                        color:'#aaa', fontSize:'.8rem', padding:0, lineHeight:1}}
-                                onMouseEnter={e => e.currentTarget.style.color='#dc3545'}
-                                onMouseLeave={e => e.currentTarget.style.color='#aaa'}>
-                          ✕
-                        </button>
-                      )}
+                      <div style={{display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'.35rem', flexShrink:0}}>
+                        <div style={{fontSize:'.75rem', color:'var(--texto2)', whiteSpace:'nowrap'}}>
+                          {fmtFecha(a.created_at)}
+                        </div>
+                        {isAdmin && (
+                          <button onClick={() => borrarAnuncio(a.id)}
+                                  title="Eliminar mensaje"
+                                  style={{background:'none', border:'none', cursor:'pointer',
+                                          color:'#aaa', fontSize:'.8rem', padding:0, lineHeight:1}}
+                                  onMouseEnter={e => e.currentTarget.style.color='#dc3545'}
+                                  onMouseLeave={e => e.currentTarget.style.color='#aaa'}>
+                            ✕
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* ── Reacciones + comentarios ── */}
+                    <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem', marginTop:'.55rem', alignItems:'center'}}>
+                      {EMOJIS_REACCION.map(emoji => {
+                        const cnt = conteoPorEmoji[emoji] || 0;
+                        const mia = misReacciones.some(r => r.participante_id === miParticipanteId && r.emoji === emoji);
+                        return (
+                          <button key={emoji} onClick={() => toggleReaccion(a.id, emoji)} disabled={!miParticipanteId}
+                                  style={{padding:'.08rem .4rem', borderRadius:12, fontSize:'.8rem',
+                                          cursor: miParticipanteId ? 'pointer' : 'default',
+                                          border:'1.5px solid ' + (mia ? 'var(--verde)' : 'var(--borde)'),
+                                          background: mia ? 'rgba(63,128,41,.14)' : 'var(--fondo)',
+                                          color:'var(--texto)'}}>
+                            {emoji}{cnt > 0 ? ' ' + cnt : ''}
+                          </button>
+                        );
+                      })}
+                      <button onClick={() => toggleComentarios(a.id)}
+                              style={{marginLeft:'.2rem', padding:'.08rem .55rem', borderRadius:12, fontSize:'.78rem',
+                                      cursor:'pointer', border:'1.5px solid var(--borde)',
+                                      background:'var(--fondo)', color:'var(--texto2)', fontWeight:600}}>
+                        💬 {misComentarios.length > 0 ? misComentarios.length + ' · ' : ''}{abiertos ? 'Ocultar' : 'Comentar'}
+                      </button>
+                    </div>
+
+                    {abiertos && (
+                      <div style={{marginTop:'.5rem', paddingTop:'.5rem', borderTop:'1px solid var(--borde)'}}>
+                        {misComentarios.length === 0
+                          ? <div style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.4rem'}}>Sé el primero en comentar.</div>
+                          : misComentarios.map(c => (
+                              <div key={c.id} style={{display:'flex', justifyContent:'space-between', gap:'.5rem',
+                                                       padding:'.28rem 0', fontSize:'.82rem'}}>
+                                <div>
+                                  <strong>{c.actor_nombre || 'Alguien'}</strong>{' '}
+                                  <span style={{color:'var(--texto2)', fontSize:'.7rem'}}>{fmtFecha(c.created_at)}</span>
+                                  <div style={{whiteSpace:'pre-wrap'}}>{c.texto}</div>
+                                </div>
+                                {(isAdmin || isModerador || c.participante_id === miParticipanteId) && (
+                                  <button onClick={() => borrarRespuesta(a.id, c.id)} title="Eliminar comentario"
+                                          style={{background:'none', border:'none', cursor:'pointer',
+                                                  color:'#aaa', fontSize:'.75rem', flexShrink:0}}
+                                          onMouseEnter={e => e.currentTarget.style.color='#dc3545'}
+                                          onMouseLeave={e => e.currentTarget.style.color='#aaa'}>
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            ))
+                        }
+                        {miParticipanteId && (
+                          <div style={{display:'flex', gap:'.4rem', marginTop:'.4rem'}}>
+                            <input value={respuestaTexto[a.id] || ''}
+                                   onChange={e => setRespuestaTexto(prev => ({ ...prev, [a.id]: e.target.value }))}
+                                   onKeyDown={e => { if (e.key === 'Enter') enviarRespuesta(a.id); }}
+                                   placeholder="Escribe una respuesta rápida…"
+                                   style={{flex:1, padding:'.35rem .6rem', borderRadius:8,
+                                           border:'1.5px solid var(--borde)', fontSize:'.82rem'}} />
+                            <button onClick={() => enviarRespuesta(a.id)}
+                                    disabled={enviandoResp === a.id || !(respuestaTexto[a.id] || '').trim()}
+                                    className="btn-ok" style={{fontSize:'.8rem', padding:'.35rem .8rem'}}>
+                              Enviar
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
               <button onClick={() => setPagina(p => p + 1)}
                       style={{marginTop:'.9rem', width:'100%', padding:'.5rem',
@@ -10355,6 +10499,99 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
   );
 }
 
+// ── LOGROS (vista de usuario) ───────────────────────────────────
+// Palmarés completo por equipo: logros ya conseguidos (LOGROS_CATALOGO,
+// tabla `logros`) más el progreso hacia el siguiente tramo de cada
+// categoría (progresoLogros, calculado en vivo desde h2h_partidos).
+// LOGROS_CATALOGO/detectarLogros/progresoLogros están definidos junto a
+// AdminLigaH2H, más abajo en este archivo.
+function LogrosVista({ federacion, participantes }) {
+  const [partidos, setPartidos] = useState([]);
+  const [logros,   setLogros]   = useState(null);
+
+  useEffect(() => {
+    if (!sb || !federacion?.id || !federacion?.logros_habilitado) return;
+    Promise.all([
+      sb.from('h2h_partidos').select('id, jornada, local_id, visitante_id, pts_local, pts_visitante')
+        .eq('federacion_id', federacion.id),
+      sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
+        .eq('federacion_id', federacion.id),
+    ]).then(([{ data: p }, { data: l }]) => {
+      setPartidos(p || []);
+      setLogros(l || []);
+    });
+  }, [federacion?.id, federacion?.logros_habilitado]);
+
+  if (!federacion?.logros_habilitado) {
+    return (
+      <div className="card">
+        <h2>Logros</h2>
+        <p style={{color:'var(--texto2)', marginTop:'.5rem'}}>Los logros no están activados para esta liga.</p>
+      </div>
+    );
+  }
+  if (logros === null) return <div className="card"><Spinner /></div>;
+
+  const progreso = progresoLogros(partidos, participantes);
+  const porEquipo = {};
+  participantes.forEach(p => { porEquipo[p.id] = []; });
+  logros.forEach(l => { (porEquipo[l.participante_id] = porEquipo[l.participante_id] || []).push(l); });
+  const ordenados = [...participantes].sort((a, b) => (porEquipo[b.id]?.length || 0) - (porEquipo[a.id]?.length || 0));
+
+  return (
+    <div>
+      {ordenados.map(p => {
+        const misLogros = porEquipo[p.id] || [];
+        const misLogrosSet = new Set(misLogros.map(l => `${l.categoria}|${l.tier}`));
+        const est = progreso[p.id] || {};
+        return (
+          <div key={p.id} className="card" style={{marginBottom:'.75rem'}}>
+            <h2 style={{marginBottom:'.15rem'}}>{p.nombre}</h2>
+            <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+              {misLogros.length} logro{misLogros.length === 1 ? '' : 's'} conseguido{misLogros.length === 1 ? '' : 's'}
+            </p>
+            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'.75rem'}}>
+              {Object.entries(LOGROS_CATALOGO).map(([cat, def]) => {
+                const pendientes = def.tiers.filter(t => t !== 'temporada' && !misLogrosSet.has(`${cat}|${t}`));
+                const siguienteTier = pendientes.length ? pendientes[0] : null;
+                const valorActual = est[cat] || 0;
+                return (
+                  <div key={cat} style={{padding:'.55rem .7rem', borderRadius:8, background:'var(--fondo)',
+                                          border:'1px solid var(--borde)'}}>
+                    <div style={{fontWeight:700, fontSize:'.85rem', marginBottom:'.3rem'}}>
+                      {def.icono} {def.nombre}
+                    </div>
+                    <div>
+                      {def.tiers.map(t => {
+                        const conseguido = misLogrosSet.has(`${cat}|${t}`);
+                        return (
+                          <span key={t} title={def.desc(t)}
+                                style={{display:'inline-block', margin:'0 .2rem .2rem 0', padding:'.1rem .4rem',
+                                        borderRadius:10, fontSize:'.7rem', fontWeight:600,
+                                        background: conseguido ? 'rgba(245,166,35,.18)' : 'var(--gris)',
+                                        color: conseguido ? '#b7791f' : 'var(--texto2)',
+                                        border: '1px solid ' + (conseguido ? 'rgba(245,166,35,.5)' : 'var(--borde)')}}>
+                            {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? 'Temporada' : t}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {siguienteTier != null && (
+                      <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.25rem'}}>
+                        Progreso: {Math.min(valorActual, siguienteTier)}/{siguienteTier}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Competiciones({ federacion, participantes, isAdmin }) {
   const [tab, setTab] = useState('calendario');
   return (
@@ -10366,12 +10603,19 @@ function Competiciones({ federacion, participantes, isAdmin }) {
                 onClick={() => setTab('h2h')}>Liga FILFA</button>
         <button className={`tab ${tab==='torneos'?'active':''}`}
                 onClick={() => setTab('torneos')}>Torneos</button>
+        {federacion?.logros_habilitado && (
+          <button className={`tab ${tab==='logros'?'active':''}`}
+                  onClick={() => setTab('logros')}>🏆 Logros</button>
+        )}
       </div>
       {tab === 'calendario' && (
         <CalendarioFantasy participantes={participantes} federacion={federacion} isAdmin={isAdmin} />
       )}
       {tab === 'h2h' && (
         <LigaH2H federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
+      )}
+      {tab === 'logros' && (
+        <LogrosVista federacion={federacion} participantes={participantes} />
       )}
       {tab === 'torneos' && (
         <TorneosVista federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
@@ -10673,6 +10917,7 @@ function App() {
         {vista === 'Tablón' && (
           <Tablon federacionId={federacion?.id} isAdmin={isAdmin} isModerador={isModerador}
                   miNombre={participantes.find(p => p.id === session?.participante_id)?.nombre}
+                  miParticipanteId={session?.participante_id}
                   mensajesHabilitados={federacion?.mensajes_tablon_habilitados ?? true}
                   onBadgeChange={refrescarTablonBadge} refreshKey={tablonRefreshKey} />
         )}
@@ -10758,6 +11003,49 @@ function RachaMaxTable({ rows, field, color }) {
   );
 }
 
+// Resumen de logros (nº de trofeos + el más reciente) por equipo. `logros`
+// son filas ya persistidas de la tabla `logros` (ver LOGROS_CATALOGO,
+// definido junto a AdminLigaH2H más abajo en este archivo).
+function LogrosResumenTable({ rowsParticipantes, logros }) {
+  const porEquipo = {};
+  rowsParticipantes.forEach(p => { porEquipo[p.id] = { id: p.id, nombre: p.nombre, total: 0, ultimo: null }; });
+  logros.forEach(l => {
+    const e = porEquipo[l.participante_id];
+    if (!e) return;
+    e.total++;
+    if (!e.ultimo || (l.unlocked_at && l.unlocked_at > e.ultimo.unlocked_at)) e.ultimo = l;
+  });
+  const sorted = Object.values(porEquipo).sort((a, b) => b.total - a.total);
+  if (sorted.every(e => e.total === 0)) {
+    return <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>Ningún equipo ha desbloqueado logros todavía.</p>;
+  }
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table>
+        <thead>
+          <tr><th>Equipo</th><th style={{textAlign:'right'}}>🏆 Trofeos</th><th>Último logro</th></tr>
+        </thead>
+        <tbody>
+          {sorted.map(e => {
+            const cat = e.ultimo ? LOGROS_CATALOGO[e.ultimo.categoria] : null;
+            const desc = cat?.desc ? cat.desc(e.ultimo.tier === 'temporada' ? 'temporada' : Number(e.ultimo.tier)) : '';
+            return (
+              <tr key={e.id}>
+                <td style={{fontWeight:600}}>{e.nombre}</td>
+                <td style={{textAlign:'right', fontWeight: e.total > 0 ? 700 : 400,
+                            color: e.total > 0 ? 'var(--oro)' : 'var(--texto2)'}}>{e.total}</td>
+                <td style={{fontSize:'.82rem', color:'var(--texto2)'}}>
+                  {e.ultimo ? <>{cat?.icono} {desc}</> : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes, isAdmin }) {
   const [tab,              setTab]             = useState('clasificacion');
@@ -10767,12 +11055,20 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
   const [jornadaHistorial, setJornadaHistorial] = useState(federacion?.jornada_h2h_actual || 1);
   const [divisiones,       setDivisiones]       = useState([]);
   const [vueltasExtra,     setVueltasExtra]     = useState([]);
+  const [logros,           setLogros]           = useState([]);
 
   useEffect(() => {
     if (!sb) return;
     sb.from('divisiones').select('id, nombre').order('nombre')
       .then(({ data }) => setDivisiones(data || []));
   }, []);
+
+  useEffect(() => {
+    if (!sb || !federacion?.id || !federacion?.logros_habilitado) return;
+    sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
+      .eq('federacion_id', federacion.id).order('unlocked_at', { ascending: false })
+      .then(({ data }) => setLogros(data || []));
+  }, [federacion?.id, federacion?.logros_habilitado]);
 
   useEffect(() => {
     if (!sb || !federacion?.id || !federacion?.h2h_habilitado) return;
@@ -11400,6 +11696,7 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                   const nombre = divisiones.find(d => d.id === divId)?.nombre || 'División';
                   const rows = computePosHistorial(divId);
                   const rowsRachas = computeRachasMax(divId);
+                  const equiposDiv = participantes.filter(p => p.division_id === divId);
                   return (
                     <div key={divId}>
                       <div className="card" style={{marginBottom:'.75rem'}}>
@@ -11414,6 +11711,12 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                         <h2 style={{marginBottom:'.75rem'}}>{nombre} — Rachas</h2>
                         <RachasSeccion rows={rowsRachas} />
                       </div>
+                      {federacion?.logros_habilitado && (
+                        <div className="card" style={{marginBottom:'.75rem'}}>
+                          <h2 style={{marginBottom:'.75rem'}}>{nombre} — 🏆 Logros</h2>
+                          <LogrosResumenTable rowsParticipantes={equiposDiv} logros={logros} />
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -11429,10 +11732,16 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                         </p>
                         <PosHistorialTable rows={rows} />
                       </div>
-                      <div className="card">
+                      <div className="card" style={{marginBottom: federacion?.logros_habilitado ? '.75rem' : 0}}>
                         <h2 style={{marginBottom:'.75rem'}}>Rachas</h2>
                         <RachasSeccion rows={rowsRachas} />
                       </div>
+                      {federacion?.logros_habilitado && (
+                        <div className="card">
+                          <h2 style={{marginBottom:'.75rem'}}>🏆 Logros</h2>
+                          <LogrosResumenTable rowsParticipantes={participantes} logros={logros} />
+                        </div>
+                      )}
                     </>
                   );
                 })()
@@ -11626,8 +11935,169 @@ function getVueltaInfo(jornada, jornadasBase, ptsV1, ptsV2, vueltasExtra) {
     : { vuelta: 2, ptsLocal: ptsV2 ?? 5 };
 }
 
+// ── LOGROS DE TEMPORADA ─────────────────────────────────────────
+// Catálogo de insignias de Liga FILFA. Todo se deriva de h2h_partidos
+// (pts_local/pts_visitante ya son "goles", ver ptsToGoles). Se guardan
+// permanentemente en la tabla `logros` (ver supabase_logros.sql) — una
+// vez desbloqueado un tramo, nunca se borra aunque después se editen
+// los resultados que lo originaron.
+const LOGROS_CATALOGO = {
+  racha_victorias: {
+    nombre: 'Racha ganadora', icono: '🔥',
+    tiers: [3, 5, 10, 15],
+    desc: t => `${t} victorias seguidas`,
+  },
+  racha_invicto: {
+    nombre: 'Racha invicto', icono: '🛡️',
+    tiers: [3, 5, 10, 15, 20, 'temporada'],
+    desc: t => t === 'temporada' ? 'Invicto toda la temporada' : `${t} partidos seguidos sin perder`,
+  },
+  victorias_totales: {
+    nombre: 'Cazador de triunfos', icono: '🏅',
+    tiers: [1, 5, 10, 15, 20],
+    desc: t => `${t} partido${t == 1 ? '' : 's'} ganado${t == 1 ? '' : 's'}`,
+  },
+  racha_marcando: {
+    nombre: 'Racha goleadora', icono: '⚽',
+    tiers: [3, 5, 10, 15, 20, 'temporada'],
+    desc: t => t === 'temporada' ? 'Ha marcado en todos los partidos de la temporada' : `${t} partidos seguidos marcando`,
+  },
+  goles_partido: {
+    nombre: 'Manita', icono: '🎯',
+    tiers: [3, 4, 5, 6, 7, 8, 9, 10],
+    desc: t => `${t} goles en un partido`,
+  },
+  goleada: {
+    nombre: 'Goleada', icono: '💥',
+    tiers: [5, 7, 10],
+    desc: t => `Victoria por ${t}+ goles de diferencia`,
+  },
+  racha_porteria_cero: {
+    nombre: 'Muralla', icono: '🧱',
+    tiers: [3, 5, 10, 15, 20, 'temporada'],
+    desc: t => t === 'temporada' ? 'Toda la temporada sin encajar' : `${t} partidos seguidos sin encajar`,
+  },
+  goles_temporada: {
+    nombre: 'Máximo goleador', icono: '👑',
+    tiers: [30, 50, 75, 100],
+    desc: t => `${t} goles marcados en la temporada`,
+  },
+};
+
+// Recorre h2h_partidos y devuelve, por equipo, TODOS los tramos de
+// LOGROS_CATALOGO alcanzados hasta ahora (no solo los nuevos — eso lo
+// decide el caller comparando contra lo que ya haya en la tabla `logros`,
+// para no duplicar filas ni volver a publicar el mismo anuncio).
+// `partidos` debe incluir TODOS los partidos de la federación (jugados
+// y pendientes) para poder detectar correctamente los especiales "toda
+// la temporada" (solo se conceden si el equipo ha completado todo su
+// calendario sin perder/sin dejar de marcar/sin encajar).
+function detectarLogros(partidos, participantes) {
+  const out = []; // { participante_id, categoria, tier, valor, jornada }
+  const marcar = (pid, categoria, tier, valor, jornada) => {
+    out.push({ participante_id: pid, categoria, tier: String(tier), valor, jornada });
+  };
+  const tocarTier = (visto, pid, categoria, tiers, valorActual, jornada) => {
+    tiers.forEach(t => {
+      if (t === 'temporada') return; // se resuelve aparte, al final del recorrido
+      if (valorActual >= t && !visto.has(t)) { visto.add(t); marcar(pid, categoria, t, valorActual, jornada); }
+    });
+  };
+
+  participantes.forEach(p => {
+    const propios = partidos.filter(m => m.local_id === p.id || m.visitante_id === p.id);
+    const jugados = propios
+      .filter(m => m.pts_local !== null && m.pts_visitante !== null)
+      .sort((a, b) => a.jornada - b.jornada);
+    if (jugados.length === 0) return;
+
+    let curG = 0, curSP = 0, curMarcando = 0, curPorteria0 = 0, totalGanados = 0, totalGoles = 0;
+    const vistoG = new Set(), vistoSP = new Set(), vistoMarc = new Set(), vistoPor0 = new Set();
+    const vistoGP = new Set(), vistoGoleada = new Set(), vistoGolesTemp = new Set(), vistoVict = new Set();
+
+    jugados.forEach(m => {
+      const esLocal = m.local_id === p.id;
+      const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
+      const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
+      const gano = gf > gc, perdio = gf < gc;
+
+      curG         = gano ? curG + 1 : 0;
+      curSP        = !perdio ? curSP + 1 : 0;
+      curMarcando  = gf > 0 ? curMarcando + 1 : 0;
+      curPorteria0 = gc === 0 ? curPorteria0 + 1 : 0;
+      if (gano) totalGanados++;
+      totalGoles += gf;
+
+      tocarTier(vistoG,    p.id, 'racha_victorias',     LOGROS_CATALOGO.racha_victorias.tiers,     curG,         m.jornada);
+      tocarTier(vistoSP,   p.id, 'racha_invicto',       LOGROS_CATALOGO.racha_invicto.tiers,       curSP,        m.jornada);
+      tocarTier(vistoMarc, p.id, 'racha_marcando',      LOGROS_CATALOGO.racha_marcando.tiers,      curMarcando,  m.jornada);
+      tocarTier(vistoPor0, p.id, 'racha_porteria_cero', LOGROS_CATALOGO.racha_porteria_cero.tiers, curPorteria0, m.jornada);
+      tocarTier(vistoVict, p.id, 'victorias_totales',   LOGROS_CATALOGO.victorias_totales.tiers,   totalGanados, m.jornada);
+      tocarTier(vistoGP,   p.id, 'goles_partido',       LOGROS_CATALOGO.goles_partido.tiers,       gf,           m.jornada);
+      tocarTier(vistoGolesTemp, p.id, 'goles_temporada', LOGROS_CATALOGO.goles_temporada.tiers,    totalGoles,   m.jornada);
+      if (gano) tocarTier(vistoGoleada, p.id, 'goleada', LOGROS_CATALOGO.goleada.tiers, gf - gc, m.jornada);
+    });
+
+    // Especiales "toda la temporada": solo si ha jugado TODOS sus partidos
+    // programados (jugados + pendientes) y la racha final cubre todos ellos.
+    const totalProgramados = propios.length;
+    const ultimaJornada = jugados[jugados.length - 1].jornada;
+    if (totalProgramados > 0 && jugados.length === totalProgramados) {
+      if (curSP === jugados.length)        marcar(p.id, 'racha_invicto',        'temporada', curSP,        ultimaJornada);
+      if (curMarcando === jugados.length)  marcar(p.id, 'racha_marcando',       'temporada', curMarcando,  ultimaJornada);
+      if (curPorteria0 === jugados.length) marcar(p.id, 'racha_porteria_cero',  'temporada', curPorteria0, ultimaJornada);
+    }
+  });
+
+  // Dedupe: nos quedamos con la primera vez (jornada más baja) que se alcanzó cada tramo.
+  const porClave = new Map();
+  out.forEach(l => {
+    const k = `${l.participante_id}|${l.categoria}|${l.tier}`;
+    const prev = porClave.get(k);
+    if (!prev || (l.jornada ?? Infinity) < (prev.jornada ?? Infinity)) porClave.set(k, l);
+  });
+  return [...porClave.values()];
+}
+
+// Estado actual (valores continuos) de cada métrica de LOGROS_CATALOGO por
+// equipo — para mostrar "cuánto falta" hacia el siguiente tramo en la vista
+// de Logros. A diferencia de detectarLogros, no distingue tramos: da el
+// valor "vivo" de cada métrica (racha actual, total acumulado, máximo de
+// un partido...). Devuelve { [participante_id]: { categoria: valor, ... } }.
+function progresoLogros(partidos, participantes) {
+  const out = {};
+  participantes.forEach(p => {
+    const jugados = partidos
+      .filter(m => (m.local_id === p.id || m.visitante_id === p.id) && m.pts_local !== null && m.pts_visitante !== null)
+      .sort((a, b) => a.jornada - b.jornada);
+    let curG = 0, curSP = 0, curMarcando = 0, curPorteria0 = 0, totalGanados = 0, totalGoles = 0;
+    let maxGolesPartido = 0, maxGoleada = 0;
+    jugados.forEach(m => {
+      const esLocal = m.local_id === p.id;
+      const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
+      const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
+      const gano = gf > gc, perdio = gf < gc;
+      curG         = gano ? curG + 1 : 0;
+      curSP        = !perdio ? curSP + 1 : 0;
+      curMarcando  = gf > 0 ? curMarcando + 1 : 0;
+      curPorteria0 = gc === 0 ? curPorteria0 + 1 : 0;
+      if (gano) { totalGanados++; maxGoleada = Math.max(maxGoleada, gf - gc); }
+      totalGoles += gf;
+      maxGolesPartido = Math.max(maxGolesPartido, gf);
+    });
+    out[p.id] = {
+      racha_victorias: curG, racha_invicto: curSP, racha_marcando: curMarcando,
+      racha_porteria_cero: curPorteria0, victorias_totales: totalGanados,
+      goles_partido: maxGolesPartido, goleada: maxGoleada, goles_temporada: totalGoles,
+    };
+  });
+  return out;
+}
+
 function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerador, actorNombre }) {
   const [h2hOn,      setH2hOn]      = useState(!!federacion?.h2h_habilitado);
+  const [logrosOn,   setLogrosOn]   = useState(!!federacion?.logros_habilitado);
+  const [recalculandoLogros, setRecalculandoLogros] = useState(false);
   const [partidos,   setPartidos]   = useState([]);
   const [resultados, setResultados] = useState({});
   const [generando,  setGenerando]  = useState(false);
@@ -11901,6 +12371,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     publicar(federacion?.id, 'admin', `H2H J${j_h2h} calculada automáticamente (${detalle})`, actorNombre);
     setMsg(`J${j_h2h} calculada`);
     setTimeout(() => setMsg(''), 3000);
+    recalcularLogros();
   };
 
   const moverCrit = (idx, dir) => {
@@ -11935,6 +12406,58 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     onFederacionUpdate({ ...federacion, h2h_habilitado: val });
     setMsg(val ? 'Liga FILFA activada' : 'Liga FILFA desactivada');
     setTimeout(() => setMsg(''), 2500);
+  };
+
+  const toggleLogros = async (val) => {
+    await sb.from('federaciones').update({ logros_habilitado: val }).eq('id', federacion.id);
+    setLogrosOn(val);
+    onFederacionUpdate({ ...federacion, logros_habilitado: val });
+    setMsg(val ? 'Logros activados' : 'Logros desactivados');
+    setTimeout(() => setMsg(''), 2500);
+  };
+
+  // Recalcula los logros de todos los equipos a partir del calendario actual
+  // (jugado y pendiente) y persiste solo los tramos que todavía no existan en
+  // la tabla `logros` — nunca se borra ni se sobrescribe uno ya conseguido.
+  // Se llama automáticamente tras guardar resultados de Liga FILFA, y también
+  // se puede forzar a mano con el botón "Recalcular logros".
+  const recalcularLogros = async () => {
+    if (!federacion?.logros_habilitado || !federacion?.id) return;
+    setRecalculandoLogros(true);
+    try {
+      const [{ data: partidosTodos }, { data: existentes }] = await Promise.all([
+        sb.from('h2h_partidos')
+          .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
+          .eq('federacion_id', federacion.id),
+        sb.from('logros').select('participante_id, categoria, tier').eq('federacion_id', federacion.id),
+      ]);
+      const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
+      const detectados = detectarLogros(partidosTodos || [], participantes);
+      const nuevos = detectados.filter(l => !yaTiene.has(`${l.participante_id}|${l.categoria}|${l.tier}`));
+      if (nuevos.length > 0) {
+        const filas = nuevos.map(l => ({
+          federacion_id: federacion.id, participante_id: l.participante_id,
+          categoria: l.categoria, tier: l.tier, valor: l.valor, jornada: l.jornada,
+        }));
+        const { error } = await sb.from('logros').insert(filas);
+        if (error) { console.error('[Logros] Error al guardar:', error.message); }
+        else {
+          const nomLog = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
+          nuevos.forEach(l => {
+            const cat = LOGROS_CATALOGO[l.categoria];
+            const desc = cat?.desc ? cat.desc(l.tier === 'temporada' ? 'temporada' : Number(l.tier)) : l.categoria;
+            publicar(federacion.id, 'logro',
+              `${cat?.icono || '🏆'} ${nomLog[l.participante_id] || 'Un equipo'} ha conseguido: ${desc}`,
+              nomLog[l.participante_id]);
+          });
+          setMsg(`${nuevos.length} logro${nuevos.length === 1 ? '' : 's'} nuevo${nuevos.length === 1 ? '' : 's'} desbloqueado${nuevos.length === 1 ? '' : 's'}`);
+          setTimeout(() => setMsg(''), 3500);
+        }
+      }
+    } catch (e) {
+      console.error('[Logros] Error al recalcular:', e);
+    }
+    setRecalculandoLogros(false);
   };
 
   // ── Utilidades ─────────────────────────────────────────────
@@ -12086,6 +12609,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setMsg('Resultados guardados');
     setTimeout(() => setMsg(''), 2500);
     cargar();
+    recalcularLogros();
   };
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
@@ -12169,6 +12693,35 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
           activo={h2hOn}
           onToggle={toggleH2H}
         />
+
+        {h2hOn && (
+          <div style={{display:'flex', alignItems:'flex-start', gap:'1rem',
+                       padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700, marginBottom:'.2rem'}}>Logros de temporada</div>
+              <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>
+                Insignias automáticas por rachas y récords (victorias seguidas, invicto, goles en un partido…).
+                Se recalculan solas cada vez que guardas resultados de Liga FILFA; una vez conseguidas son
+                permanentes, incluso si más adelante reinicias la temporada.
+              </div>
+            </div>
+            <div style={{display:'flex', alignItems:'center', gap:'.6rem', flexShrink:0, flexWrap:'wrap', justifyContent:'flex-end'}}>
+              {logrosOn && (
+                <button className="btn-ok" onClick={recalcularLogros} disabled={recalculandoLogros}
+                        style={{opacity: recalculandoLogros ? .6 : 1}}>
+                  {recalculandoLogros ? 'Recalculando…' : '🏆 Recalcular logros'}
+                </button>
+              )}
+              <span style={{fontSize:'.85rem', fontWeight:600,
+                            color: logrosOn ? 'var(--verde)' : 'var(--texto2)'}}>
+                {logrosOn ? 'Activados' : 'Desactivados'}
+              </span>
+              <button className={logrosOn ? 'btn-cancel' : 'btn-ok'} onClick={() => toggleLogros(!logrosOn)}>
+                {logrosOn ? 'Desactivar' : 'Activar'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ── Jornada H2H actual ── */}
         <div style={{padding:'1rem 0', borderBottom:'1px solid var(--borde)'}}>

@@ -3713,6 +3713,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [msgOferta, setMsgOferta]     = useState('');
   const [miPresupuesto, setMiPresupuesto] = useState(null);
   const [puntosHistorial, setPuntosHistorial] = useState({}); // jugador_id → { jornada: pts }
+  const [logrosEquipo, setLogrosEquipo] = useState([]);
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -3762,6 +3763,13 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     sb.from('participantes').select('presupuesto').eq('id', sesionParticipanteId).single()
       .then(({ data }) => setMiPresupuesto(data?.presupuesto ?? null));
   }, [sesionParticipanteId]);
+
+  useEffect(() => {
+    if (!sb || !equipoId || !federacion?.logros_habilitado) { setLogrosEquipo([]); return; }
+    sb.from('logros').select('categoria, tier, valor, jornada, unlocked_at')
+      .eq('participante_id', equipoId).order('unlocked_at', { ascending: false })
+      .then(({ data }) => setLogrosEquipo(data || []));
+  }, [equipoId, federacion?.logros_habilitado]);
 
   useEffect(() => {
     if (!equipoId || !sb) return;
@@ -3945,6 +3953,30 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {equipo && federacion?.logros_habilitado && (
+        <div className="card">
+          <h2 style={{marginBottom:'.5rem'}}>🏆 Logros {logrosEquipo.length > 0 ? `(${logrosEquipo.length})` : ''}</h2>
+          {logrosEquipo.length === 0
+            ? <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>Este equipo todavía no ha desbloqueado ningún logro.</p>
+            : <div style={{display:'flex', flexWrap:'wrap', gap:'.4rem'}}>
+                {logrosEquipo.map((l, i) => {
+                  const cat = LOGROS_CATALOGO[l.categoria];
+                  const desc = cat?.desc ? cat.desc(l.tier === 'temporada' ? 'temporada' : Number(l.tier)) : l.categoria;
+                  return (
+                    <span key={i} title={l.jornada ? `Conseguido en la jornada ${l.jornada}` : undefined}
+                          style={{display:'inline-flex', alignItems:'center', gap:'.3rem', padding:'.25rem .6rem',
+                                  borderRadius:14, fontSize:'.78rem', fontWeight:600,
+                                  background:'rgba(245,166,35,.14)', color:'#b7791f',
+                                  border:'1px solid rgba(245,166,35,.4)'}}>
+                      {cat?.icono || '🏆'} {desc}
+                    </span>
+                  );
+                })}
+              </div>
+          }
         </div>
       )}
 
@@ -4469,7 +4501,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
   const POR_PAG = 20;
 
   // Reacciones y comentarios por anuncio
-  const EMOJIS_REACCION = ['👍', '😂', '🔥', '😮', '😢', '👎', '❤️'];
+  const EMOJIS_REACCION = ['👍', '😂', '🔥', '😮', '😢', '👎', '❤️', '👏', '👀', '😡', '​👽​', '🤔', '💵', '🚬', '🚫', '😱', '😎'];
   const [reacciones, setReacciones]           = useState({}); // anuncio_id → [{participante_id, emoji}]
   const [respuestas, setRespuestas]           = useState({}); // anuncio_id → [{id, participante_id, actor_nombre, texto, created_at}]
   const [respuestaTexto, setRespuestaTexto]   = useState({}); // anuncio_id → texto en curso
@@ -10506,19 +10538,32 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
 // LOGROS_CATALOGO/detectarLogros/progresoLogros están definidos junto a
 // AdminLigaH2H, más abajo en este archivo.
 function LogrosVista({ federacion, participantes }) {
-  const [partidos, setPartidos] = useState([]);
-  const [logros,   setLogros]   = useState(null);
+  const [partidos,      setPartidos]      = useState([]);
+  const [logros,        setLogros]        = useState(null);
+  const [clasificacion, setClasificacion] = useState([]);
+  const [alineaciones,  setAlineaciones]  = useState([]);
+  const [puntosJugador, setPuntosJugador] = useState([]);
+  const [sustitucionesAuto, setSustitucionesAuto] = useState([]);
 
   useEffect(() => {
     if (!sb || !federacion?.id || !federacion?.logros_habilitado) return;
+    const partIds = participantes.map(p => p.id);
     Promise.all([
       sb.from('h2h_partidos').select('id, jornada, local_id, visitante_id, pts_local, pts_visitante')
         .eq('federacion_id', federacion.id),
       sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
         .eq('federacion_id', federacion.id),
-    ]).then(([{ data: p }, { data: l }]) => {
+      partIds.length ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+      partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+      sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
+      sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
+    ]).then(([{ data: p }, { data: l }, { data: c }, { data: a }, { data: pj }, { data: s }]) => {
       setPartidos(p || []);
       setLogros(l || []);
+      setClasificacion(c || []);
+      setAlineaciones(a || []);
+      setPuntosJugador(pj || []);
+      setSustitucionesAuto(s || []);
     });
   }, [federacion?.id, federacion?.logros_habilitado]);
 
@@ -10532,7 +10577,7 @@ function LogrosVista({ federacion, participantes }) {
   }
   if (logros === null) return <div className="card"><Spinner /></div>;
 
-  const progreso = progresoLogros(partidos, participantes);
+  const progreso = progresoLogros(partidos, participantes, { clasificacion, alineaciones, puntosJugador, sustitucionesAuto });
   const porEquipo = {};
   participantes.forEach(p => { porEquipo[p.id] = []; });
   logros.forEach(l => { (porEquipo[l.participante_id] = porEquipo[l.participante_id] || []).push(l); });
@@ -10578,7 +10623,10 @@ function LogrosVista({ federacion, participantes }) {
                     </div>
                     {siguienteTier != null && (
                       <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.25rem'}}>
-                        Progreso: {Math.min(valorActual, siguienteTier)}/{siguienteTier}
+                        {cat === 'jornada_pocos_puntos'
+                          ? <>Tu peor jornada: {valorActual} pts (objetivo: {siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})</>
+                          : <>Progreso: {Math.min(valorActual, siguienteTier)}/{siguienteTier}</>
+                        }
                       </div>
                     )}
                   </div>
@@ -11982,17 +12030,72 @@ const LOGROS_CATALOGO = {
     tiers: [30, 50, 75, 100],
     desc: t => `${t} goles marcados en la temporada`,
   },
+  porteria_cero_totales: {
+    nombre: 'Fortín', icono: '🔒',
+    tiers: [1, 3, 5, 10, 15],
+    desc: t => `${t} partido${t == 1 ? '' : 's'} sin encajar en Liga FILFA`,
+  },
+  victorias_por_un_gol: {
+    nombre: 'Al filo', icono: '🤏',
+    tiers: [1, 3, 5, 10, 15, 20],
+    desc: t => `${t} victoria${t == 1 ? '' : 's'} por la mínima (1 gol)`,
+  },
+  derrotas_por_un_gol: {
+    nombre: 'Mala suerte', icono: '💔',
+    tiers: [1, 3, 5, 10, 15],
+    desc: t => `${t} derrota${t == 1 ? '' : 's'} por la mínima (1 gol)`,
+  },
+  jornadas_fantasticas_ganadas: {
+    nombre: 'Rey de la jornada', icono: '🥇',
+    tiers: [1, 3, 5, 10, 15, 20, 30],
+    desc: t => `${t} jornada${t == 1 ? '' : 's'} de Liga Fantástica ganada${t == 1 ? '' : 's'}`,
+  },
+  // ── Logros "de broma" ────────────────────────────────────────
+  jugadores_negativos_jornada: {
+    nombre: 'Jornada aciaga', icono: '💩',
+    tiers: [1, 2, 3, 4],
+    desc: t => `${t} titular${t == 1 ? '' : 'es'} puntuando negativo en la misma jornada`,
+  },
+  racha_jornadas_negativo: {
+    nombre: 'Maldición', icono: '☠️',
+    tiers: [2, 3, 4, 5],
+    desc: t => `${t} jornadas seguidas con algún titular puntuando negativo`,
+  },
+  jornada_pocos_puntos: {
+    nombre: 'Jornada para olvidar', icono: '📉',
+    tiers: [30, 25, 20, 15, 10, 0],
+    desc: t => t === 0 ? 'Una jornada con 0 puntos o menos' : `Una jornada con menos de ${t} puntos`,
+  },
+  suplente_negativo: {
+    nombre: 'Menudo cambio', icono: '🙈',
+    tiers: [1],
+    desc: t => `${t} jornada${t == 1 ? '' : 's'} en la que entra un suplente y puntúa negativo`,
+  },
+  racha_empates: {
+    nombre: 'Empatador serial', icono: '🤝',
+    tiers: [3, 5, 10],
+    desc: t => `${t} partidos seguidos empatados`,
+  },
 };
 
-// Recorre h2h_partidos y devuelve, por equipo, TODOS los tramos de
-// LOGROS_CATALOGO alcanzados hasta ahora (no solo los nuevos — eso lo
-// decide el caller comparando contra lo que ya haya en la tabla `logros`,
-// para no duplicar filas ni volver a publicar el mismo anuncio).
+// Recorre h2h_partidos, clasificacion (Liga Fantástica), alineaciones,
+// puntos_jugador y sustituciones_auto, y devuelve, por equipo, TODOS los
+// tramos de LOGROS_CATALOGO alcanzados hasta ahora (no solo los nuevos —
+// eso lo decide el caller comparando contra lo que ya haya en la tabla
+// `logros`, para no duplicar filas ni volver a publicar el mismo anuncio).
 // `partidos` debe incluir TODOS los partidos de la federación (jugados
 // y pendientes) para poder detectar correctamente los especiales "toda
 // la temporada" (solo se conceden si el equipo ha completado todo su
 // calendario sin perder/sin dejar de marcar/sin encajar).
-function detectarLogros(partidos, participantes) {
+// `extra.clasificacion` (participante_id, jornada, puntos_jornada) y
+// `extra.alineaciones`/`extra.puntosJugador` alimentan los logros de Liga
+// Fantástica y los de "titular puntuando negativo". Titular = es_titular
+// en `alineaciones` esa jornada; no tiene en cuenta sustituciones
+// automáticas por lesión/no-jugó (simplificación deliberada), salvo para
+// "Menudo cambio", que usa `extra.sustitucionesAuto` (jugador_entra_id,
+// participante_id, jornada) precisamente para detectar a esos suplentes.
+function detectarLogros(partidos, participantes, extra = {}) {
+  const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [] } = extra;
   const out = []; // { participante_id, categoria, tier, valor, jornada }
   const marcar = (pid, categoria, tier, valor, jornada) => {
     out.push({ participante_id: pid, categoria, tier: String(tier), valor, jornada });
@@ -12003,49 +12106,127 @@ function detectarLogros(partidos, participantes) {
       if (valorActual >= t && !visto.has(t)) { visto.add(t); marcar(pid, categoria, t, valorActual, jornada); }
     });
   };
+  // Para logros "cuanto más bajo, más se cumple" (una jornada con pocos
+  // puntos): tier=0 significa "0 puntos o menos", el resto "menos de tier".
+  const tocarTierMenorQue = (visto, pid, categoria, tiers, valorActual, jornada) => {
+    tiers.forEach(t => {
+      const cumple = t === 0 ? valorActual <= 0 : valorActual < t;
+      if (cumple && !visto.has(t)) { visto.add(t); marcar(pid, categoria, t, valorActual, jornada); }
+    });
+  };
+
+  // Puntos de cada jugador por jornada, y máxima puntuación fantasy de
+  // cada jornada (para "jornadas ganadas") — calculado una sola vez.
+  const ptsJugJornada = {};
+  puntosJugador.forEach(r => { ptsJugJornada[`${r.jugador_id}_${r.jornada}`] = Number(r.pts); });
+  const maxFantasyPorJornada = {};
+  clasificacion.forEach(r => {
+    const actual = maxFantasyPorJornada[r.jornada];
+    if (actual === undefined || r.puntos_jornada > actual) maxFantasyPorJornada[r.jornada] = r.puntos_jornada;
+  });
 
   participantes.forEach(p => {
     const propios = partidos.filter(m => m.local_id === p.id || m.visitante_id === p.id);
     const jugados = propios
       .filter(m => m.pts_local !== null && m.pts_visitante !== null)
       .sort((a, b) => a.jornada - b.jornada);
-    if (jugados.length === 0) return;
 
-    let curG = 0, curSP = 0, curMarcando = 0, curPorteria0 = 0, totalGanados = 0, totalGoles = 0;
-    const vistoG = new Set(), vistoSP = new Set(), vistoMarc = new Set(), vistoPor0 = new Set();
-    const vistoGP = new Set(), vistoGoleada = new Set(), vistoGolesTemp = new Set(), vistoVict = new Set();
+    if (jugados.length > 0) {
+      let curG = 0, curSP = 0, curMarcando = 0, curPorteria0 = 0, curEmpates = 0, totalGanados = 0, totalGoles = 0;
+      let totalPorteria0 = 0, totalVictUno = 0, totalDerrUno = 0;
+      const vistoG = new Set(), vistoSP = new Set(), vistoMarc = new Set(), vistoPor0 = new Set();
+      const vistoGP = new Set(), vistoGoleada = new Set(), vistoGolesTemp = new Set(), vistoVict = new Set();
+      const vistoPor0Tot = new Set(), vistoVictUno = new Set(), vistoDerrUno = new Set(), vistoEmpates = new Set();
 
-    jugados.forEach(m => {
-      const esLocal = m.local_id === p.id;
-      const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
-      const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
-      const gano = gf > gc, perdio = gf < gc;
+      jugados.forEach(m => {
+        const esLocal = m.local_id === p.id;
+        const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
+        const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
+        const gano = gf > gc, perdio = gf < gc, empato = gf === gc;
 
-      curG         = gano ? curG + 1 : 0;
-      curSP        = !perdio ? curSP + 1 : 0;
-      curMarcando  = gf > 0 ? curMarcando + 1 : 0;
-      curPorteria0 = gc === 0 ? curPorteria0 + 1 : 0;
-      if (gano) totalGanados++;
-      totalGoles += gf;
+        curG         = gano ? curG + 1 : 0;
+        curSP        = !perdio ? curSP + 1 : 0;
+        curMarcando  = gf > 0 ? curMarcando + 1 : 0;
+        curPorteria0 = gc === 0 ? curPorteria0 + 1 : 0;
+        curEmpates   = empato ? curEmpates + 1 : 0;
+        if (gano) totalGanados++;
+        totalGoles += gf;
+        if (gc === 0) totalPorteria0++;
+        if (gano && (gf - gc) === 1) totalVictUno++;
+        if (perdio && (gc - gf) === 1) totalDerrUno++;
 
-      tocarTier(vistoG,    p.id, 'racha_victorias',     LOGROS_CATALOGO.racha_victorias.tiers,     curG,         m.jornada);
-      tocarTier(vistoSP,   p.id, 'racha_invicto',       LOGROS_CATALOGO.racha_invicto.tiers,       curSP,        m.jornada);
-      tocarTier(vistoMarc, p.id, 'racha_marcando',      LOGROS_CATALOGO.racha_marcando.tiers,      curMarcando,  m.jornada);
-      tocarTier(vistoPor0, p.id, 'racha_porteria_cero', LOGROS_CATALOGO.racha_porteria_cero.tiers, curPorteria0, m.jornada);
-      tocarTier(vistoVict, p.id, 'victorias_totales',   LOGROS_CATALOGO.victorias_totales.tiers,   totalGanados, m.jornada);
-      tocarTier(vistoGP,   p.id, 'goles_partido',       LOGROS_CATALOGO.goles_partido.tiers,       gf,           m.jornada);
-      tocarTier(vistoGolesTemp, p.id, 'goles_temporada', LOGROS_CATALOGO.goles_temporada.tiers,    totalGoles,   m.jornada);
-      if (gano) tocarTier(vistoGoleada, p.id, 'goleada', LOGROS_CATALOGO.goleada.tiers, gf - gc, m.jornada);
+        tocarTier(vistoG,    p.id, 'racha_victorias',     LOGROS_CATALOGO.racha_victorias.tiers,     curG,         m.jornada);
+        tocarTier(vistoSP,   p.id, 'racha_invicto',       LOGROS_CATALOGO.racha_invicto.tiers,       curSP,        m.jornada);
+        tocarTier(vistoMarc, p.id, 'racha_marcando',      LOGROS_CATALOGO.racha_marcando.tiers,      curMarcando,  m.jornada);
+        tocarTier(vistoPor0, p.id, 'racha_porteria_cero', LOGROS_CATALOGO.racha_porteria_cero.tiers, curPorteria0, m.jornada);
+        tocarTier(vistoVict, p.id, 'victorias_totales',   LOGROS_CATALOGO.victorias_totales.tiers,   totalGanados, m.jornada);
+        tocarTier(vistoGP,   p.id, 'goles_partido',       LOGROS_CATALOGO.goles_partido.tiers,       gf,           m.jornada);
+        tocarTier(vistoGolesTemp, p.id, 'goles_temporada', LOGROS_CATALOGO.goles_temporada.tiers,    totalGoles,   m.jornada);
+        if (gano) tocarTier(vistoGoleada, p.id, 'goleada', LOGROS_CATALOGO.goleada.tiers, gf - gc, m.jornada);
+        tocarTier(vistoPor0Tot, p.id, 'porteria_cero_totales', LOGROS_CATALOGO.porteria_cero_totales.tiers, totalPorteria0, m.jornada);
+        tocarTier(vistoVictUno, p.id, 'victorias_por_un_gol',  LOGROS_CATALOGO.victorias_por_un_gol.tiers,  totalVictUno,   m.jornada);
+        tocarTier(vistoEmpates, p.id, 'racha_empates',         LOGROS_CATALOGO.racha_empates.tiers,         curEmpates,     m.jornada);
+        tocarTier(vistoDerrUno, p.id, 'derrotas_por_un_gol',   LOGROS_CATALOGO.derrotas_por_un_gol.tiers,   totalDerrUno,   m.jornada);
+      });
+
+      // Especiales "toda la temporada": solo si ha jugado TODOS sus partidos
+      // programados (jugados + pendientes) y la racha final cubre todos ellos.
+      const totalProgramados = propios.length;
+      const ultimaJornada = jugados[jugados.length - 1].jornada;
+      if (totalProgramados > 0 && jugados.length === totalProgramados) {
+        if (curSP === jugados.length)        marcar(p.id, 'racha_invicto',        'temporada', curSP,        ultimaJornada);
+        if (curMarcando === jugados.length)  marcar(p.id, 'racha_marcando',       'temporada', curMarcando,  ultimaJornada);
+        if (curPorteria0 === jugados.length) marcar(p.id, 'racha_porteria_cero',  'temporada', curPorteria0, ultimaJornada);
+      }
+    }
+
+    // ── Liga Fantástica: jornadas flojas y jornadas ganadas ──────────
+    const misClasif = clasificacion.filter(r => r.participante_id === p.id).sort((a, b) => a.jornada - b.jornada);
+    if (misClasif.length > 0) {
+      let totalGanadasFant = 0;
+      const vistoPocosPts = new Set(), vistoGanadasFant = new Set();
+      misClasif.forEach(r => {
+        tocarTierMenorQue(vistoPocosPts, p.id, 'jornada_pocos_puntos', LOGROS_CATALOGO.jornada_pocos_puntos.tiers, r.puntos_jornada, r.jornada);
+        if (r.puntos_jornada === maxFantasyPorJornada[r.jornada]) {
+          totalGanadasFant++;
+          tocarTier(vistoGanadasFant, p.id, 'jornadas_fantasticas_ganadas', LOGROS_CATALOGO.jornadas_fantasticas_ganadas.tiers, totalGanadasFant, r.jornada);
+        }
+      });
+    }
+
+    // ── Titulares puntuando negativo por jornada ─────────────────────
+    const alinPorJornada = {};
+    alineaciones.filter(a => a.participante_id === p.id && a.es_titular).forEach(a => {
+      (alinPorJornada[a.jornada] = alinPorJornada[a.jornada] || []).push(a.jugador_id);
     });
+    const jornadasAlineadas = Object.keys(alinPorJornada).map(Number).sort((a, b) => a - b);
+    if (jornadasAlineadas.length > 0) {
+      let curRachaNeg = 0;
+      const vistoNegJornada = new Set(), vistoRachaNeg = new Set();
+      jornadasAlineadas.forEach(j => {
+        const negCount = alinPorJornada[j].filter(jid => (ptsJugJornada[`${jid}_${j}`] ?? 0) < 0).length;
+        if (negCount > 0) tocarTier(vistoNegJornada, p.id, 'jugadores_negativos_jornada', LOGROS_CATALOGO.jugadores_negativos_jornada.tiers, negCount, j);
+        curRachaNeg = negCount > 0 ? curRachaNeg + 1 : 0;
+        tocarTier(vistoRachaNeg, p.id, 'racha_jornadas_negativo', LOGROS_CATALOGO.racha_jornadas_negativo.tiers, curRachaNeg, j);
+      });
+    }
 
-    // Especiales "toda la temporada": solo si ha jugado TODOS sus partidos
-    // programados (jugados + pendientes) y la racha final cubre todos ellos.
-    const totalProgramados = propios.length;
-    const ultimaJornada = jugados[jugados.length - 1].jornada;
-    if (totalProgramados > 0 && jugados.length === totalProgramados) {
-      if (curSP === jugados.length)        marcar(p.id, 'racha_invicto',        'temporada', curSP,        ultimaJornada);
-      if (curMarcando === jugados.length)  marcar(p.id, 'racha_marcando',       'temporada', curMarcando,  ultimaJornada);
-      if (curPorteria0 === jugados.length) marcar(p.id, 'racha_porteria_cero',  'temporada', curPorteria0, ultimaJornada);
+    // ── "Menudo cambio": entra un suplente (sustitución automática) y
+    // puntúa negativo. Se cuenta como máximo una vez por jornada.
+    const misSusts = sustitucionesAuto
+      .filter(s => s.participante_id === p.id)
+      .sort((a, b) => a.jornada - b.jornada);
+    if (misSusts.length > 0) {
+      let totalSustNeg = 0;
+      const vistoSustNeg = new Set(), jornadasSustNeg = new Set();
+      misSusts.forEach(s => {
+        const pts = ptsJugJornada[`${s.jugador_entra_id}_${s.jornada}`];
+        if (pts !== undefined && pts < 0 && !jornadasSustNeg.has(s.jornada)) {
+          jornadasSustNeg.add(s.jornada);
+          totalSustNeg++;
+          tocarTier(vistoSustNeg, p.id, 'suplente_negativo', LOGROS_CATALOGO.suplente_negativo.tiers, totalSustNeg, s.jornada);
+        }
+      });
     }
   });
 
@@ -12064,31 +12245,77 @@ function detectarLogros(partidos, participantes) {
 // de Logros. A diferencia de detectarLogros, no distingue tramos: da el
 // valor "vivo" de cada métrica (racha actual, total acumulado, máximo de
 // un partido...). Devuelve { [participante_id]: { categoria: valor, ... } }.
-function progresoLogros(partidos, participantes) {
+// Mismos `extra` que detectarLogros.
+function progresoLogros(partidos, participantes, extra = {}) {
+  const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [] } = extra;
+  const ptsJugJornada = {};
+  puntosJugador.forEach(r => { ptsJugJornada[`${r.jugador_id}_${r.jornada}`] = Number(r.pts); });
+  const maxFantasyPorJornada = {};
+  clasificacion.forEach(r => {
+    const actual = maxFantasyPorJornada[r.jornada];
+    if (actual === undefined || r.puntos_jornada > actual) maxFantasyPorJornada[r.jornada] = r.puntos_jornada;
+  });
+
   const out = {};
   participantes.forEach(p => {
     const jugados = partidos
       .filter(m => (m.local_id === p.id || m.visitante_id === p.id) && m.pts_local !== null && m.pts_visitante !== null)
       .sort((a, b) => a.jornada - b.jornada);
-    let curG = 0, curSP = 0, curMarcando = 0, curPorteria0 = 0, totalGanados = 0, totalGoles = 0;
-    let maxGolesPartido = 0, maxGoleada = 0;
+    let curG = 0, curSP = 0, curMarcando = 0, curPorteria0 = 0, curEmpates = 0, totalGanados = 0, totalGoles = 0;
+    let maxGolesPartido = 0, maxGoleada = 0, totalPorteria0 = 0, totalVictUno = 0, totalDerrUno = 0;
     jugados.forEach(m => {
       const esLocal = m.local_id === p.id;
       const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
       const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
-      const gano = gf > gc, perdio = gf < gc;
+      const gano = gf > gc, perdio = gf < gc, empato = gf === gc;
       curG         = gano ? curG + 1 : 0;
       curSP        = !perdio ? curSP + 1 : 0;
       curMarcando  = gf > 0 ? curMarcando + 1 : 0;
       curPorteria0 = gc === 0 ? curPorteria0 + 1 : 0;
+      curEmpates   = empato ? curEmpates + 1 : 0;
       if (gano) { totalGanados++; maxGoleada = Math.max(maxGoleada, gf - gc); }
       totalGoles += gf;
       maxGolesPartido = Math.max(maxGolesPartido, gf);
+      if (gc === 0) totalPorteria0++;
+      if (gano && (gf - gc) === 1) totalVictUno++;
+      if (perdio && (gc - gf) === 1) totalDerrUno++;
     });
+
+    const misClasif = clasificacion.filter(r => r.participante_id === p.id).sort((a, b) => a.jornada - b.jornada);
+    let peorJornada = null, totalGanadasFant = 0;
+    misClasif.forEach(r => {
+      if (peorJornada === null || r.puntos_jornada < peorJornada) peorJornada = r.puntos_jornada;
+      if (r.puntos_jornada === maxFantasyPorJornada[r.jornada]) totalGanadasFant++;
+    });
+
+    const alinPorJornada = {};
+    alineaciones.filter(a => a.participante_id === p.id && a.es_titular).forEach(a => {
+      (alinPorJornada[a.jornada] = alinPorJornada[a.jornada] || []).push(a.jugador_id);
+    });
+    let curRachaNeg = 0, maxNegJornada = 0;
+    Object.keys(alinPorJornada).map(Number).sort((a, b) => a - b).forEach(j => {
+      const negCount = alinPorJornada[j].filter(jid => (ptsJugJornada[`${jid}_${j}`] ?? 0) < 0).length;
+      maxNegJornada = Math.max(maxNegJornada, negCount);
+      curRachaNeg = negCount > 0 ? curRachaNeg + 1 : 0;
+    });
+
+    const misSusts = sustitucionesAuto.filter(s => s.participante_id === p.id);
+    const jornadasSustNeg = new Set();
+    misSusts.forEach(s => {
+      const pts = ptsJugJornada[`${s.jugador_entra_id}_${s.jornada}`];
+      if (pts !== undefined && pts < 0) jornadasSustNeg.add(s.jornada);
+    });
+
     out[p.id] = {
       racha_victorias: curG, racha_invicto: curSP, racha_marcando: curMarcando,
       racha_porteria_cero: curPorteria0, victorias_totales: totalGanados,
       goles_partido: maxGolesPartido, goleada: maxGoleada, goles_temporada: totalGoles,
+      porteria_cero_totales: totalPorteria0, victorias_por_un_gol: totalVictUno, derrotas_por_un_gol: totalDerrUno,
+      jornadas_fantasticas_ganadas: totalGanadasFant,
+      jugadores_negativos_jornada: maxNegJornada, racha_jornadas_negativo: curRachaNeg,
+      jornada_pocos_puntos: peorJornada ?? 0,
+      suplente_negativo: jornadasSustNeg.size,
+      racha_empates: curEmpates,
     };
   });
   return out;
@@ -12425,14 +12652,22 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     if (!federacion?.logros_habilitado || !federacion?.id) return;
     setRecalculandoLogros(true);
     try {
-      const [{ data: partidosTodos }, { data: existentes }] = await Promise.all([
+      const partIds = participantes.map(p => p.id);
+      const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas }, { data: ptsJugTodos }, { data: sustsTodas }] = await Promise.all([
         sb.from('h2h_partidos')
           .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
           .eq('federacion_id', federacion.id),
         sb.from('logros').select('participante_id, categoria, tier').eq('federacion_id', federacion.id),
+        partIds.length ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+        partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+        sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
+        sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
       ]);
       const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
-      const detectados = detectarLogros(partidosTodos || [], participantes);
+      const detectados = detectarLogros(partidosTodos || [], participantes, {
+        clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],
+        sustitucionesAuto: sustsTodas || [],
+      });
       const nuevos = detectados.filter(l => !yaTiene.has(`${l.participante_id}|${l.categoria}|${l.tier}`));
       if (nuevos.length > 0) {
         const filas = nuevos.map(l => ({

@@ -2534,6 +2534,56 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 }
 
 // ── CALENDARIO FANTASY ─────────────────────────────────────────
+// Calcula el "once ideal" de una jornada: la mejor combinación de puntos,
+// cruzando todos los jugadores fichados por algún equipo de la liga, que
+// encaje en una formación válida (mismo catálogo de formaciones que usa
+// Alineacion: 1 POR fijo + una de las combinaciones DEF-MED-DEL de
+// FORMACIONES_ONCE). Para cada línea, la mejor combinación de tamaño N es
+// siempre los N jugadores de mayor puntuación (sin interacción entre
+// líneas), así que basta comparar sumas de prefijos entre formaciones.
+// `ptsRows`: [{jugador_id, pts}] de puntos_jugador para esa jornada.
+// `jugadoresMap`: id → {nombre, equipo, posicion}.
+// `fichadosMap`: id → nombre del equipo fantástico propietario (solo
+// contiene claves de jugadores fichados por alguien).
+// Devuelve null si no hay suficientes jugadores fichados y puntuados esa
+// jornada para completar ninguna formación válida.
+function calcularOnceIdeal(ptsRows, jugadoresMap, fichadosMap) {
+  const FORMACIONES_ONCE = [[5,4,1],[5,3,2],[5,2,3],[4,5,1],[4,4,2],[4,3,3],[4,2,4],[3,5,2],[3,6,1],[3,4,3],[3,3,4]];
+  const porPos = { POR: [], DEF: [], MED: [], DEL: [] };
+  ptsRows.forEach(r => {
+    const owner = fichadosMap[r.jugador_id];
+    if (owner === undefined) return; // no fichado por ningún equipo
+    const j = jugadoresMap[r.jugador_id];
+    if (!j || !porPos[j.posicion]) return;
+    porPos[j.posicion].push({
+      jugador_id: r.jugador_id, nombre: j.nombre, equipo: j.equipo, posicion: j.posicion,
+      equipoFantastico: owner, pts: Number(r.pts),
+    });
+  });
+  Object.values(porPos).forEach(arr => arr.sort((a, b) => b.pts - a.pts));
+  if (porPos.POR.length === 0) return null;
+
+  const portero = porPos.POR[0];
+  const cum = {};
+  ['DEF', 'MED', 'DEL'].forEach(pos => {
+    cum[pos] = [0];
+    porPos[pos].forEach((j, i) => cum[pos].push(cum[pos][i] + j.pts));
+  });
+
+  let mejor = null;
+  FORMACIONES_ONCE.forEach(([d, m, l]) => {
+    if (porPos.DEF.length < d || porPos.MED.length < m || porPos.DEL.length < l) return;
+    const total = portero.pts + cum.DEF[d] + cum.MED[m] + cum.DEL[l];
+    if (!mejor || total > mejor.total) {
+      mejor = {
+        total, formacion: `${d}-${m}-${l}`,
+        titulares: [portero, ...porPos.DEF.slice(0, d), ...porPos.MED.slice(0, m), ...porPos.DEL.slice(0, l)],
+      };
+    }
+  });
+  return mejor;
+}
+
 function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [clas, setClas]               = useState([]);
   const [vista, setVista]             = useState('acumulado');
@@ -2543,6 +2593,8 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [detalle, setDetalle]         = useState({});
   const [valoresPlantilla, setValoresPlantilla] = useState({});
   const [jornadaAcum, setJornadaAcum] = useState(null); // null = total temporada
+  const [onceIdeal, setOnceIdeal]         = useState(null);
+  const [onceIdealCargando, setOnceIdealCargando] = useState(false);
 
   useEffect(() => {
     if (!sb) return;
@@ -2571,6 +2623,27 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
         setValoresPlantilla(map);
       });
   }, [participantes]);
+
+  // Once ideal de la jornada: solo se calcula si el usuario está realmente
+  // viendo la pestaña "Clasificación Por Jornada" (no en cada montaje del
+  // componente), y la consulta va acotada a esa única jornada — coste
+  // mínimo, a diferencia del ranking de puntos totales que se quitó antes.
+  useEffect(() => {
+    if (!sb || vista !== 'jornada' || !federacion?.id || jugadores.length === 0) return;
+    setOnceIdealCargando(true);
+    const partIds = participantes.map(p => p.id);
+    Promise.all([
+      sb.from('puntos_jugador').select('jugador_id, pts').eq('federacion_id', federacion.id).eq('jornada', jornada),
+      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+    ]).then(([{ data: ptsRows }, { data: plantRows }]) => {
+      const jugadoresMap = Object.fromEntries(jugadores.map(j => [j.id, j]));
+      const nomPart = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
+      const fichadosMap = {};
+      (plantRows || []).forEach(r => { fichadosMap[r.jugador_id] = nomPart[r.participante_id] || ''; });
+      setOnceIdeal(calcularOnceIdeal(ptsRows || [], jugadoresMap, fichadosMap));
+      setOnceIdealCargando(false);
+    });
+  }, [vista, jornada, federacion?.id, participantes, jugadores]);
 
   const abrirEquipo = async (pid) => {
     if (abierto === pid) { setAbierto(null); return; }
@@ -2877,6 +2950,52 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="card" style={{marginTop:'.75rem'}}>
+            <h2 style={{marginBottom:'.4rem'}}>⭐ Once ideal de la jornada</h2>
+            <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+              La mejor alineación posible de esta jornada, cruzando todos los jugadores fichados por
+              algún equipo de la liga (jueguen o no de titular en su equipo), ajustada a una formación válida.
+            </p>
+            {onceIdealCargando
+              ? <Spinner />
+              : !onceIdeal
+                ? <div className="empty">No hay suficientes jugadores fichados con puntuación esta jornada para formar un once válido.</div>
+                : <>
+                    <div style={{marginBottom:'.6rem', fontSize:'.85rem'}}>
+                      Formación <strong>{onceIdeal.formacion}</strong>
+                      {' · '}Total: <strong style={{color:'var(--verde)'}}>{onceIdeal.total} pts</strong>
+                    </div>
+                    <div style={{overflowX:'auto'}}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Pos</th><th>Jugador</th><th>Equipo real</th><th>Equipo fantástico</th>
+                            <th style={{textAlign:'right'}}>Pts</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {onceIdeal.titulares.map(j => (
+                            <tr key={j.jugador_id}>
+                              <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                              <td style={{fontWeight:600}}>{j.nombre}</td>
+                              <td style={{color:'var(--texto2)'}}>
+                                <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                                  <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
+                                </span>
+                              </td>
+                              <td style={{color: j.equipoFantastico ? 'var(--texto)' : 'var(--texto2)'}}>
+                                {j.equipoFantastico || '—'}
+                              </td>
+                              <td style={{textAlign:'right', fontWeight:700}}>{j.pts}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+            }
           </div>
         </div>
       )}

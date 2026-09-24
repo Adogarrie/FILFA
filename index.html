@@ -2706,6 +2706,12 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   // Para cada jornada j, se calcula el acumulado hasta j y se rankea.
   // Dense rank: 1º = 0 equipos con más puntos; podio = menos de 3 por encima.
   const acumPrimerMap = {}, acumPodiumMap = {};
+  // Posición en la clasificación acumulada jornada a jornada (dense rank:
+  // empate a puntos = misma posición) — datos para el gráfico de evolución
+  // (EvolucionPosicionesChart). Se calcula en la misma pasada que arriba
+  // para no repetir el acumulado.
+  const posicionesEvolucionFantasy = {};
+  participantes.forEach(p => { posicionesEvolucionFantasy[p.id] = {}; });
   const cumuTotales = {};
   participantes.forEach(p => { cumuTotales[p.id] = 0; });
   allJornadas.forEach(j => {
@@ -2719,6 +2725,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
       const above = teams.filter(o => o.total > t.total).length;
       if (above === 0) acumPrimerMap[t.id] = (acumPrimerMap[t.id] || 0) + 1;
       if (above < 3)  acumPodiumMap[t.id]  = (acumPodiumMap[t.id]  || 0) + 1;
+      posicionesEvolucionFantasy[t.id][j] = above + 1;
     });
   });
 
@@ -3114,6 +3121,19 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              {/* ── Evolución de la clasificación ── */}
+              <div className="card" style={{marginBottom:'.75rem'}}>
+                <h2 style={{marginBottom:'.4rem'}}>📈 Evolución de la clasificación</h2>
+                <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                  Posición en la clasificación acumulada de la Liga Fantástica tras cada jornada.
+                </p>
+                <EvolucionPosicionesChart
+                  equipos={participantes.map(p => ({ id: p.id, nombre: p.nombre }))}
+                  jornadas={allJornadas}
+                  posiciones={posicionesEvolucionFantasy}
+                />
               </div>
 
               {/* ── Podio en la clasificación acumulada ── */}
@@ -11290,6 +11310,177 @@ function RachaMaxTable({ rows, field, color }) {
   );
 }
 
+// ── EVOLUCIÓN DE LA CLASIFICACIÓN (gráfico de líneas, jornada a jornada) ──
+// Paleta categórica validada (8 tonos, orden fijo, ver skill de dataviz:
+// validate_palette.js — pasa todos los checks en el pairlist adyacente que
+// usan las líneas). Con más de 8 equipos se generan tonos adicionales por
+// rotación de matiz; a partir del noveno la separación CVD ya no está
+// garantizada por el validador — trade-off aceptado para poder pintar
+// todos los equipos como pidió el usuario, en vez de acortar a "Otros".
+const EVOLUCION_COLORES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+function colorEvolucion(i) {
+  if (i < EVOLUCION_COLORES.length) return EVOLUCION_COLORES[i];
+  return `hsl(${(i * 47) % 360}, 62%, 45%)`; // rotación determinista para equipos extra
+}
+
+// `equipos`: [{id, nombre}]. `jornadas`: números de jornada ordenados (eje X).
+// `posiciones`: { [equipoId]: { [jornada]: posicion } } — huecos permitidos
+// (el trazo se corta, no se interpola). Posición 1 siempre arriba del todo.
+function EvolucionPosicionesChart({ equipos, jornadas, posiciones }) {
+  const [hoverIdx, setHoverIdx]   = useState(null);
+  const [vistaTabla, setVistaTabla] = useState(false);
+  const maxPos = equipos.length;
+
+  if (jornadas.length === 0 || maxPos === 0) {
+    return <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>Todavía no hay jornadas suficientes para dibujar la evolución.</p>;
+  }
+
+  const VBW = 760, H = 340;
+  const padL = 28, padR = 14, padT = 14, padB = 30;
+  const plotW = VBW - padL - padR, plotH = H - padT - padB;
+  const xAt = i => padL + (jornadas.length <= 1 ? plotW / 2 : (i / (jornadas.length - 1)) * plotW);
+  const yAt = pos => padT + (maxPos <= 1 ? plotH / 2 : ((pos - 1) / (maxPos - 1)) * plotH);
+
+  const equiposColor = equipos.map((e, i) => ({ ...e, color: colorEvolucion(i) }));
+
+  // Un <path> por equipo; un hueco sin dato corta el trazo (nuevo "M").
+  const pathsPorEquipo = equiposColor.map(eq => {
+    let d = '', enTrazo = false;
+    jornadas.forEach((j, i) => {
+      const pos = posiciones[eq.id]?.[j];
+      if (pos == null) { enTrazo = false; return; }
+      d += (enTrazo ? ' L' : 'M') + xAt(i) + ',' + yAt(pos);
+      enTrazo = true;
+    });
+    return { ...eq, d };
+  });
+
+  const skipLabel = jornadas.length > 16 ? Math.ceil(jornadas.length / 12) : 1;
+  const skipPos   = maxPos > 14 ? 2 : 1;
+
+  const idxHover = hoverIdx != null ? Math.min(Math.max(hoverIdx, 0), jornadas.length - 1) : null;
+  const jornadaHover = idxHover != null ? jornadas[idxHover] : null;
+  const filaHover = idxHover != null
+    ? equiposColor
+        .map(eq => ({ ...eq, pos: posiciones[eq.id]?.[jornadaHover] ?? null }))
+        .filter(eq => eq.pos != null)
+        .sort((a, b) => a.pos - b.pos)
+    : [];
+
+  const onMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = (e.clientX - rect.left) / rect.width;
+    setHoverIdx(Math.min(Math.max(Math.round(frac * (jornadas.length - 1)), 0), jornadas.length - 1));
+  };
+
+  return (
+    <div>
+      <div style={{display:'flex', justifyContent:'flex-end', marginBottom:'.4rem'}}>
+        <button onClick={() => setVistaTabla(v => !v)}
+                style={{padding:'.22rem .6rem', borderRadius:6, fontSize:'.75rem', cursor:'pointer',
+                        border:'1.5px solid var(--borde)', background:'var(--fondo)', color:'var(--texto2)'}}>
+          {vistaTabla ? '📈 Ver gráfico' : '📋 Ver como tabla'}
+        </button>
+      </div>
+
+      {vistaTabla ? (
+        <div style={{overflowX:'auto'}}>
+          <table>
+            <thead>
+              <tr>
+                <th>Equipo</th>
+                {jornadas.map(j => <th key={j} style={{textAlign:'right'}}>J{j}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {equiposColor.map(eq => (
+                <tr key={eq.id}>
+                  <td style={{fontWeight:600, whiteSpace:'nowrap'}}>
+                    <span style={{display:'inline-block', width:9, height:9, borderRadius:2,
+                                  background:eq.color, marginRight:'.4rem'}} />
+                    {eq.nombre}
+                  </td>
+                  {jornadas.map(j => (
+                    <td key={j} style={{textAlign:'right', color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>
+                      {posiciones[eq.id]?.[j] ?? '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <>
+          <div style={{position:'relative'}}>
+            <svg viewBox={`0 0 ${VBW} ${H}`} width="100%" height={H} preserveAspectRatio="none"
+                 style={{display:'block', overflow:'visible'}}
+                 onMouseMove={onMove} onMouseLeave={() => setHoverIdx(null)}>
+              {Array.from({length: maxPos}, (_, i) => i + 1)
+                .filter(p => (p - 1) % skipPos === 0 || p === maxPos)
+                .map(p => (
+                  <g key={p}>
+                    <line x1={padL} x2={VBW - padR} y1={yAt(p)} y2={yAt(p)} stroke="#e1e0d9" strokeWidth="1" />
+                    <text x={padL - 6} y={yAt(p)} textAnchor="end" dominantBaseline="middle"
+                          fontSize="10" fill="var(--texto2)">{p}</text>
+                  </g>
+                ))}
+              {jornadas.map((j, i) => (i % skipLabel === 0 || i === jornadas.length - 1) && (
+                <text key={j} x={xAt(i)} y={H - padB + 16} textAnchor="middle" fontSize="10" fill="var(--texto2)">
+                  J{j}
+                </text>
+              ))}
+              {pathsPorEquipo.map(eq => (
+                <path key={eq.id} d={eq.d} fill="none" stroke={eq.color} strokeWidth="2"
+                      strokeLinecap="round" strokeLinejoin="round"
+                      opacity={idxHover != null ? .35 : 1} style={{transition:'opacity .1s'}} />
+              ))}
+              {idxHover != null && (
+                <g>
+                  <line x1={xAt(idxHover)} x2={xAt(idxHover)} y1={padT} y2={H - padB}
+                        stroke="#c3c2b7" strokeWidth="1" strokeDasharray="3,3" />
+                  {filaHover.map(eq => (
+                    <circle key={eq.id} cx={xAt(idxHover)} cy={yAt(eq.pos)} r="4"
+                            fill={eq.color} stroke="#fff" strokeWidth="1.5" />
+                  ))}
+                </g>
+              )}
+            </svg>
+
+            {idxHover != null && filaHover.length > 0 && (
+              <div style={{position:'absolute', top:0,
+                           left: `${(xAt(idxHover) / VBW) * 100}%`,
+                           transform: (xAt(idxHover) / VBW) > .6 ? 'translateX(-105%)' : 'translateX(8px)',
+                           background:'#fff', border:'1px solid var(--borde)', borderRadius:8,
+                           padding:'.4rem .6rem', fontSize:'.75rem', boxShadow:'0 2px 8px rgba(0,0,0,.12)',
+                           pointerEvents:'none', minWidth:120, maxWidth:200, zIndex:5}}>
+                <div style={{fontWeight:700, marginBottom:'.25rem'}}>Jornada {jornadaHover}</div>
+                {filaHover.map(eq => (
+                  <div key={eq.id} style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'1px 0'}}>
+                    <span style={{width:8, height:8, borderRadius:2, background:eq.color, flexShrink:0}} />
+                    <span style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{eq.nombre}</span>
+                    <span style={{fontWeight:700}}>{eq.pos}º</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', marginTop:'.6rem'}}>
+            {equiposColor.map(eq => (
+              <span key={eq.id} style={{display:'inline-flex', alignItems:'center', gap:'.3rem',
+                                        fontSize:'.75rem', color:'var(--texto2)'}}>
+                <span style={{width:9, height:9, borderRadius:2, background:eq.color, display:'inline-block', flexShrink:0}} />
+                {eq.nombre}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Resumen de logros (nº de trofeos + el más reciente) por equipo. `logros`
 // son filas ya persistidas de la tabla `logros` (ver LOGROS_CATALOGO,
 // definido junto a AdminLigaH2H más abajo en este archivo).
@@ -11693,6 +11884,24 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     return Object.values(cnt).sort((a, b) => b.j1 - a.j1 || b.jpodio - a.jpodio);
   };
 
+  // Posición en la clasificación acumulada H2H tras cada jornada jugada,
+  // por equipo — datos para el gráfico de evolución (EvolucionPosicionesChart).
+  const computePosicionesEvolucion = (divId) => {
+    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const ms     = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    const jugadas = [...new Set(
+      ms.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)
+    )].sort((a, b) => a - b);
+    const posiciones = {};
+    equips.forEach(p => { posiciones[p.id] = {}; });
+    jugadas.forEach(jEnd => {
+      computeClasif(divId, jEnd).forEach((t, i) => {
+        if (posiciones[t.id]) posiciones[t.id][jEnd] = i + 1;
+      });
+    });
+    return { equipos: equips.map(p => ({ id: p.id, nombre: p.nombre })), jornadas: jugadas, posiciones };
+  };
+
   // Rachas máximas de la temporada por equipo: partidos seguidos ganados,
   // partidos seguidos perdidos, partidos seguidos sin ganar (empate o
   // derrota) y partidos seguidos sin perder (victoria o empate). También la
@@ -11995,6 +12204,13 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                         <PosHistorialTable rows={rows} />
                       </div>
                       <div className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.4rem'}}>{nombre} — 📈 Evolución de la clasificación</h2>
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          Posición en la clasificación acumulada H2H tras cada jornada jugada.
+                        </p>
+                        <EvolucionPosicionesChart {...computePosicionesEvolucion(divId)} />
+                      </div>
+                      <div className="card" style={{marginBottom:'.75rem'}}>
                         <h2 style={{marginBottom:'.75rem'}}>{nombre} — Rachas</h2>
                         <RachasSeccion rows={rowsRachas} />
                       </div>
@@ -12018,6 +12234,13 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                           En caso de empate a puntos todos los equipos comparten la misma posición.
                         </p>
                         <PosHistorialTable rows={rows} />
+                      </div>
+                      <div className="card" style={{marginBottom:'.75rem'}}>
+                        <h2 style={{marginBottom:'.4rem'}}>📈 Evolución de la clasificación</h2>
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          Posición en la clasificación acumulada H2H tras cada jornada jugada.
+                        </p>
+                        <EvolucionPosicionesChart {...computePosicionesEvolucion(null)} />
                       </div>
                       <div className="card" style={{marginBottom: federacion?.logros_habilitado ? '.75rem' : 0}}>
                         <h2 style={{marginBottom:'.75rem'}}>Rachas</h2>

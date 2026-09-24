@@ -10544,6 +10544,16 @@ function LogrosVista({ federacion, participantes }) {
   const [alineaciones,  setAlineaciones]  = useState([]);
   const [puntosJugador, setPuntosJugador] = useState([]);
   const [sustitucionesAuto, setSustitucionesAuto] = useState([]);
+  const [descAbiertas, setDescAbiertas] = useState(new Set()); // claves "participanteId_categoria"
+  const [vistaLogros, setVistaLogros] = useState('tarjetas'); // 'tarjetas' | 'tabla'
+
+  const toggleDesc = (key) => {
+    setDescAbiertas(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!sb || !federacion?.id || !federacion?.logros_habilitado) return;
@@ -10583,56 +10593,166 @@ function LogrosVista({ federacion, participantes }) {
   logros.forEach(l => { (porEquipo[l.participante_id] = porEquipo[l.participante_id] || []).push(l); });
   const ordenados = [...participantes].sort((a, b) => (porEquipo[b.id]?.length || 0) - (porEquipo[a.id]?.length || 0));
 
+  const textoProgreso = (fila) => {
+    const { cat, siguienteTier, valorActual } = fila;
+    if (siguienteTier == null) return null;
+    return cat === 'jornada_pocos_puntos'
+      ? `Tu peor jornada: ${valorActual} pts (objetivo: ${siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})`
+      : `Progreso: ${Math.min(valorActual, siguienteTier)}/${siguienteTier}`;
+  };
+
   return (
     <div>
+      <div style={{display:'flex', gap:'.4rem', marginBottom:'.75rem'}}>
+        {[['tarjetas', '🔲 Tarjetas'], ['tabla', '📋 Tabla']].map(([v, l]) => (
+          <button key={v} onClick={() => setVistaLogros(v)}
+                  style={{padding:'.28rem .85rem', borderRadius:20, fontSize:'.82rem',
+                          cursor:'pointer', fontWeight: vistaLogros===v ? 700 : 400,
+                          border: '1.5px solid ' + (vistaLogros===v ? 'var(--verde)' : 'var(--borde)'),
+                          background: vistaLogros===v ? 'var(--verde)' : 'var(--fondo)',
+                          color: vistaLogros===v ? '#fff' : 'var(--texto)'}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
       {ordenados.map(p => {
         const misLogros = porEquipo[p.id] || [];
         const misLogrosSet = new Set(misLogros.map(l => `${l.categoria}|${l.tier}`));
         const est = progreso[p.id] || {};
+        const filas = Object.entries(LOGROS_CATALOGO).map(([cat, def]) => {
+          const pendientes = def.tiers.filter(t => t !== 'temporada' && !misLogrosSet.has(`${cat}|${t}`));
+          return { cat, def, siguienteTier: pendientes.length ? pendientes[0] : null, valorActual: est[cat] || 0 };
+        });
+
         return (
           <div key={p.id} className="card" style={{marginBottom:'.75rem'}}>
             <h2 style={{marginBottom:'.15rem'}}>{p.nombre}</h2>
             <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
               {misLogros.length} logro{misLogros.length === 1 ? '' : 's'} conseguido{misLogros.length === 1 ? '' : 's'}
             </p>
-            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'.75rem'}}>
-              {Object.entries(LOGROS_CATALOGO).map(([cat, def]) => {
-                const pendientes = def.tiers.filter(t => t !== 'temporada' && !misLogrosSet.has(`${cat}|${t}`));
-                const siguienteTier = pendientes.length ? pendientes[0] : null;
-                const valorActual = est[cat] || 0;
-                return (
-                  <div key={cat} style={{padding:'.55rem .7rem', borderRadius:8, background:'var(--fondo)',
-                                          border:'1px solid var(--borde)'}}>
-                    <div style={{fontWeight:700, fontSize:'.85rem', marginBottom:'.3rem'}}>
-                      {def.icono} {def.nombre}
-                    </div>
-                    <div>
-                      {def.tiers.map(t => {
-                        const conseguido = misLogrosSet.has(`${cat}|${t}`);
-                        return (
-                          <span key={t} title={def.desc(t)}
-                                style={{display:'inline-block', margin:'0 .2rem .2rem 0', padding:'.1rem .4rem',
-                                        borderRadius:10, fontSize:'.7rem', fontWeight:600,
-                                        background: conseguido ? 'rgba(245,166,35,.18)' : 'var(--gris)',
-                                        color: conseguido ? '#b7791f' : 'var(--texto2)',
-                                        border: '1px solid ' + (conseguido ? 'rgba(245,166,35,.5)' : 'var(--borde)')}}>
-                            {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? 'Temporada' : t}
-                          </span>
-                        );
-                      })}
-                    </div>
-                    {siguienteTier != null && (
-                      <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.25rem'}}>
-                        {cat === 'jornada_pocos_puntos'
-                          ? <>Tu peor jornada: {valorActual} pts (objetivo: {siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})</>
-                          : <>Progreso: {Math.min(valorActual, siguienteTier)}/{siguienteTier}</>
-                        }
+
+            {vistaLogros === 'tarjetas' ? (
+              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'.75rem'}}>
+                {filas.map(({ cat, def, siguienteTier, valorActual }) => {
+                  const descKey = `${p.id}_${cat}`;
+                  const descAbierta = descAbiertas.has(descKey);
+                  return (
+                    <div key={cat} style={{padding:'.55rem .7rem', borderRadius:8, background:'var(--fondo)',
+                                            border:'1px solid var(--borde)'}}>
+                      <div style={{fontWeight:700, fontSize:'.85rem', marginBottom:'.3rem',
+                                   display:'flex', alignItems:'center', gap:'.35rem'}}>
+                        <span>{def.icono} {def.nombre}</span>
+                        {def.descripcion && (
+                          <button onClick={() => toggleDesc(descKey)}
+                                  title={descAbierta ? 'Ocultar descripción' : 'Ver descripción'}
+                                  style={{display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                          width:15, height:15, borderRadius:'50%', flexShrink:0,
+                                          border:'1px solid ' + (descAbierta ? 'var(--verde)' : 'var(--borde)'),
+                                          background: descAbierta ? 'var(--verde)' : 'transparent',
+                                          color: descAbierta ? '#fff' : 'var(--texto2)',
+                                          fontSize:'.6rem', fontWeight:700, fontStyle:'italic',
+                                          fontFamily:'Georgia, serif', cursor:'pointer', padding:0, lineHeight:1}}>
+                            i
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      {descAbierta && def.descripcion && (
+                        <div style={{fontSize:'.72rem', color:'var(--texto2)', marginBottom:'.4rem',
+                                     fontStyle:'italic', lineHeight:1.35}}>
+                          {def.descripcion}
+                        </div>
+                      )}
+                      <div>
+                        {def.tiers.map(t => {
+                          const conseguido = misLogrosSet.has(`${cat}|${t}`);
+                          return (
+                            <span key={t} title={def.desc(t)}
+                                  style={{display:'inline-block', margin:'0 .2rem .2rem 0', padding:'.1rem .4rem',
+                                          borderRadius:10, fontSize:'.7rem', fontWeight:600,
+                                          background: conseguido ? 'rgba(245,166,35,.18)' : 'var(--gris)',
+                                          color: conseguido ? '#b7791f' : 'var(--texto2)',
+                                          border: '1px solid ' + (conseguido ? 'rgba(245,166,35,.5)' : 'var(--borde)')}}>
+                              {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? 'Temporada' : t}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {siguienteTier != null && (
+                        <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.25rem'}}>
+                          {textoProgreso({ cat, siguienteTier, valorActual })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{overflowX:'auto'}}>
+                <table>
+                  <thead>
+                    <tr><th>Logro</th><th>Tramos</th><th>Progreso</th></tr>
+                  </thead>
+                  <tbody>
+                    {filas.map(({ cat, def, siguienteTier, valorActual }) => {
+                      const descKey = `${p.id}_${cat}`;
+                      const descAbierta = descAbiertas.has(descKey);
+                      const progresoTxt = textoProgreso({ cat, siguienteTier, valorActual });
+                      return (
+                        <React.Fragment key={cat}>
+                          <tr>
+                            <td style={{fontWeight:600, whiteSpace:'nowrap'}}>
+                              <div style={{display:'flex', alignItems:'center', gap:'.35rem'}}>
+                                <span>{def.icono} {def.nombre}</span>
+                                {def.descripcion && (
+                                  <button onClick={() => toggleDesc(descKey)}
+                                          title={descAbierta ? 'Ocultar descripción' : 'Ver descripción'}
+                                          style={{display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                                  width:15, height:15, borderRadius:'50%', flexShrink:0,
+                                                  border:'1px solid ' + (descAbierta ? 'var(--verde)' : 'var(--borde)'),
+                                                  background: descAbierta ? 'var(--verde)' : 'transparent',
+                                                  color: descAbierta ? '#fff' : 'var(--texto2)',
+                                                  fontSize:'.6rem', fontWeight:700, fontStyle:'italic',
+                                                  fontFamily:'Georgia, serif', cursor:'pointer', padding:0, lineHeight:1}}>
+                                    i
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                            <td>
+                              {def.tiers.map(t => {
+                                const conseguido = misLogrosSet.has(`${cat}|${t}`);
+                                return (
+                                  <span key={t} title={def.desc(t)}
+                                        style={{display:'inline-block', margin:'0 .2rem .2rem 0', padding:'.1rem .4rem',
+                                                borderRadius:10, fontSize:'.7rem', fontWeight:600,
+                                                background: conseguido ? 'rgba(245,166,35,.18)' : 'var(--gris)',
+                                                color: conseguido ? '#b7791f' : 'var(--texto2)',
+                                                border: '1px solid ' + (conseguido ? 'rgba(245,166,35,.5)' : 'var(--borde)')}}>
+                                    {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? 'Temp' : t}
+                                  </span>
+                                );
+                              })}
+                            </td>
+                            <td style={{fontSize:'.78rem', color:'var(--texto2)', whiteSpace:'nowrap'}}>
+                              {progresoTxt || '—'}
+                            </td>
+                          </tr>
+                          {descAbierta && def.descripcion && (
+                            <tr>
+                              <td colSpan={3} style={{fontSize:'.72rem', color:'var(--texto2)',
+                                                       fontStyle:'italic', lineHeight:1.35, background:'var(--fondo)'}}>
+                                {def.descripcion}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         );
       })}
@@ -11992,87 +12112,104 @@ function getVueltaInfo(jornada, jornadasBase, ptsV1, ptsV2, vueltasExtra) {
 const LOGROS_CATALOGO = {
   racha_victorias: {
     nombre: 'Racha ganadora', icono: '🔥',
+    descripcion: 'Victorias consecutivas en Liga FILFA, sin que se interponga un empate o una derrota.',
     tiers: [3, 5, 10, 15],
     desc: t => `${t} victorias seguidas`,
   },
   racha_invicto: {
     nombre: 'Racha invicto', icono: '🛡️',
+    descripcion: 'Partidos consecutivos de Liga FILFA sin perder (ganando o empatando).',
     tiers: [3, 5, 10, 15, 20, 'temporada'],
     desc: t => t === 'temporada' ? 'Invicto toda la temporada' : `${t} partidos seguidos sin perder`,
   },
   victorias_totales: {
     nombre: 'Cazador de triunfos', icono: '🏅',
+    descripcion: 'Total de partidos ganados en Liga FILFA a lo largo de la temporada (no hace falta que sean seguidos).',
     tiers: [1, 5, 10, 15, 20],
     desc: t => `${t} partido${t == 1 ? '' : 's'} ganado${t == 1 ? '' : 's'}`,
   },
   racha_marcando: {
     nombre: 'Racha goleadora', icono: '⚽',
+    descripcion: 'Partidos consecutivos de Liga FILFA marcando al menos un gol.',
     tiers: [3, 5, 10, 15, 20, 'temporada'],
     desc: t => t === 'temporada' ? 'Ha marcado en todos los partidos de la temporada' : `${t} partidos seguidos marcando`,
   },
   goles_partido: {
     nombre: 'Manita', icono: '🎯',
+    descripcion: 'Goles marcados en un único partido de Liga FILFA.',
     tiers: [3, 4, 5, 6, 7, 8, 9, 10],
     desc: t => `${t} goles en un partido`,
   },
   goleada: {
     nombre: 'Goleada', icono: '💥',
+    descripcion: 'Diferencia de goles conseguida en una victoria de Liga FILFA.',
     tiers: [5, 7, 10],
     desc: t => `Victoria por ${t}+ goles de diferencia`,
   },
   racha_porteria_cero: {
     nombre: 'Muralla', icono: '🧱',
+    descripcion: 'Partidos consecutivos de Liga FILFA sin encajar ningún gol.',
     tiers: [3, 5, 10, 15, 20, 'temporada'],
     desc: t => t === 'temporada' ? 'Toda la temporada sin encajar' : `${t} partidos seguidos sin encajar`,
   },
   goles_temporada: {
     nombre: 'Máximo goleador', icono: '👑',
+    descripcion: 'Goles totales marcados a lo largo de toda la temporada en Liga FILFA (acumulado).',
     tiers: [30, 50, 75, 100],
     desc: t => `${t} goles marcados en la temporada`,
   },
   porteria_cero_totales: {
     nombre: 'Fortín', icono: '🔒',
+    descripcion: 'Número de partidos de Liga FILFA sin encajar gol, no necesariamente seguidos (a diferencia de Muralla).',
     tiers: [1, 3, 5, 10, 15],
     desc: t => `${t} partido${t == 1 ? '' : 's'} sin encajar en Liga FILFA`,
   },
   victorias_por_un_gol: {
     nombre: 'Al filo', icono: '🤏',
+    descripcion: 'Victorias de Liga FILFA conseguidas por la mínima diferencia (1 gol).',
     tiers: [1, 3, 5, 10, 15, 20],
     desc: t => `${t} victoria${t == 1 ? '' : 's'} por la mínima (1 gol)`,
   },
   derrotas_por_un_gol: {
     nombre: 'Mala suerte', icono: '💔',
+    descripcion: 'Derrotas de Liga FILFA sufridas por la mínima diferencia (1 gol).',
     tiers: [1, 3, 5, 10, 15],
     desc: t => `${t} derrota${t == 1 ? '' : 's'} por la mínima (1 gol)`,
   },
   jornadas_fantasticas_ganadas: {
     nombre: 'Rey de la jornada', icono: '🥇',
+    descripcion: 'Jornadas en las que el equipo obtuvo la puntuación más alta de la Liga Fantástica (empates incluidos).',
     tiers: [1, 3, 5, 10, 15, 20, 30],
     desc: t => `${t} jornada${t == 1 ? '' : 's'} de Liga Fantástica ganada${t == 1 ? '' : 's'}`,
   },
   // ── Logros "de broma" ────────────────────────────────────────
   jugadores_negativos_jornada: {
     nombre: 'Jornada aciaga', icono: '💩',
+    descripcion: 'Titulares que puntuaron negativo a la vez en una misma jornada de la Liga Fantástica.',
     tiers: [1, 2, 3, 4],
     desc: t => `${t} titular${t == 1 ? '' : 'es'} puntuando negativo en la misma jornada`,
   },
   racha_jornadas_negativo: {
     nombre: 'Maldición', icono: '☠️',
+    descripcion: 'Jornadas consecutivas en las que al menos un titular ha puntuado negativo.',
     tiers: [2, 3, 4, 5],
     desc: t => `${t} jornadas seguidas con algún titular puntuando negativo`,
   },
   jornada_pocos_puntos: {
     nombre: 'Jornada para olvidar', icono: '📉',
+    descripcion: 'El peor marcador de una jornada de Liga Fantástica conseguido por el equipo.',
     tiers: [30, 25, 20, 15, 10, 0],
     desc: t => t === 0 ? 'Una jornada con 0 puntos o menos' : `Una jornada con menos de ${t} puntos`,
   },
   suplente_negativo: {
     nombre: 'Menudo cambio', icono: '🙈',
+    descripcion: 'Un suplente entra por sustitución automática (lesión o "no jugó") y termina puntuando negativo esa jornada.',
     tiers: [1],
     desc: t => `${t} jornada${t == 1 ? '' : 's'} en la que entra un suplente y puntúa negativo`,
   },
   racha_empates: {
     nombre: 'Empatador serial', icono: '🤝',
+    descripcion: 'Partidos consecutivos de Liga FILFA terminados en empate.',
     tiers: [3, 5, 10],
     desc: t => `${t} partidos seguidos empatados`,
   },

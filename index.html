@@ -2685,6 +2685,30 @@ function calcularOnceIdeal(ptsRows, jugadoresMap, fichadosMap) {
   return mejor;
 }
 
+// Jugador de la Jornada: el/los jugador(es) fichado(s) por algún equipo con
+// más puntos esa jornada, sin restricción de posición/formación (a
+// diferencia del once ideal). Si hay empate a puntos, se reconoce a todos
+// los empatados. Mismos parámetros que calcularOnceIdeal.
+function calcularJugadorJornada(ptsRows, jugadoresMap, fichadosMap) {
+  let mejor = -Infinity;
+  let candidatos = [];
+  ptsRows.forEach(r => {
+    const owner = fichadosMap[r.jugador_id];
+    if (owner === undefined) return; // no fichado por ningún equipo
+    const j = jugadoresMap[r.jugador_id];
+    if (!j) return;
+    const pts = Number(r.pts);
+    if (pts > mejor) {
+      mejor = pts;
+      candidatos = [{ jugador_id: r.jugador_id, nombre: j.nombre, equipo: j.equipo, posicion: j.posicion, equipoFantastico: owner, pts }];
+    } else if (pts === mejor) {
+      candidatos.push({ jugador_id: r.jugador_id, nombre: j.nombre, equipo: j.equipo, posicion: j.posicion, equipoFantastico: owner, pts });
+    }
+  });
+  if (candidatos.length === 0) return null;
+  return { pts: mejor, jugadores: candidatos };
+}
+
 function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [clas, setClas]               = useState([]);
   const [vista, setVista]             = useState('acumulado');
@@ -2696,6 +2720,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [jornadaAcum, setJornadaAcum] = useState(null); // null = total temporada
   const [onceIdeal, setOnceIdeal]         = useState(null);
   const [onceIdealCargando, setOnceIdealCargando] = useState(false);
+  const [jugadorJornada, setJugadorJornada] = useState(null);
 
   useEffect(() => {
     if (!sb) return;
@@ -2742,6 +2767,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
       const fichadosMap = {};
       (plantRows || []).forEach(r => { fichadosMap[r.jugador_id] = nomPart[r.participante_id] || ''; });
       setOnceIdeal(calcularOnceIdeal(ptsRows || [], jugadoresMap, fichadosMap));
+      setJugadorJornada(calcularJugadorJornada(ptsRows || [], jugadoresMap, fichadosMap));
       setOnceIdealCargando(false);
     });
   }, [vista, jornada, federacion?.id, participantes, jugadores]);
@@ -3058,6 +3084,38 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="card" style={{marginTop:'.75rem'}}>
+            <h2 style={{marginBottom:'.4rem'}}>📸 Jugador de la Jornada</h2>
+            <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+              El/los jugador(es) fichado(s) con más puntos esta jornada, sin restricción de posición
+              (si hay empate, se reconoce a todos los empatados).
+            </p>
+            {onceIdealCargando
+              ? <Spinner />
+              : !jugadorJornada
+                ? <div className="empty">No hay jugadores fichados con puntuación esta jornada.</div>
+                : <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem'}}>
+                    {jugadorJornada.jugadores.map(j => (
+                      <div key={j.jugador_id}
+                           style={{display:'flex', alignItems:'center', gap:'.5rem', padding:'.45rem .7rem',
+                                   borderRadius:8, background:'rgba(245,166,35,.1)', border:'1px solid rgba(245,166,35,.4)'}}>
+                        <span className={`badge ${j.posicion}`}>{j.posicion}</span>
+                        <div>
+                          <div style={{fontWeight:700, fontSize:'.88rem'}}>{j.nombre}</div>
+                          <div style={{fontSize:'.72rem', color:'var(--texto2)'}}>
+                            <span style={{display:'inline-flex', alignItems:'center', gap:4}}>
+                              <Escudo equipo={j.equipo} size={16}/>{j.equipo}
+                            </span>
+                            {j.equipoFantastico && <> · {j.equipoFantastico}</>}
+                          </div>
+                        </div>
+                        <span style={{fontWeight:800, fontSize:'1rem', color:'var(--verde)'}}>{j.pts} pts</span>
+                      </div>
+                    ))}
+                  </div>
+            }
           </div>
 
           <div className="card" style={{marginTop:'.75rem'}}>
@@ -10824,6 +10882,8 @@ function LogrosVista({ federacion, participantes }) {
   const [alineaciones,  setAlineaciones]  = useState([]);
   const [puntosJugador, setPuntosJugador] = useState([]);
   const [sustitucionesAuto, setSustitucionesAuto] = useState([]);
+  const [jugadoresCat, setJugadoresCat] = useState([]);
+  const [plantillas,   setPlantillas]   = useState([]);
   const [descAbiertas, setDescAbiertas] = useState(new Set()); // claves "participanteId_categoria"
   const [vistaLogros, setVistaLogros] = useState('tarjetas'); // 'tarjetas' | 'tabla'
 
@@ -10847,13 +10907,17 @@ function LogrosVista({ federacion, participantes }) {
       partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
       sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
-    ]).then(([{ data: p }, { data: l }, { data: c }, { data: a }, { data: pj }, { data: s }]) => {
+      sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad'),
+      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+    ]).then(([{ data: p }, { data: l }, { data: c }, { data: a }, { data: pj }, { data: s }, { data: jc }, { data: pl }]) => {
       setPartidos(p || []);
       setLogros(l || []);
       setClasificacion(c || []);
       setAlineaciones(a || []);
       setPuntosJugador(pj || []);
       setSustitucionesAuto(s || []);
+      setJugadoresCat(jc || []);
+      setPlantillas(pl || []);
     });
   }, [federacion?.id, federacion?.logros_habilitado]);
 
@@ -10867,7 +10931,9 @@ function LogrosVista({ federacion, participantes }) {
   }
   if (logros === null) return <div className="card"><Spinner /></div>;
 
-  const progreso = progresoLogros(partidos, participantes, { clasificacion, alineaciones, puntosJugador, sustitucionesAuto });
+  const progreso = progresoLogros(partidos, participantes, {
+    clasificacion, alineaciones, puntosJugador, sustitucionesAuto, jugadoresCat, plantillas,
+  });
   const porEquipo = {};
   participantes.forEach(p => { porEquipo[p.id] = []; });
   logros.forEach(l => { (porEquipo[l.participante_id] = porEquipo[l.participante_id] || []).push(l); });
@@ -10876,9 +10942,16 @@ function LogrosVista({ federacion, participantes }) {
   const textoProgreso = (fila) => {
     const { cat, siguienteTier, valorActual } = fila;
     if (siguienteTier == null) return null;
-    return cat === 'jornada_pocos_puntos'
-      ? `Tu peor jornada: ${valorActual} pts (objetivo: ${siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})`
-      : `Progreso: ${Math.min(valorActual, siguienteTier)}/${siguienteTier}`;
+    if (cat === 'jornada_pocos_puntos') {
+      return `Tu peor jornada: ${valorActual} pts (objetivo: ${siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})`;
+    }
+    if (cat === 'confederaciones_todas') {
+      return `Confederaciones representadas: ${valorActual}/5`;
+    }
+    if (cat === 'plantilla_diversa') {
+      return `Países distintos en plantilla: ${valorActual}`;
+    }
+    return `Progreso: ${Math.min(valorActual, siguienteTier)}/${siguienteTier}`;
   };
 
   return (
@@ -12696,6 +12769,77 @@ const LOGROS_CATALOGO = {
     tiers: [3, 5, 10],
     desc: t => `${t} partidos seguidos empatados`,
   },
+  // ── Logros de composición de plantilla (nacionalidad/confederación) ──
+  // Se evalúan contra la plantilla ACTUAL en el momento de recalcular
+  // logros, no contra un histórico — si la plantilla cambia después, el
+  // logro ya conseguido se queda (permanente), pero uno nuevo solo se
+  // detecta si la composición en ese momento lo cumple.
+  jugadores_espanoles: {
+    nombre: 'Casa España', icono: '🇪🇸',
+    descripcion: 'Jugadores españoles fichados en la plantilla actual.',
+    tiers: [7, 10, 14],
+    desc: t => `${t} jugadores españoles en plantilla`,
+  },
+  jugadores_mismo_pais: {
+    nombre: 'Colonia', icono: '🏘️',
+    descripcion: 'El máximo de jugadores de un mismo país en la plantilla actual, sin contar España (para eso está "Casa España").',
+    tiers: [5, 9, 14],
+    desc: t => `${t} jugadores del mismo país (no España) en plantilla`,
+  },
+  plantilla_diversa: {
+    nombre: 'Naciones Unidas', icono: '🌐',
+    descripcion: 'Plantilla completa sin dos jugadores del mismo país (todos de nacionalidades distintas).',
+    tiers: [1],
+    desc: () => 'Plantilla completa con todos los jugadores de un país distinto',
+  },
+  confederaciones_todas: {
+    nombre: 'Cinco continentes', icono: '🗺️',
+    descripcion: 'Al menos un jugador de cada confederación —UEFA, CONMEBOL, CONCACAF, CAF y AFC— en la plantilla actual (no cuenta OFC).',
+    tiers: [1],
+    desc: () => 'Al menos 1 jugador de UEFA, CONMEBOL, CONCACAF, CAF y AFC',
+  },
+  conmebol_jugadores: {
+    nombre: 'Sudamérica', icono: '🌎',
+    descripcion: 'Jugadores de países de la CONMEBOL en la plantilla actual.',
+    tiers: [3],
+    desc: t => `${t} jugadores de CONMEBOL en plantilla`,
+  },
+  afc_jugadores: {
+    nombre: 'Asia', icono: '🌏',
+    descripcion: 'Jugadores de países de la AFC en la plantilla actual.',
+    tiers: [2],
+    desc: t => `${t} jugadores de AFC en plantilla`,
+  },
+  caf_jugadores: {
+    nombre: 'África', icono: '🌍',
+    descripcion: 'Jugadores de países de la CAF en la plantilla actual.',
+    tiers: [2],
+    desc: t => `${t} jugadores de CAF en plantilla`,
+  },
+  concacaf_jugadores: {
+    nombre: 'Norteamérica', icono: '🗽',
+    descripcion: 'Jugadores de países de la CONCACAF en la plantilla actual.',
+    tiers: [2],
+    desc: t => `${t} jugadores de CONCACAF en plantilla`,
+  },
+  once_ideal_equipo: {
+    nombre: 'Estrellas de la jornada', icono: '🌟',
+    descripcion: 'Veces que algún jugador de tu plantilla ha aparecido en el Once Ideal de la jornada (acumulado de toda la plantilla, toda la temporada).',
+    tiers: [1, 3, 7, 15, 20, 30, 50],
+    desc: t => `${t} apariciones en el Once Ideal`,
+  },
+  jugador_jornada: {
+    nombre: 'Foco mediático', icono: '📸',
+    descripcion: 'Veces que un jugador de tu plantilla ha sido nombrado Jugador de la Jornada (mayor puntuación entre todos los jugadores fichados esa semana).',
+    tiers: [1, 3, 5, 7, 10, 15, 20],
+    desc: t => `${t} veces con el Jugador de la Jornada`,
+  },
+  puntualidad: {
+    nombre: 'Puntualidad', icono: '⏰',
+    descripcion: 'Jornadas seguidas guardando tu propia alineación en Liga Fantástica, sin heredar la de una jornada anterior.',
+    tiers: [5, 10, 15, 20],
+    desc: t => `${t} jornadas seguidas con alineación propia guardada`,
+  },
 };
 
 // Recorre h2h_partidos, clasificacion (Liga Fantástica), alineaciones,
@@ -12714,8 +12858,13 @@ const LOGROS_CATALOGO = {
 // automáticas por lesión/no-jugó (simplificación deliberada), salvo para
 // "Menudo cambio", que usa `extra.sustitucionesAuto` (jugador_entra_id,
 // participante_id, jornada) precisamente para detectar a esos suplentes.
+// `extra.jugadoresCat` (catálogo global id→{nacionalidad}) y
+// `extra.plantillas` (jugador_id, participante_id) alimentan los logros de
+// composición de plantilla — se evalúan contra la plantilla ACTUAL en el
+// momento de llamar a esta función, no contra un histórico de fichajes.
 function detectarLogros(partidos, participantes, extra = {}) {
-  const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [] } = extra;
+  const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [],
+          jugadoresCat = [], plantillas = [], maxJugadores = 14 } = extra;
   const out = []; // { participante_id, categoria, tier, valor, jornada }
   const marcar = (pid, categoria, tier, valor, jornada) => {
     out.push({ participante_id: pid, categoria, tier: String(tier), valor, jornada });
@@ -12744,6 +12893,43 @@ function detectarLogros(partidos, participantes, extra = {}) {
     const actual = maxFantasyPorJornada[r.jornada];
     if (actual === undefined || r.puntos_jornada > actual) maxFantasyPorJornada[r.jornada] = r.puntos_jornada;
   });
+
+  // Plantilla actual de cada equipo (para los logros de composición).
+  const jugadoresCatMap = Object.fromEntries(jugadoresCat.map(j => [j.id, j]));
+  const plantillaPorEquipo = {};
+  const fichadosPorId = {};
+  plantillas.forEach(r => {
+    (plantillaPorEquipo[r.participante_id] = plantillaPorEquipo[r.participante_id] || []).push(r.jugador_id);
+    fichadosPorId[r.jugador_id] = r.participante_id;
+  });
+  const CONFEDS_SIN_OFC = ['UEFA', 'CONMEBOL', 'CONCACAF', 'CAF', 'AFC'];
+
+  // Once Ideal y Jugador de la Jornada: se recorre cada jornada con
+  // puntuaciones una sola vez (no por equipo) y se acumula por equipo.
+  const onceIdealPorEquipo = {}, jugadorJornadaPorEquipo = {};
+  const jornadasConPts = [...new Set(puntosJugador.map(r => r.jornada))];
+  jornadasConPts.forEach(j => {
+    const ptsRowsJ = puntosJugador.filter(r => r.jornada === j);
+    const once = calcularOnceIdeal(ptsRowsJ, jugadoresCatMap, fichadosPorId);
+    if (once) {
+      once.titulares.forEach(t => {
+        const pid = fichadosPorId[t.jugador_id];
+        if (pid) onceIdealPorEquipo[pid] = (onceIdealPorEquipo[pid] || 0) + 1;
+      });
+    }
+    const mvp = calcularJugadorJornada(ptsRowsJ, jugadoresCatMap, fichadosPorId);
+    if (mvp) {
+      mvp.jugadores.forEach(jug => {
+        const pid = fichadosPorId[jug.jugador_id];
+        if (pid) jugadorJornadaPorEquipo[pid] = (jugadorJornadaPorEquipo[pid] || 0) + 1;
+      });
+    }
+  });
+
+  // Puntualidad: jornadas seguidas (de Liga Fantástica) con alineación
+  // propia guardada, sin importar si es la titular real de esa jornada.
+  const jornadasFantasticas = [...new Set(clasificacion.map(r => r.jornada))].sort((a, b) => a - b);
+  const tieneAlineacionPropia = new Set(alineaciones.map(a => `${a.participante_id}_${a.jornada}`));
 
   participantes.forEach(p => {
     const propios = partidos.filter(m => m.local_id === p.id || m.visitante_id === p.id);
@@ -12848,6 +13034,61 @@ function detectarLogros(partidos, participantes, extra = {}) {
         }
       });
     }
+
+    // ── Composición de la plantilla actual (nacionalidad/confederación) ──
+    const misJugadoresIds = plantillaPorEquipo[p.id] || [];
+    if (misJugadoresIds.length > 0) {
+      const nacionalidades = misJugadoresIds
+        .map(jid => jugadoresCatMap[jid]?.nacionalidad)
+        .filter(Boolean);
+
+      const porPais = {};
+      nacionalidades.forEach(n => { const k = _norm(n); porPais[k] = (porPais[k] || 0) + 1; });
+      const conteosPais = Object.values(porPais);
+
+      const numEspanoles = porPais[_norm('España')] || 0;
+      tocarTier(new Set(), p.id, 'jugadores_espanoles', LOGROS_CATALOGO.jugadores_espanoles.tiers, numEspanoles, null);
+
+      // "Colonia" no cuenta España (para eso está "Casa España").
+      const conteosPaisSinEspana = Object.entries(porPais)
+        .filter(([pais]) => pais !== _norm('España'))
+        .map(([, c]) => c);
+      const maxMismoPais = conteosPaisSinEspana.length ? Math.max(...conteosPaisSinEspana) : 0;
+      tocarTier(new Set(), p.id, 'jugadores_mismo_pais', LOGROS_CATALOGO.jugadores_mismo_pais.tiers, maxMismoPais, null);
+
+      if (misJugadoresIds.length >= maxJugadores &&
+          nacionalidades.length === misJugadoresIds.length &&
+          conteosPais.every(c => c === 1)) {
+        marcar(p.id, 'plantilla_diversa', 1, misJugadoresIds.length, null);
+      }
+
+      const confsPresentes = new Set(nacionalidades.map(n => confederacionDe(n)).filter(Boolean));
+      if (CONFEDS_SIN_OFC.every(c => confsPresentes.has(c))) {
+        marcar(p.id, 'confederaciones_todas', 1, confsPresentes.size, null);
+      }
+
+      const porConfederacion = {};
+      nacionalidades.forEach(n => {
+        const c = confederacionDe(n);
+        if (c) porConfederacion[c] = (porConfederacion[c] || 0) + 1;
+      });
+      tocarTier(new Set(), p.id, 'conmebol_jugadores', LOGROS_CATALOGO.conmebol_jugadores.tiers, porConfederacion.CONMEBOL || 0, null);
+      tocarTier(new Set(), p.id, 'afc_jugadores',      LOGROS_CATALOGO.afc_jugadores.tiers,      porConfederacion.AFC || 0, null);
+      tocarTier(new Set(), p.id, 'caf_jugadores',      LOGROS_CATALOGO.caf_jugadores.tiers,      porConfederacion.CAF || 0, null);
+      tocarTier(new Set(), p.id, 'concacaf_jugadores', LOGROS_CATALOGO.concacaf_jugadores.tiers, porConfederacion.CONCACAF || 0, null);
+    }
+
+    // ── Once Ideal y Jugador de la Jornada (acumulado del equipo) ──
+    tocarTier(new Set(), p.id, 'once_ideal_equipo', LOGROS_CATALOGO.once_ideal_equipo.tiers, onceIdealPorEquipo[p.id] || 0, null);
+    tocarTier(new Set(), p.id, 'jugador_jornada',   LOGROS_CATALOGO.jugador_jornada.tiers,   jugadorJornadaPorEquipo[p.id] || 0, null);
+
+    // ── Puntualidad: jornadas seguidas con alineación propia guardada ──
+    let curPuntual = 0;
+    const vistoPuntual = new Set();
+    jornadasFantasticas.forEach(j => {
+      curPuntual = tieneAlineacionPropia.has(`${p.id}_${j}`) ? curPuntual + 1 : 0;
+      tocarTier(vistoPuntual, p.id, 'puntualidad', LOGROS_CATALOGO.puntualidad.tiers, curPuntual, j);
+    });
   });
 
   // Dedupe: nos quedamos con la primera vez (jornada más baja) que se alcanzó cada tramo.
@@ -12867,7 +13108,8 @@ function detectarLogros(partidos, participantes, extra = {}) {
 // un partido...). Devuelve { [participante_id]: { categoria: valor, ... } }.
 // Mismos `extra` que detectarLogros.
 function progresoLogros(partidos, participantes, extra = {}) {
-  const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [] } = extra;
+  const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [],
+          jugadoresCat = [], plantillas = [] } = extra;
   const ptsJugJornada = {};
   puntosJugador.forEach(r => { ptsJugJornada[`${r.jugador_id}_${r.jornada}`] = Number(r.pts); });
   const maxFantasyPorJornada = {};
@@ -12875,6 +13117,33 @@ function progresoLogros(partidos, participantes, extra = {}) {
     const actual = maxFantasyPorJornada[r.jornada];
     if (actual === undefined || r.puntos_jornada > actual) maxFantasyPorJornada[r.jornada] = r.puntos_jornada;
   });
+
+  const jugadoresCatMap = Object.fromEntries(jugadoresCat.map(j => [j.id, j]));
+  const plantillaPorEquipo = {};
+  const fichadosPorId = {};
+  plantillas.forEach(r => {
+    (plantillaPorEquipo[r.participante_id] = plantillaPorEquipo[r.participante_id] || []).push(r.jugador_id);
+    fichadosPorId[r.jugador_id] = r.participante_id;
+  });
+
+  const onceIdealPorEquipo = {}, jugadorJornadaPorEquipo = {};
+  const jornadasConPts = [...new Set(puntosJugador.map(r => r.jornada))];
+  jornadasConPts.forEach(j => {
+    const ptsRowsJ = puntosJugador.filter(r => r.jornada === j);
+    const once = calcularOnceIdeal(ptsRowsJ, jugadoresCatMap, fichadosPorId);
+    if (once) once.titulares.forEach(t => {
+      const pid = fichadosPorId[t.jugador_id];
+      if (pid) onceIdealPorEquipo[pid] = (onceIdealPorEquipo[pid] || 0) + 1;
+    });
+    const mvp = calcularJugadorJornada(ptsRowsJ, jugadoresCatMap, fichadosPorId);
+    if (mvp) mvp.jugadores.forEach(jug => {
+      const pid = fichadosPorId[jug.jugador_id];
+      if (pid) jugadorJornadaPorEquipo[pid] = (jugadorJornadaPorEquipo[pid] || 0) + 1;
+    });
+  });
+
+  const jornadasFantasticas = [...new Set(clasificacion.map(r => r.jornada))].sort((a, b) => a - b);
+  const tieneAlineacionPropia = new Set(alineaciones.map(a => `${a.participante_id}_${a.jornada}`));
 
   const out = {};
   participantes.forEach(p => {
@@ -12926,6 +13195,28 @@ function progresoLogros(partidos, participantes, extra = {}) {
       if (pts !== undefined && pts < 0) jornadasSustNeg.add(s.jornada);
     });
 
+    // Composición de la plantilla actual.
+    const misJugadoresIds = plantillaPorEquipo[p.id] || [];
+    const nacionalidades = misJugadoresIds.map(jid => jugadoresCatMap[jid]?.nacionalidad).filter(Boolean);
+    const porPais = {};
+    nacionalidades.forEach(n => { const k = _norm(n); porPais[k] = (porPais[k] || 0) + 1; });
+    const conteosPais = Object.values(porPais);
+    const paisesDistintos = Object.keys(porPais).length;
+    const porConfederacion = {};
+    nacionalidades.forEach(n => {
+      const c = confederacionDe(n);
+      if (c) porConfederacion[c] = (porConfederacion[c] || 0) + 1;
+    });
+    const confsPresentes = new Set(nacionalidades.map(n => confederacionDe(n)).filter(Boolean));
+    const conteosPaisSinEspana = Object.entries(porPais)
+      .filter(([pais]) => pais !== _norm('España'))
+      .map(([, c]) => c);
+
+    let curPuntual = 0;
+    jornadasFantasticas.forEach(j => {
+      curPuntual = tieneAlineacionPropia.has(`${p.id}_${j}`) ? curPuntual + 1 : 0;
+    });
+
     out[p.id] = {
       racha_victorias: curG, racha_invicto: curSP, racha_marcando: curMarcando,
       racha_porteria_cero: curPorteria0, victorias_totales: totalGanados,
@@ -12936,6 +13227,17 @@ function progresoLogros(partidos, participantes, extra = {}) {
       jornada_pocos_puntos: peorJornada ?? 0,
       suplente_negativo: jornadasSustNeg.size,
       racha_empates: curEmpates,
+      jugadores_espanoles: porPais[_norm('España')] || 0,
+      jugadores_mismo_pais: conteosPaisSinEspana.length ? Math.max(...conteosPaisSinEspana) : 0,
+      plantilla_diversa: paisesDistintos,
+      confederaciones_todas: confsPresentes.size,
+      conmebol_jugadores: porConfederacion.CONMEBOL || 0,
+      afc_jugadores: porConfederacion.AFC || 0,
+      caf_jugadores: porConfederacion.CAF || 0,
+      concacaf_jugadores: porConfederacion.CONCACAF || 0,
+      once_ideal_equipo: onceIdealPorEquipo[p.id] || 0,
+      jugador_jornada: jugadorJornadaPorEquipo[p.id] || 0,
+      puntualidad: curPuntual,
     };
   });
   return out;
@@ -13273,7 +13575,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setRecalculandoLogros(true);
     try {
       const partIds = participantes.map(p => p.id);
-      const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas }, { data: ptsJugTodos }, { data: sustsTodas }] = await Promise.all([
+      const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas }, { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }] = await Promise.all([
         sb.from('h2h_partidos')
           .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
           .eq('federacion_id', federacion.id),
@@ -13282,11 +13584,14 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
         partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
         sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
         sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
+        sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad'),
+        partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       ]);
       const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
       const detectados = detectarLogros(partidosTodos || [], participantes, {
         clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],
-        sustitucionesAuto: sustsTodas || [],
+        sustitucionesAuto: sustsTodas || [], jugadoresCat: jugCatTodos || [], plantillas: plantsTodas || [],
+        maxJugadores: federacion?.max_jugadores ?? 14,
       });
       const nuevos = detectados.filter(l => !yaTiene.has(`${l.participante_id}|${l.categoria}|${l.tier}`));
       if (nuevos.length > 0) {

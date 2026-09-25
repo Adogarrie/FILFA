@@ -104,6 +104,7 @@
     .forma-cuadro  { display: inline-flex; align-items: center; justify-content: center;
                      width: 22px; height: 22px; border-radius: 4px; flex-shrink: 0;
                      font-size: .62rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .solo-movil { display: none; } /* se muestra en ≤640px (ver @media) */
     .btn-fila { border: none; padding: .3rem .7rem; border-radius: 8px; cursor: pointer;
                 font-size: .8rem; font-weight: 600; color: #fff; white-space: nowrap; }
 
@@ -214,6 +215,13 @@
       .forma-cuadros { gap: 2px; }
       .forma-cuadro  { width: 14px; height: 14px; border-radius: 3px; font-size: .5rem; }
       .btn-fila { padding: .25rem .45rem; font-size: .72rem; white-space: normal; line-height: 1.15; }
+      /* Alineación: menos relleno, botones algo más pequeños y sin nombre del club (solo escudo) */
+      .solo-escritorio { display: none !important; }
+      .tabla-alineacion td { padding: .35rem .2rem; }
+      .tabla-alineacion .badge { padding: .12rem .35rem; }
+      .btn-ali { margin-left: 2px !important; padding: .2rem .35rem !important; font-size: .7rem !important; }
+      .solo-movil { display: inline !important; }
+      .ali-flechas { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; }
       .filtros input, .filtros select { width: 100%; min-width: 0; }
       .login-card { padding: 2rem 1.25rem; }
     }
@@ -6132,7 +6140,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                 <div style={{fontWeight:700, fontSize:'.78rem', color:'#198754', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
                   Titulares
                 </div>
-                <table style={{width:'100%'}}>
+                <table className="tabla-alineacion" style={{width:'100%'}}>
                   <tbody>
                     {(snapshot.datos||[]).filter(d => d.es_titular).map((d, i) => (
                       <tr key={i} style={!d.jugo ? {opacity:.45} : {}}>
@@ -6145,7 +6153,11 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                           )}
                           {!d.jugo && <span style={{marginLeft:5, fontSize:'.72rem', color:'var(--texto2)', fontStyle:'italic'}}>no jugó</span>}
                         </td>
-                        <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>{d.equipo_real}</td>
+                        <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>
+                          <span title={d.equipo_real} style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                            <Escudo equipo={d.equipo_real} size={20}/><span className="solo-escritorio">{d.equipo_real}</span>
+                          </span>
+                        </td>
                         <td style={{textAlign:'right', fontWeight:700, color: d.jugo && d.pts > 0 ? '#198754' : 'var(--texto2)'}}>
                           {d.es_capitan && d.jugo ? `${d.pts}×2` : d.pts} pts
                         </td>
@@ -6159,7 +6171,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                   <div style={{fontWeight:700, fontSize:'.78rem', color:'#fd7e14', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:'.35rem'}}>
                     Suplentes
                   </div>
-                  <table style={{width:'100%'}}>
+                  <table className="tabla-alineacion" style={{width:'100%'}}>
                     <tbody>
                       {(snapshot.datos||[]).filter(d => !d.es_titular).sort((a,b) => (a.orden_suplente||99)-(b.orden_suplente||99)).map((d, i) => (
                         <tr key={i} style={!d.jugo ? {opacity:.45} : {background:'rgba(253,126,20,.06)'}}>
@@ -6169,7 +6181,11 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                             {d.nombre}
                             {d.jugo && <span style={{marginLeft:5, fontSize:'.7rem', color:'#198754', fontWeight:700}}>⬆ entró</span>}
                           </td>
-                          <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>{d.equipo_real}</td>
+                          <td style={{color:'var(--texto2)', fontSize:'.82rem'}}>
+                            <span title={d.equipo_real} style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                              <Escudo equipo={d.equipo_real} size={20}/><span className="solo-escritorio">{d.equipo_real}</span>
+                            </span>
+                          </td>
                           <td style={{textAlign:'right', fontWeight:700, color: d.jugo && d.pts > 0 ? '#198754' : 'var(--texto2)'}}>{d.pts} pts</td>
                         </tr>
                       ))}
@@ -6203,7 +6219,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                                letterSpacing:'.05em', marginBottom:'.35rem'}}>
                     {label}
                   </div>
-                  <table style={{width:'100%'}}>
+                  <table className="tabla-alineacion" style={{width:'100%'}}>
                     <tbody>
                       {jugs.map(j => {
                         const esHistorico = idsHist.has(j.id);
@@ -6217,7 +6233,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                             )}
                             <td style={{width: key === 'T' && j.posicion_alt ? 86 : 48}}>
                               {key === 'T' && j.posicion_alt && (!bloqueado || aplazadosSet.has(j.id))
-                                ? <span style={{display:'inline-flex', gap:2}}>
+                                ? <span style={{display:'inline-flex', flexWrap:'wrap', gap:2}}>
                                     {[j.posicion, j.posicion_alt].map(pos => {
                                       const activo = (posicionUsada[j.id] ?? j.posicion) === pos;
                                       return (
@@ -6282,8 +6298,8 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                             </td>
                             <td style={{color:'var(--texto2)', fontSize:'.85rem'}}>
                               {j.posicion === 'POR' ? null
-                                : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                                    <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
+                                : <span title={j.equipo} style={{display:'inline-flex',alignItems:'center',gap:5}}>
+                                    <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/><span className="solo-escritorio">{j.equipo}</span>
                                   </span>}
                             </td>
                             {esHistorico
@@ -6293,29 +6309,29 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                               : puedeEditar(j.id) && (
                                 <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
                                   {key === 'S' && (
-                                    <>
-                                      <button onClick={() => moverSuplente(j.id, -1)}
+                                    <span className="ali-flechas">
+                                      <button className="btn-ali" onClick={() => moverSuplente(j.id, -1)}
                                               disabled={ordenSup[j.id] === 1}
                                               style={{marginLeft:3, padding:'.2rem .45rem', fontSize:'.75rem',
                                                       border:'1.5px solid var(--borde)', borderRadius:6,
                                                       cursor: ordenSup[j.id] === 1 ? 'default' : 'pointer',
                                                       background:'var(--fondo-alt)', opacity: ordenSup[j.id] === 1 ? .35 : 1}}>▲</button>
-                                      <button onClick={() => moverSuplente(j.id, +1)}
+                                      <button className="btn-ali" onClick={() => moverSuplente(j.id, +1)}
                                               disabled={ordenSup[j.id] === nS}
                                               style={{marginLeft:2, padding:'.2rem .45rem', fontSize:'.75rem',
                                                       border:'1.5px solid var(--borde)', borderRadius:6,
                                                       cursor: ordenSup[j.id] === nS ? 'default' : 'pointer',
                                                       background:'var(--fondo-alt)', opacity: ordenSup[j.id] === nS ? .35 : 1}}>▼</button>
-                                    </>
+                                    </span>
                                   )}
-                                  {[['T','Titular','#198754'],['S','Suplente','#fd7e14'],['F','Fuera','#6c757d']].map(([op, etiq, col]) => (
-                                    <button key={op} onClick={() => setJugadorEstado(j.id, op)}
+                                  {[['T','Titular','Tit','#198754'],['S','Suplente','Sup','#fd7e14'],['F','Fuera','Fuera','#6c757d']].map(([op, etiq, corto, col]) => (
+                                    <button key={op} className="btn-ali" title={etiq} onClick={() => setJugadorEstado(j.id, op)}
                                             style={{marginLeft:3, padding:'.2rem .5rem', fontSize:'.75rem',
                                                     border:`1.5px solid ${estado[j.id]===op ? col : 'var(--borde)'}`,
                                                     borderRadius:6, cursor:'pointer',
                                                     background: estado[j.id]===op ? col : '#fff',
                                                     color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
-                                      {etiq}
+                                      <span className="solo-escritorio">{etiq}</span><span className="solo-movil">{corto}</span>
                                     </button>
                                   ))}
                                 </td>

@@ -455,6 +455,31 @@ function calcularEdad(fechaNacimiento) {
   return edad;
 }
 
+// Umbrales de los logros de edad (ver LOGROS_CATALOGO: Parvulito/Residencia):
+// joven = menos de 22 años (≤21), veterano = más de 29 años (≥30).
+const EDAD_MAX_JOVEN    = 21;
+const EDAD_MIN_VETERANO = 30;
+
+// Estadísticas de edad de una plantilla (lista de jugador_id) a partir del
+// catálogo id→{fecha_nacimiento}. Los jugadores sin fecha no cuentan;
+// `completa` indica si todos tienen edad conocida. `media` va redondeada a
+// 1 decimal y es null si no hay ninguna edad; `brecha` = mayor − menor.
+function estadisticasEdadPlantilla(jugadorIds, jugadoresCatMap) {
+  const edades = jugadorIds
+    .map(jid => calcularEdad(jugadoresCatMap[jid]?.fecha_nacimiento))
+    .filter(e => e != null);
+  const media = edades.length
+    ? Math.round(edades.reduce((s, e) => s + e, 0) / edades.length * 10) / 10
+    : null;
+  return {
+    jovenes:   edades.filter(e => e <= EDAD_MAX_JOVEN).length,
+    veteranos: edades.filter(e => e >= EDAD_MIN_VETERANO).length,
+    media,
+    brecha:    edades.length >= 2 ? Math.max(...edades) - Math.min(...edades) : 0,
+    completa:  edades.length === jugadorIds.length,
+  };
+}
+
 const nombreJugador = (nombre, posicion, equipo) =>
   posicion === 'POR'
     ? <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
@@ -10907,7 +10932,7 @@ function LogrosVista({ federacion, participantes }) {
       partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
       sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
-      sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad'),
+      sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento'),
       partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
     ]).then(([{ data: p }, { data: l }, { data: c }, { data: a }, { data: pj }, { data: s }, { data: jc }, { data: pl }]) => {
       setPartidos(p || []);
@@ -10950,6 +10975,15 @@ function LogrosVista({ federacion, participantes }) {
     }
     if (cat === 'plantilla_diversa') {
       return `Países distintos en plantilla: ${valorActual}`;
+    }
+    if (cat === 'plantilla_joven' || cat === 'plantilla_veterana') {
+      if (!valorActual) return 'Edad media: sin datos de edad';
+      return cat === 'plantilla_joven'
+        ? `Edad media: ${valorActual} años (objetivo: menos de ${siguienteTier}, con plantilla completa)`
+        : `Edad media: ${valorActual} años (objetivo: ${siguienteTier} o más, con plantilla completa)`;
+    }
+    if (cat === 'brecha_generacional') {
+      return `Diferencia de edad actual: ${valorActual}/${siguienteTier} años`;
     }
     return `Progreso: ${Math.min(valorActual, siguienteTier)}/${siguienteTier}`;
   };
@@ -12822,6 +12856,39 @@ const LOGROS_CATALOGO = {
     tiers: [2],
     desc: t => `${t} jugadores de CONCACAF en plantilla`,
   },
+  // ── Logros de edad (plantilla actual) ──
+  // La edad se calcula con calcularEdad (fecha_nacimiento contra hoy) en el
+  // momento de recalcular; los jugadores sin fecha de nacimiento no cuentan.
+  jugadores_jovenes: {
+    nombre: 'Parvulito', icono: '🧸',
+    descripcion: `Jugadores de menos de ${EDAD_MAX_JOVEN + 1} años en la plantilla actual.`,
+    tiers: [3, 5, 7],
+    desc: t => `${t} jugadores de menos de ${EDAD_MAX_JOVEN + 1} años en plantilla`,
+  },
+  jugadores_veteranos: {
+    nombre: 'Residencia', icono: '🧓',
+    descripcion: `Jugadores de más de ${EDAD_MIN_VETERANO - 1} años en la plantilla actual.`,
+    tiers: [3, 5, 7],
+    desc: t => `${t} jugadores de más de ${EDAD_MIN_VETERANO - 1} años en plantilla`,
+  },
+  plantilla_joven: {
+    nombre: 'Guardería', icono: '🍼',
+    descripcion: 'Edad media baja con la plantilla completa (y la edad de todos los jugadores conocida).',
+    tiers: [25, 24, 23],
+    desc: t => `Edad media de la plantilla por debajo de ${t} años`,
+  },
+  plantilla_veterana: {
+    nombre: 'Plantilla veterana', icono: '👴',
+    descripcion: 'Edad media alta con la plantilla completa (y la edad de todos los jugadores conocida).',
+    tiers: [27, 29, 31],
+    desc: t => `Edad media de la plantilla de ${t} años o más`,
+  },
+  brecha_generacional: {
+    nombre: 'Brecha generacional', icono: '👶',
+    descripcion: 'Diferencia de edad entre el jugador más veterano y el más joven de la plantilla actual.',
+    tiers: [18],
+    desc: t => `${t} años de diferencia entre el mayor y el menor de la plantilla`,
+  },
   once_ideal_equipo: {
     nombre: 'Estrellas de la jornada', icono: '🌟',
     descripcion: 'Veces que algún jugador de tu plantilla ha aparecido en el Once Ideal de la jornada (acumulado de toda la plantilla, toda la temporada).',
@@ -13085,6 +13152,18 @@ function detectarLogros(partidos, participantes, extra = {}) {
       tocarTier(new Set(), p.id, 'afc_jugadores',      LOGROS_CATALOGO.afc_jugadores.tiers,      porConfederacion.AFC || 0, null);
       tocarTier(new Set(), p.id, 'caf_jugadores',      LOGROS_CATALOGO.caf_jugadores.tiers,      porConfederacion.CAF || 0, null);
       tocarTier(new Set(), p.id, 'concacaf_jugadores', LOGROS_CATALOGO.concacaf_jugadores.tiers, porConfederacion.CONCACAF || 0, null);
+
+      // ── Edad de la plantilla actual ──
+      const edad = estadisticasEdadPlantilla(misJugadoresIds, jugadoresCatMap);
+      tocarTier(new Set(), p.id, 'jugadores_jovenes',   LOGROS_CATALOGO.jugadores_jovenes.tiers,   edad.jovenes,   null);
+      tocarTier(new Set(), p.id, 'jugadores_veteranos', LOGROS_CATALOGO.jugadores_veteranos.tiers, edad.veteranos, null);
+      tocarTier(new Set(), p.id, 'brecha_generacional', LOGROS_CATALOGO.brecha_generacional.tiers, edad.brecha,    null);
+      // La edad media solo vale con plantilla completa y todas las edades
+      // conocidas (si no, bastaría con fichar 2-3 jugadores para lograrlo).
+      if (misJugadoresIds.length >= maxJugadores && edad.completa && edad.media != null) {
+        tocarTierMenorQue(new Set(), p.id, 'plantilla_joven', LOGROS_CATALOGO.plantilla_joven.tiers, edad.media, null);
+        tocarTier(new Set(), p.id, 'plantilla_veterana', LOGROS_CATALOGO.plantilla_veterana.tiers, edad.media, null);
+      }
     }
 
     // ── Once Ideal y Jugador de la Jornada (acumulado del equipo) ──
@@ -13224,6 +13303,7 @@ function progresoLogros(partidos, participantes, extra = {}) {
     const conteosPaisSinEspana = Object.entries(porPais)
       .filter(([pais]) => pais !== _norm('España'))
       .map(([, c]) => c);
+    const edad = estadisticasEdadPlantilla(misJugadoresIds, jugadoresCatMap);
 
     let curPuntual = 0;
     jornadasFantasticas.forEach(j => {
@@ -13248,6 +13328,11 @@ function progresoLogros(partidos, participantes, extra = {}) {
       afc_jugadores: porConfederacion.AFC || 0,
       caf_jugadores: porConfederacion.CAF || 0,
       concacaf_jugadores: porConfederacion.CONCACAF || 0,
+      jugadores_jovenes: edad.jovenes,
+      jugadores_veteranos: edad.veteranos,
+      plantilla_joven: edad.media ?? 0,
+      plantilla_veterana: edad.media ?? 0,
+      brecha_generacional: edad.brecha,
       once_ideal_equipo: onceIdealPorEquipo[p.id] || 0,
       jugador_jornada: jugadorJornadaPorEquipo[p.id] || 0,
       puntualidad: curPuntual,
@@ -13597,7 +13682,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
         partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
         sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
         sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
-        sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad'),
+        sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento'),
         partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       ]);
       const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));

@@ -104,7 +104,7 @@
     .forma-cuadro  { display: inline-flex; align-items: center; justify-content: center;
                      width: 22px; height: 22px; border-radius: 4px; flex-shrink: 0;
                      font-size: .62rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .solo-movil { display: none; } /* se muestra en ≤640px (ver @media) */
+    .lbl-corto { display: none; } /* etiqueta corta de botón: solo en <400px (ver @media) */
     .btn-fila { border: none; padding: .3rem .7rem; border-radius: 8px; cursor: pointer;
                 font-size: .8rem; font-weight: 600; color: #fff; white-space: nowrap; }
 
@@ -220,10 +220,18 @@
       .tabla-alineacion td { padding: .35rem .2rem; }
       .tabla-alineacion .badge { padding: .12rem .35rem; }
       .btn-ali { margin-left: 2px !important; padding: .2rem .35rem !important; font-size: .7rem !important; }
-      .solo-movil { display: inline !important; }
       .ali-flechas { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; }
       .filtros input, .filtros select { width: 100%; min-width: 0; }
       .login-card { padding: 2rem 1.25rem; }
+    }
+    /* Alineación en móviles estrechos: Titular/Suplente → Tit/Sup. Entre 381 y
+       399px (iPhone 390) cabe ▲▼ en horizontal; en ≤380px se vuelven a apilar. */
+    @media (max-width: 399px) {
+      .lbl-largo { display: none; }
+      .lbl-corto { display: inline; }
+    }
+    @media (min-width: 381px) and (max-width: 399px) {
+      .ali-flechas { flex-direction: row; }
     }
 
     /* Markdown rendered content */
@@ -5743,7 +5751,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     if (!sb || !participanteId) return;
     Promise.all([
       sb.from('plantillas')
-        .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt, nacionalidad)')
+        .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt)')
         .eq('participante_id', participanteId),
       sb.from('jugadores_posicion_fed')
         .select('jugador_id, posicion, posicion_alt')
@@ -5769,7 +5777,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
         sb.from('jornadas_cierre').select('cierre')
           .eq('federacion_id', federacionId).eq('jornada', jornada).maybeSingle(),
         sb.from('cesiones')
-          .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt, nacionalidad)')
+          .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt)')
           .eq('participante_id', participanteId).eq('federacion_id', federacionId)
           .eq('jornada', jornada).eq('estado', 'aprobada'),
         sb.from('jugadores_aplazados').select('jugador_id')
@@ -6257,11 +6265,6 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                               }
                             </td>
                             <td style={{fontWeight:600}}>
-                              {j.nacionalidad && (
-                                <span style={{marginRight:5, verticalAlign:'middle', display:'inline-block'}}>
-                                  <Bandera nacionalidad={j.nacionalidad} size={16} />
-                                </span>
-                              )}
                               {nombreJugador(j.nombre, j.posicion, j.equipo)}
                               {lesionadosSet.has(j.id) && (
                                 <span style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
@@ -6331,7 +6334,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                                                     borderRadius:6, cursor:'pointer',
                                                     background: estado[j.id]===op ? col : '#fff',
                                                     color: estado[j.id]===op ? '#fff' : 'var(--texto)'}}>
-                                      <span className="solo-escritorio">{etiq}</span><span className="solo-movil">{corto}</span>
+                                      <span className="lbl-largo">{etiq}</span><span className="lbl-corto">{corto}</span>
                                     </button>
                                   ))}
                                 </td>

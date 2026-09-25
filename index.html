@@ -4459,10 +4459,8 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
           : <table className="tabla-jugadores">
               <thead>
                 <tr>
-                  <th>Jugador</th><th>Pos</th><th style={{textAlign:'center'}}>Nac.</th>
-                  <th style={{textAlign:'right'}}>Edad</th><th style={{textAlign:'center'}}>Confed.</th><th>Equipo</th>
-                  <th style={{textAlign:'right'}}>Valor actual</th>
-                  <th style={{textAlign:'right'}}>Dif. compra</th>
+                  <th>Jugador</th>
+                  <th style={{textAlign:'right'}} title="Valor actual de mercado y diferencia con el precio de compra">Valor</th>
                   {jornadasForma.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
                   {puedeOfrecer && <th></th>}
                 </tr>
@@ -4473,42 +4471,38 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                   return (
                     <tr key={i} style={j.lesionado ? {background:'rgba(220,53,69,.06)'} : {}}>
                       <td style={{fontWeight:600}}>
-                        <span style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                        {/* Línea 1: posición + nombre (+ LES). Línea 2: escudo · bandera · edad · confed. */}
+                        <div style={{display:'flex', alignItems:'center', gap:5, flexWrap:'wrap'}}>
+                          <span className={`badge ${j.posicion}`}>{j.posicion}</span>
                           {nombreJugador(j.nombre, j.posicion, j.equipo)}
                           {j.lesionado && <span style={{background:'#dc3545', color:'#fff', borderRadius:4, fontSize:'.68rem', padding:'1px 5px', fontWeight:700, flexShrink:0}}>LES</span>}
-                        </span>
+                        </div>
+                        <div className="jug-linea2">
+                          {j.posicion !== 'POR' && (
+                            <span title={j.equipo} style={{display:'inline-flex'}}><Escudo equipo={j.equipo} size={16}/></span>
+                          )}
+                          <Bandera nacionalidad={j.nacionalidad} size={16} />
+                          {j.edad != null && <span>{j.edad} años</span>}
+                          {confederacionDe(j.nacionalidad) && <span>{confederacionDe(j.nacionalidad)}</span>}
+                        </div>
                       </td>
-                      <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
-                      <td style={{textAlign:'center'}}><Bandera nacionalidad={j.nacionalidad} /></td>
-                      <td style={{textAlign:'right', color:'var(--texto2)'}}>{j.edad ?? '—'}</td>
-                      <td style={{textAlign:'center', fontSize:'.72rem', color:'var(--texto2)'}}>{confederacionDe(j.nacionalidad) || '—'}</td>
-                      <td style={{color:'var(--texto2)'}}>
-                        {j.posicion === 'POR' ? null
-                          : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
-                              <Escudo equipo={j.equipo} size={ESCUDO_SIZE}/>{j.equipo}
-                            </span>}
-                      </td>
-                      <td style={{textAlign:'right'}}>{fmt(j.valor || 0)}</td>
-                      <td style={{textAlign:'right'}}
-                          className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}>
-                        {dif >= 0 ? '+' : ''}{fmt(dif)}
+                      <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                        <div>{fmt(j.valor || 0)}</div>
+                        <div className={dif >= 0 ? 'valor-positivo' : 'valor-negativo'}
+                             style={{fontSize:'.7rem'}} title="Diferencia con el precio de compra">
+                          {dif >= 0 ? '+' : ''}{fmt(dif)}
+                        </div>
                       </td>
                       {jornadasForma.length > 0 && (
                         <td style={{textAlign:'center'}}>
-                          <div style={{display:'inline-flex', gap:3}}>
+                          <div className="forma-cuadros">
                             {jornadasForma.map(jn => {
                               const pts = puntosHistorial[j.jugador_id]?.[jn];
                               const c   = colorPts(pts);
                               return (
-                                <span key={jn}
+                                <span key={jn} className="forma-cuadro"
                                       title={`J${jn}: ${pts !== undefined ? pts + ' pts' : 'sin datos'}`}
-                                      style={{
-                                        display:'inline-flex', alignItems:'center', justifyContent:'center',
-                                        width:22, height:22, borderRadius:4,
-                                        background: c.bg, color: c.text,
-                                        fontSize:'.62rem', fontWeight:700,
-                                        fontVariantNumeric:'tabular-nums', flexShrink:0,
-                                      }}>
+                                      style={{ background: c.bg, color: c.text }}>
                                   {c.label}
                                 </span>
                               );
@@ -4518,10 +4512,9 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                       )}
                       {puedeOfrecer && (
                         <td style={{textAlign:'right'}}>
-                          <button onClick={() => { setModalOferta(j); setCantOferta(String((j.valor || 0) / 1_000_000)); setMsgOferta(''); }}
-                                  style={{background:'#0d6efd', color:'#fff', border:'none',
-                                          padding:'.25rem .65rem', borderRadius:7,
-                                          cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>
+                          <button className="btn-fila"
+                                  onClick={() => { setModalOferta(j); setCantOferta(String((j.valor || 0) / 1_000_000)); setMsgOferta(''); }}
+                                  style={{background:'#0d6efd'}}>
                             Ofrecer
                           </button>
                         </td>

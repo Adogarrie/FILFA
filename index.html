@@ -92,6 +92,11 @@
     .clasif-compacta th    { padding: .1.5rem .2rem; font-size: .8rem; }
     .clasif-compacta td    { padding: .27rem .27rem; }
 
+    /* Tabla compacta — solo Mi Plantilla y Equipos, no afecta a otras tablas */
+    .tabla-jugadores { font-size: .78rem; }
+    .tabla-jugadores th { padding: .4rem .5rem; font-size: .68rem; }
+    .tabla-jugadores td { padding: .4rem .5rem; }
+
     /* Badges posicion */
     .badge { display: inline-block; padding: .18rem .55rem; border-radius: 10px;
              font-size: .75rem; font-weight: 700; }
@@ -944,7 +949,7 @@ ${seccionesHtml}
           ? <div className="empty">Selecciona un participante en el menu superior.</div>
           : lista.length === 0
           ? <div className="empty">Esta plantilla esta vacia.</div>
-          : <table>
+          : <table className="tabla-jugadores">
               <thead>
                 <tr>
                   <th>Jugador</th><th>Pos</th><th style={{textAlign:'center'}}>Nac.</th>
@@ -4276,7 +4281,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
           ? <Spinner />
           : lista.length === 0
           ? <div className="empty">Esta plantilla está vacía.</div>
-          : <table>
+          : <table className="tabla-jugadores">
               <thead>
                 <tr>
                   <th>Jugador</th><th>Pos</th><th style={{textAlign:'center'}}>Nac.</th>

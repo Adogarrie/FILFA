@@ -368,15 +368,85 @@ function Escudo({ equipo, size = ESCUDO_SIZE }) {
   );
 }
 
-// Bandera de la nacionalidad de un jugador. El fichero esperado en la
-// carpeta local `nations/` es el país normalizado (minúsculas, sin
-// acentos, espacios → guion bajo): "España" → nations/espana.png,
-// "Costa de Marfil" → nations/costa_de_marfil.png. Si no hay imagen para
-// ese país, no se rompe nada — se pinta un distintivo con las 3 primeras
-// letras del país en mayúsculas en vez de la bandera.
+// Bandera de la nacionalidad de un jugador. Las imágenes de la carpeta
+// local `nations/` están nombradas en inglés con guiones ("Spain.png",
+// "Cote-d'Ivoire.png"), pero `nacionalidad` se guarda en español (viene de
+// transfermarkt.es), así que se traduce con _BANDERA_MAP. Si el país no
+// está en el mapa se prueba tal cual (por si ya viene en inglés: espacios →
+// guiones). Si no hay imagen para ese país, no se rompe nada — se pinta un
+// distintivo con las 3 primeras letras del país en mayúsculas.
+const _BANDERAS = {
+  // UEFA (Inglaterra/Escocia/Gales/Irlanda del Norte no tienen bandera
+  // propia en nations/ — usan la del Reino Unido)
+  'España': 'Spain', 'Portugal': 'Portugal', 'Francia': 'France', 'Alemania': 'Germany',
+  'Italia': 'Italy', 'Inglaterra': 'United-Kingdom', 'Escocia': 'United-Kingdom',
+  'Gales': 'United-Kingdom', 'Irlanda del Norte': 'United-Kingdom', 'Reino Unido': 'United-Kingdom',
+  'Países Bajos': 'Netherlands', 'Holanda': 'Netherlands', 'Bélgica': 'Belgium',
+  'Croacia': 'Croatia', 'Serbia': 'Serbia', 'Polonia': 'Poland', 'Ucrania': 'Ukraine',
+  'Rusia': 'Russia', 'Suiza': 'Switzerland', 'Austria': 'Austria', 'Suecia': 'Sweden',
+  'Noruega': 'Norway', 'Dinamarca': 'Denmark', 'Finlandia': 'Finland', 'Islandia': 'Iceland',
+  'Irlanda': 'Ireland', 'Grecia': 'Grecee', 'Turquía': 'Turkey', 'Rumanía': 'Romania',
+  'Rumania': 'Romania', 'Bulgaria': 'Bulgaria', 'Hungría': 'Hungary',
+  'República Checa': 'Czech-Republic', 'Chequia': 'Czech-Republic', 'Eslovaquia': 'Slovakia',
+  'Eslovenia': 'Slovenia', 'Bosnia y Herzegovina': 'Bosnia-and-Herzegovina',
+  'Bosnia-Herzegovina': 'Bosnia-and-Herzegovina', 'Montenegro': 'Montenegro',
+  'Macedonia del Norte': 'Macedonia', 'Macedonia': 'Macedonia', 'Albania': 'Albania',
+  'Kosovo': 'Kosovo', 'Georgia': 'Georgia', 'Armenia': 'Armenia', 'Azerbaiyán': 'Azerbaijan',
+  'Israel': 'Israel', 'Chipre': 'Cyprus', 'Malta': 'Malta', 'Luxemburgo': 'Luxembourg',
+  'Andorra': 'Andorra', 'San Marino': 'San-Marino', 'Liechtenstein': 'Liechtenstein',
+  'Moldavia': 'Moldova', 'Bielorrusia': 'Belarus', 'Letonia': 'Latvia', 'Lituania': 'Lithuania',
+  'Estonia': 'Estonia', 'Kazajistán': 'Kazakhstan', 'Mónaco': 'Monaco',
+  // CONMEBOL
+  'Argentina': 'Argentina', 'Brasil': 'Brazil', 'Uruguay': 'Uruguay', 'Paraguay': 'Paraguay',
+  'Chile': 'Chile', 'Colombia': 'Colombia', 'Ecuador': 'Ecuador', 'Perú': 'Peru',
+  'Bolivia': 'Bolivia', 'Venezuela': 'Venezuela',
+  // CONCACAF
+  'México': 'Mexico', 'Estados Unidos': 'United-States-of-America', 'EE.UU.': 'United-States-of-America',
+  'Canadá': 'Canada', 'Costa Rica': 'Costa-Rica', 'Honduras': 'Honduras', 'Panamá': 'Panama',
+  'Guatemala': 'Guatemala', 'El Salvador': 'El-Salvador', 'Nicaragua': 'Nicaragua',
+  'Jamaica': 'Jamaica', 'Cuba': 'Cuba', 'República Dominicana': 'Dominican-Republic',
+  'Trinidad y Tobago': 'Trinidad-and-Tobago', 'Haití': 'Haiti', 'Surinam': 'Suriname',
+  'Guyana': 'Guyana', 'Granada': 'Grenada', 'Barbados': 'Barbados', 'Bahamas': 'Bahamas',
+  'Belice': 'Belize',
+  // CAF
+  'Marruecos': 'Morocco', 'Argelia': 'Algeria', 'Túnez': 'Tunisia', 'Egipto': 'Egypt',
+  'Senegal': 'Senegal', 'Nigeria': 'Nigeria', 'Ghana': 'Ghana', 'Costa de Marfil': "Cote-d'Ivoire",
+  'Camerún': 'Cameroon', 'Mali': 'Mali', 'Malí': 'Mali', 'Guinea': 'Guinea',
+  'Guinea-Bisáu': 'Guinea-Bissau', 'Guinea-Bissau': 'Guinea-Bissau', 'Cabo Verde': 'Cape-Verde',
+  'República Democrática del Congo': 'Congo-(Democratic)', 'RD del Congo': 'Congo-(Democratic)',
+  'RD Congo': 'Congo-(Democratic)', 'Congo': 'Congo-(Republic)', 'Gabón': 'Gabon',
+  'Angola': 'Angola', 'Mozambique': 'Mozambique', 'Sudáfrica': 'South-Africa', 'Zambia': 'Zambia',
+  'Zimbabue': 'Zimbabwe', 'Kenia': 'Kenya', 'Etiopía': 'Ethiopia',
+  'Guinea Ecuatorial': 'Equatorial-Guinea', 'Togo': 'Togo', 'Benín': 'Benin',
+  'Burkina Faso': 'Burkina-Faso', 'Níger': 'Niger', 'Chad': 'Chad', 'Libia': 'Libya',
+  'Sudán': 'Sudan', 'Sudán del Sur': 'South-Sudan', 'Mauritania': 'Mauritania', 'Gambia': 'Gambia',
+  'Sierra Leona': 'Sierra-Leone', 'Liberia': 'Liberia', 'Ruanda': 'Rwanda', 'Burundi': 'Burundi',
+  'Uganda': 'Uganda', 'Tanzania': 'Tanzania', 'Namibia': 'Namibia', 'Botsuana': 'Botswana',
+  'Comoras': 'Comoros', 'Madagascar': 'Madagascar', 'Mauricio': 'Mauritius', 'Eritrea': 'Eritrea',
+  'Somalia': 'Somalia', 'Malaui': 'Malawi', 'República Centroafricana': 'Central-African-Republic',
+  'Santo Tomé y Príncipe': 'Sao-Tome-and-Principe', 'Yibuti': 'Djibouti', 'Lesoto': 'Lesotho',
+  // AFC
+  'Japón': 'Japan', 'Corea del Sur': 'Korea,-South', 'Corea del Norte': 'Korea,-North',
+  'China': 'China', 'Arabia Saudí': 'Saudi-Arabia', 'Arabia Saudita': 'Saudi-Arabia',
+  'Irán': 'Iran', 'Irak': 'Iraq', 'Catar': 'Qatar', 'Qatar': 'Qatar',
+  'Emiratos Árabes Unidos': 'United-Arab-Emirates', 'Kuwait': 'Kuwait', 'Baréin': 'Bahrain',
+  'Omán': 'Oman', 'Jordania': 'Jordan', 'Líbano': 'Lebanon', 'Siria': 'Syria',
+  'Uzbekistán': 'Uzbekistan', 'Tayikistán': 'Tajikistan', 'Turkmenistán': 'Turkmenistan',
+  'Kirguistán': 'Kyrgyzstan', 'Afganistán': 'Afghanistan', 'India': 'India', 'Pakistán': 'Pakistan',
+  'Bangladés': 'Bangladesh', 'Vietnam': 'Vietnam', 'Tailandia': 'Thailand', 'Malasia': 'Malaysia',
+  'Indonesia': 'Indonesia', 'Filipinas': 'Philippines', 'Singapur': 'Singapore', 'Myanmar': 'Myanmar',
+  'Camboya': 'Cambodia', 'Nepal': 'Nepal', 'Bután': 'Bhutan', 'Maldivas': 'Maldives',
+  'Timor Oriental': 'East-Timor', 'Taiwán': 'Taiwan', 'Yemen': 'Yemen', 'Australia': 'Australia',
+  // OFC
+  'Nueva Zelanda': 'New-Zealand', 'Fiyi': 'Fiji', 'Papúa Nueva Guinea': 'Papua-New-Guinea',
+  'Islas Salomón': 'Solomon-Islands', 'Vanuatu': 'Vanuatu', 'Samoa': 'Samoa', 'Tonga': 'Tonga',
+};
+const _BANDERA_MAP = Object.fromEntries(
+  Object.entries(_BANDERAS).map(([pais, file]) => [_norm(pais), file])
+);
 function _banderaFile(nacionalidad) {
   if (!nacionalidad) return null;
-  return _norm(nacionalidad).replace(/ /g, '_');
+  return _BANDERA_MAP[_norm(nacionalidad)] || nacionalidad.trim().replace(/\s+/g, '-');
 }
 function Bandera({ nacionalidad, size = 18 }) {
   const [error, setError] = useState(false);
@@ -396,7 +466,7 @@ function Bandera({ nacionalidad, size = 18 }) {
     );
   }
   return (
-    <img src={`nations/${file}.png`} alt={nacionalidad} title={nacionalidad}
+    <img src={`nations/${encodeURIComponent(file)}.png`} alt={nacionalidad} title={nacionalidad}
          width={size} height={h}
          style={{ objectFit:'cover', verticalAlign:'middle', flexShrink:0, borderRadius:2 }}
          onError={() => setError(true)} />

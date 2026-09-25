@@ -154,12 +154,16 @@ def scrape_equipo(slug: str, tm_id: int, nombre: str) -> list[dict]:
                 nacionalidad = bandera["title"].strip()
                 break
 
-        # Fecha de nacimiento: celda con formato "dd.mm.aaaa (edad)".
+        # Fecha de nacimiento: celda con formato "dd/mm/aaaa (edad)" (con
+        # barras, no puntos — verificado contra la página real). Se exige el
+        # sufijo "(edad)" para no confundirla con las celdas de fecha de
+        # contrato/fin de contrato, que tienen el mismo formato de fecha
+        # pero sin ese sufijo.
         # Guardamos solo la fecha (ISO aaaa-mm-dd); la edad se calcula en la
         # app a partir de la fecha, para que no se quede desactualizada.
         fecha_nacimiento = ""
         for td in celdas:
-            m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", td.get_text(strip=True))
+            m = re.match(r"(\d{2})/(\d{2})/(\d{4})\s*\(\d+\)", td.get_text(strip=True))
             if m:
                 dia, mes, anio = m.groups()
                 fecha_nacimiento = f"{anio}-{mes}-{dia}"

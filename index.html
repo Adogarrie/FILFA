@@ -10946,7 +10946,7 @@ function LogrosVista({ federacion, participantes }) {
       return `Tu peor jornada: ${valorActual} pts (objetivo: ${siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})`;
     }
     if (cat === 'confederaciones_todas') {
-      return `Confederaciones representadas: ${valorActual}/5`;
+      return `Requisitos cumplidos (UEFA, CONMEBOL, CAF, AFC o CONCACAF): ${valorActual}/4`;
     }
     if (cat === 'plantilla_diversa') {
       return `Países distintos en plantilla: ${valorActual}`;
@@ -12793,10 +12793,10 @@ const LOGROS_CATALOGO = {
     desc: () => 'Plantilla completa con todos los jugadores de un país distinto',
   },
   confederaciones_todas: {
-    nombre: 'Cinco continentes', icono: '🗺️',
-    descripcion: 'Al menos un jugador de cada confederación —UEFA, CONMEBOL, CONCACAF, CAF y AFC— en la plantilla actual (no cuenta OFC).',
+    nombre: 'Multicontinental', icono: '🗺️',
+    descripcion: 'Al menos un jugador de UEFA, de CONMEBOL, de CAF, y de AFC o CONCACAF (con una de las dos basta) en la plantilla actual.',
     tiers: [1],
-    desc: () => 'Al menos 1 jugador de UEFA, CONMEBOL, CONCACAF, CAF y AFC',
+    desc: () => 'Al menos 1 jugador de UEFA, CONMEBOL, CAF y (AFC o CONCACAF)',
   },
   conmebol_jugadores: {
     nombre: 'Sudamérica', icono: '🌎',
@@ -12902,7 +12902,16 @@ function detectarLogros(partidos, participantes, extra = {}) {
     (plantillaPorEquipo[r.participante_id] = plantillaPorEquipo[r.participante_id] || []).push(r.jugador_id);
     fichadosPorId[r.jugador_id] = r.participante_id;
   });
-  const CONFEDS_SIN_OFC = ['UEFA', 'CONMEBOL', 'CONCACAF', 'CAF', 'AFC'];
+  // "Multicontinental": UEFA + CONMEBOL + CAF obligatorias, y AFC o CONCACAF
+  // (basta con una de las dos). Se usa tanto en la detección como en el
+  // progreso (cuenta cuántos de estos 4 "huecos" cumple: 0-4).
+  const CONFEDS_OBLIGATORIAS = ['UEFA', 'CONMEBOL', 'CAF'];
+  const cumpleMulticontinental = (confsPresentes) =>
+    CONFEDS_OBLIGATORIAS.every(c => confsPresentes.has(c)) &&
+    (confsPresentes.has('AFC') || confsPresentes.has('CONCACAF'));
+  const huecosMulticontinental = (confsPresentes) =>
+    CONFEDS_OBLIGATORIAS.filter(c => confsPresentes.has(c)).length +
+    ((confsPresentes.has('AFC') || confsPresentes.has('CONCACAF')) ? 1 : 0);
 
   // Once Ideal y Jugador de la Jornada: se recorre cada jornada con
   // puntuaciones una sola vez (no por equipo) y se acumula por equipo.
@@ -13063,8 +13072,8 @@ function detectarLogros(partidos, participantes, extra = {}) {
       }
 
       const confsPresentes = new Set(nacionalidades.map(n => confederacionDe(n)).filter(Boolean));
-      if (CONFEDS_SIN_OFC.every(c => confsPresentes.has(c))) {
-        marcar(p.id, 'confederaciones_todas', 1, confsPresentes.size, null);
+      if (cumpleMulticontinental(confsPresentes)) {
+        marcar(p.id, 'confederaciones_todas', 1, huecosMulticontinental(confsPresentes), null);
       }
 
       const porConfederacion = {};
@@ -13125,6 +13134,10 @@ function progresoLogros(partidos, participantes, extra = {}) {
     (plantillaPorEquipo[r.participante_id] = plantillaPorEquipo[r.participante_id] || []).push(r.jugador_id);
     fichadosPorId[r.jugador_id] = r.participante_id;
   });
+  const CONFEDS_OBLIGATORIAS = ['UEFA', 'CONMEBOL', 'CAF'];
+  const huecosMulticontinental = (confsPresentes) =>
+    CONFEDS_OBLIGATORIAS.filter(c => confsPresentes.has(c)).length +
+    ((confsPresentes.has('AFC') || confsPresentes.has('CONCACAF')) ? 1 : 0);
 
   const onceIdealPorEquipo = {}, jugadorJornadaPorEquipo = {};
   const jornadasConPts = [...new Set(puntosJugador.map(r => r.jornada))];
@@ -13230,7 +13243,7 @@ function progresoLogros(partidos, participantes, extra = {}) {
       jugadores_espanoles: porPais[_norm('España')] || 0,
       jugadores_mismo_pais: conteosPaisSinEspana.length ? Math.max(...conteosPaisSinEspana) : 0,
       plantilla_diversa: paisesDistintos,
-      confederaciones_todas: confsPresentes.size,
+      confederaciones_todas: huecosMulticontinental(confsPresentes),
       conmebol_jugadores: porConfederacion.CONMEBOL || 0,
       afc_jugadores: porConfederacion.AFC || 0,
       caf_jugadores: porConfederacion.CAF || 0,

@@ -144,12 +144,35 @@ def scrape_equipo(slug: str, tm_id: int, nombre: str) -> list[dict]:
                 break
         valor = normalizar_valor(valor_raw) if valor_raw else "N/D"
 
+        # Nacionalidad: banderas 'flaggenrahmen' en las celdas centradas.
+        # Un jugador puede tener doble nacionalidad (dos banderas); nos
+        # quedamos con la primera como nacionalidad principal.
+        nacionalidad = ""
+        for td in celdas:
+            bandera = td.find("img", class_="flaggenrahmen")
+            if bandera and bandera.get("title"):
+                nacionalidad = bandera["title"].strip()
+                break
+
+        # Fecha de nacimiento: celda con formato "dd.mm.aaaa (edad)".
+        # Guardamos solo la fecha (ISO aaaa-mm-dd); la edad se calcula en la
+        # app a partir de la fecha, para que no se quede desactualizada.
+        fecha_nacimiento = ""
+        for td in celdas:
+            m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", td.get_text(strip=True))
+            if m:
+                dia, mes, anio = m.groups()
+                fecha_nacimiento = f"{anio}-{mes}-{dia}"
+                break
+
         jugadores.append({
-            "nombre":   nombre_jugador,
-            "equipo":   nombre,
-            "posicion": posicion,
-            "valor":    valor,
-            "url":      url_jugador,
+            "nombre":           nombre_jugador,
+            "equipo":           nombre,
+            "posicion":         posicion,
+            "valor":            valor,
+            "url":              url_jugador,
+            "nacionalidad":     nacionalidad or "N/D",
+            "fecha_nacimiento": fecha_nacimiento or "N/D",
         })
 
     print(f"  OK {nombre}: {len(jugadores)} jugadores")
@@ -211,13 +234,13 @@ def conectar_sheets():
 
 def volcar_a_sheets(ws, jugadores: list[dict]):
     ws.clear()
-    cabecera = ["Nombre", "Equipo", "Posicion", "Valor de Mercado", "URL Transfermarkt"]
+    cabecera = ["Nombre", "Equipo", "Posicion", "Valor de Mercado", "URL Transfermarkt", "Nacionalidad", "Fecha Nacimiento"]
     filas = [cabecera] + [
-        [j["nombre"], j["equipo"], j["posicion"], j["valor"], j["url"]]
+        [j["nombre"], j["equipo"], j["posicion"], j["valor"], j["url"], j.get("nacionalidad", "N/D"), j.get("fecha_nacimiento", "N/D")]
         for j in jugadores
     ]
     ws.update("A1", filas)
-    ws.format("A1:E1", {"textFormat": {"bold": True}})
+    ws.format("A1:G1", {"textFormat": {"bold": True}})
     print(f"\nJugadores escritos en Google Sheets: {len(jugadores)}")
 
 
@@ -225,14 +248,14 @@ def volcar_a_sheets(ws, jugadores: list[dict]):
 
 def modo_prueba(jugadores: list[dict]):
     """Imprime los primeros resultados en pantalla para verificar el scraping."""
-    print(f"\n{'='*60}")
+    print(f"\n{'='*75}")
     print(f"RESULTADOS (primeros 20 de {len(jugadores)} jugadores)")
-    print(f"{'='*60}")
-    print(f"{'Nombre':<25} {'Equipo':<20} {'Pos':<5} {'Valor'}")
-    print("-" * 60)
+    print(f"{'='*75}")
+    print(f"{'Nombre':<25} {'Equipo':<20} {'Pos':<5} {'Nacionalidad':<15} {'Nacimiento':<12} {'Valor'}")
+    print("-" * 75)
     for j in jugadores[:20]:
-        print(f"{j['nombre']:<25} {j['equipo']:<20} {j['posicion']:<5} {j['valor']}")
-    print(f"{'='*60}\n")
+        print(f"{j['nombre']:<25} {j['equipo']:<20} {j['posicion']:<5} {j.get('nacionalidad', 'N/D'):<15} {j.get('fecha_nacimiento', 'N/D'):<12} {j['valor']}")
+    print(f"{'='*75}\n")
 
 
 # ── Main ───────────────────────────────────────────────────────

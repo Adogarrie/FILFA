@@ -47,14 +47,22 @@ def preparar_registros(jugadores_raw: list[dict]) -> list[dict]:
             continue  # Omitir jugadores sin posicion valida
 
         valor = valor_a_numero(j.get("valor", "0"))
+        nacionalidad = j.get("nacionalidad")
+        if nacionalidad in (None, "", "N/D"):
+            nacionalidad = None
+        fecha_nacimiento = j.get("fecha_nacimiento")
+        if fecha_nacimiento in (None, "", "N/D"):
+            fecha_nacimiento = None
 
         registros.append({
-            "nombre":        j["nombre"],
-            "equipo":        j["equipo"],
-            "posicion":      posicion,
-            "valor_mercado": valor,
-            "url_tm":        j.get("url", ""),
-            "activo":        True,
+            "nombre":           j["nombre"],
+            "equipo":           j["equipo"],
+            "posicion":         posicion,
+            "valor_mercado":    valor,
+            "url_tm":           j.get("url", ""),
+            "nacionalidad":     nacionalidad,
+            "fecha_nacimiento": fecha_nacimiento,
+            "activo":           True,
         })
     return registros
 
@@ -86,7 +94,7 @@ def main():
     if args.prueba:
         print("\nPrimeros 10 registros:")
         for r in registros[:10]:
-            print(f"  {r['nombre']:<30} {r['equipo']:<20} {r['posicion']}  {r['valor_mercado']:>14,.0f} EUR")
+            print(f"  {r['nombre']:<30} {r['equipo']:<20} {r['posicion']}  {(r['nacionalidad'] or 'N/D'):<15} {(r['fecha_nacimiento'] or 'N/D'):<12} {r['valor_mercado']:>14,.0f} EUR")
         return
 
     if not SUPABASE_URL or not SUPABASE_KEY:

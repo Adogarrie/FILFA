@@ -363,6 +363,93 @@ function Escudo({ equipo, size = ESCUDO_SIZE }) {
   );
 }
 
+// Bandera de la nacionalidad de un jugador. El fichero esperado en la
+// carpeta local `nations/` es el país normalizado (minúsculas, sin
+// acentos, espacios → guion bajo): "España" → nations/espana.png,
+// "Costa de Marfil" → nations/costa_de_marfil.png. Si no hay imagen para
+// ese país, no se rompe nada — se pinta un distintivo con las 3 primeras
+// letras del país en mayúsculas en vez de la bandera.
+function _banderaFile(nacionalidad) {
+  if (!nacionalidad) return null;
+  return _norm(nacionalidad).replace(/ /g, '_');
+}
+function Bandera({ nacionalidad, size = 18 }) {
+  const [error, setError] = useState(false);
+  const file = _banderaFile(nacionalidad);
+  if (!file) return null;
+  const h = Math.round(size * 0.75);
+  if (error) {
+    return (
+      <span title={nacionalidad}
+            style={{ display:'inline-flex', alignItems:'center', justifyContent:'center',
+                     width:size, height:h, borderRadius:2, flexShrink:0, verticalAlign:'middle',
+                     background:'var(--gris)', color:'var(--texto2)',
+                     fontSize:Math.max(7, Math.round(size * 0.4)), fontWeight:700,
+                     letterSpacing:'-.3px', lineHeight:1 }}>
+        {nacionalidad.slice(0, 3).toUpperCase()}
+      </span>
+    );
+  }
+  return (
+    <img src={`nations/${file}.png`} alt={nacionalidad} title={nacionalidad}
+         width={size} height={h}
+         style={{ objectFit:'cover', verticalAlign:'middle', flexShrink:0, borderRadius:2 }}
+         onError={() => setError(true)} />
+  );
+}
+
+// Confederación continental de una nacionalidad (derivada, no se guarda en
+// BBDD — siempre se recalcula desde `nacionalidad` para no poder
+// desincronizarse). Cobertura amplia pero no exhaustiva de todos los países
+// del mundo; un país que falte simplemente no muestra confederación.
+const _CONFEDERACIONES = {
+  UEFA: ['España','Portugal','Francia','Alemania','Italia','Inglaterra','Países Bajos','Holanda',
+    'Bélgica','Croacia','Serbia','Polonia','Ucrania','Rusia','Suiza','Austria','Suecia','Noruega',
+    'Dinamarca','Finlandia','Islandia','Irlanda','Irlanda del Norte','Escocia','Gales','Grecia',
+    'Turquía','Rumanía','Bulgaria','Hungría','República Checa','Chequia','Eslovaquia','Eslovenia',
+    'Bosnia y Herzegovina','Montenegro','Macedonia del Norte','Albania','Kosovo','Georgia','Armenia',
+    'Azerbaiyán','Israel','Chipre','Malta','Luxemburgo','Andorra','San Marino','Liechtenstein',
+    'Moldavia','Bielorrusia','Letonia','Lituania','Estonia','Kazajistán'],
+  CONMEBOL: ['Argentina','Brasil','Uruguay','Paraguay','Chile','Colombia','Ecuador','Perú',
+    'Bolivia','Venezuela'],
+  CONCACAF: ['México','Estados Unidos','Canadá','Costa Rica','Honduras','Panamá','Guatemala',
+    'El Salvador','Nicaragua','Jamaica','Cuba','República Dominicana','Trinidad y Tobago','Haití'],
+  CAF: ['Marruecos','Argelia','Túnez','Egipto','Senegal','Nigeria','Ghana','Costa de Marfil',
+    'Camerún','Mali','Guinea','Guinea-Bisáu','Cabo Verde','República Democrática del Congo','Congo',
+    'Gabón','Angola','Mozambique','Sudáfrica','Zambia','Zimbabue','Kenia','Etiopía',
+    'Guinea Ecuatorial','Togo','Benín','Burkina Faso','Níger','Chad','Libia','Sudán','Mauritania',
+    'Gambia','Sierra Leona','Liberia','Ruanda','Burundi','Uganda','Tanzania','Namibia','Botsuana',
+    'Comoras'],
+  AFC: ['Japón','Corea del Sur','Corea del Norte','China','Arabia Saudí','Irán','Irak','Catar',
+    'Emiratos Árabes Unidos','Kuwait','Baréin','Omán','Jordania','Líbano','Siria','Uzbekistán',
+    'Tayikistán','Turkmenistán','Kirguistán','Afganistán','India','Pakistán','Bangladés','Vietnam',
+    'Tailandia','Malasia','Indonesia','Filipinas','Singapur','Myanmar','Camboya','Nepal','Bután',
+    'Maldivas','Timor Oriental','Hong Kong','Taiwán','Palestina','Yemen'],
+  OFC: ['Nueva Zelanda','Fiyi','Papúa Nueva Guinea','Islas Salomón','Vanuatu','Nueva Caledonia',
+    'Tahití','Samoa','Tonga','Islas Cook'],
+};
+const _CONFED_MAP = Object.fromEntries(
+  Object.entries(_CONFEDERACIONES).flatMap(([conf, paises]) => paises.map(p => [_norm(p), conf]))
+);
+function confederacionDe(nacionalidad) {
+  if (!nacionalidad) return null;
+  return _CONFED_MAP[_norm(nacionalidad)] || null;
+}
+
+// Edad en años a partir de la fecha de nacimiento (YYYY-MM-DD) — se calcula
+// siempre contra la fecha de hoy, nunca se guarda un número fijo en BBDD.
+function calcularEdad(fechaNacimiento) {
+  if (!fechaNacimiento) return null;
+  const nac = new Date(fechaNacimiento);
+  if (isNaN(nac.getTime())) return null;
+  const hoy = new Date();
+  let edad = hoy.getFullYear() - nac.getFullYear();
+  const noHaCumplidoAun = (hoy.getMonth() < nac.getMonth()) ||
+    (hoy.getMonth() === nac.getMonth() && hoy.getDate() < nac.getDate());
+  if (noHaCumplidoAun) edad--;
+  return edad;
+}
+
 const nombreJugador = (nombre, posicion, equipo) =>
   posicion === 'POR'
     ? <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
@@ -413,7 +500,7 @@ function Plantilla({ participanteId, participanteNombre, federacion, isAdmin, mi
     if (!participanteId || !sb) { setJugadores([]); return; }
     const [{ data: pl, error }, { data: pres }] = await Promise.all([
       sb.from('plantillas')
-        .select('id, jugador_id, precio_compra, fecha_fichaje, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
+        .select('id, jugador_id, precio_compra, fecha_fichaje, lesionado, jugadores(nombre, equipo, posicion, valor_mercado, nacionalidad, fecha_nacimiento)')
         .eq('participante_id', participanteId),
       sb.from('participantes').select('presupuesto, sustituciones_lesion, nombre, estadio, entrenador').eq('id', participanteId).single(),
     ]);
@@ -765,14 +852,16 @@ ${seccionesHtml}
   };
 
   const lista = jugadores.map(p => ({
-    id:         p.id,
-    jugador_id: p.jugador_id,
-    nombre:     p.jugadores?.nombre || '',
-    equipo:     p.jugadores?.equipo || '',
-    posicion:   p.jugadores?.posicion || '',
-    valor:      p.jugadores?.valor_mercado || 0,
-    compra:     p.precio_compra || 0,
-    lesionado:  p.lesionado || false,
+    id:           p.id,
+    jugador_id:   p.jugador_id,
+    nombre:       p.jugadores?.nombre || '',
+    equipo:       p.jugadores?.equipo || '',
+    posicion:     p.jugadores?.posicion || '',
+    valor:        p.jugadores?.valor_mercado || 0,
+    compra:       p.precio_compra || 0,
+    lesionado:    p.lesionado || false,
+    nacionalidad: p.jugadores?.nacionalidad || null,
+    edad:         calcularEdad(p.jugadores?.fecha_nacimiento),
   })).sort((a, b) => (POS_ORDER[a.posicion] ?? 4) - (POS_ORDER[b.posicion] ?? 4));
 
   const presupuestoDisplay = presupuesto ?? null;
@@ -858,7 +947,8 @@ ${seccionesHtml}
           : <table>
               <thead>
                 <tr>
-                  <th>Jugador</th><th>Pos</th><th>Equipo</th>
+                  <th>Jugador</th><th>Pos</th><th style={{textAlign:'center'}}>Nac.</th>
+                  <th style={{textAlign:'right'}}>Edad</th><th style={{textAlign:'center'}}>Confed.</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
                   {jornadasFormaP.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
@@ -877,6 +967,9 @@ ${seccionesHtml}
                         </span>
                       </td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td style={{textAlign:'center'}}><Bandera nacionalidad={j.nacionalidad} /></td>
+                      <td style={{textAlign:'right', color:'var(--texto2)'}}>{j.edad ?? '—'}</td>
+                      <td style={{textAlign:'center', fontSize:'.72rem', color:'var(--texto2)'}}>{confederacionDe(j.nacionalidad) || '—'}</td>
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
                           : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
@@ -1313,7 +1406,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
 
     const partIds = participantes.map(p => p.id);
     const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }, { data: lesData }] = await Promise.all([
-      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado').eq('activo', true).eq('baja', false),
+      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado,nacionalidad').eq('activo', true).eq('baja', false),
       partIds.length
         ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
@@ -1479,6 +1572,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       else if (sortCol === 'equipo')  v = (a.equipo||'').localeCompare(b.equipo||'');
       else if (sortCol === 'posicion') v = (POS_SORT[a.posicion]??4) - (POS_SORT[b.posicion]??4);
       else if (sortCol === 'valor')   v = (a.valor_mercado||0) - (b.valor_mercado||0);
+      else if (sortCol === 'nacionalidad') v = (a.nacionalidad||'').localeCompare(b.nacionalidad||'');
       else if (sortCol === 'pujas')   v = (conteosPorJugador[a.id]||0) - (conteosPorJugador[b.id]||0);
       return sortDir === 'asc' ? v : -v;
     });
@@ -2154,11 +2248,12 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
           <thead>
             <tr>
               {[
-                ['nombre',   'Jugador',    {}],
-                ['posicion', 'Pos',        {}],
-                ['equipo',   'Equipo',     {}],
-                ['valor',    'Valor mín.', {textAlign:'right'}],
-                ['pujas',    'Pujas',      {}],
+                ['nombre',       'Jugador',    {}],
+                ['posicion',     'Pos',        {}],
+                ['nacionalidad', 'Nac.',       {textAlign:'center'}],
+                ['equipo',       'Equipo',     {}],
+                ['valor',        'Valor mín.', {textAlign:'right'}],
+                ['pujas',        'Pujas',      {}],
               ].map(([col, label, st]) => (
                 <th key={col} style={{...st, cursor:'pointer', userSelect:'none', whiteSpace:'nowrap'}}
                     onClick={() => { setSortDir(sortCol === col && sortDir === 'asc' ? 'desc' : 'asc'); setSortCol(col); }}>
@@ -2183,6 +2278,7 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
                     </span>
                   </td>
                   <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                  <td style={{textAlign:'center'}}><Bandera nacionalidad={j.nacionalidad} /></td>
                   <td style={{color:'var(--texto2)'}}>
                     {j.posicion === 'POR' ? null
                       : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
@@ -3867,7 +3963,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     const cargar = async () => {
       const [{ data, error }, { data: presData }] = await Promise.all([
         sb.from('plantillas')
-          .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado)')
+          .select('id, jugador_id, precio_compra, lesionado, jugadores(nombre, equipo, posicion, valor_mercado, nacionalidad, fecha_nacimiento)')
           .eq('participante_id', equipoId),
         sb.from('participantes').select('presupuesto').eq('id', equipoId).single(),
       ]);
@@ -3995,13 +4091,15 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
 
   const POS_ORDER_EQ = { POR: 0, DEF: 1, MED: 2, DEL: 3 };
   const lista = (jugadores || []).map(p => ({
-    jugador_id: p.jugador_id,
-    nombre:     p.jugadores?.nombre || '',
-    equipo:     p.jugadores?.equipo || '',
-    posicion:   p.jugadores?.posicion || '',
-    valor:      p.jugadores?.valor_mercado || 0,
-    compra:     p.precio_compra || 0,
-    lesionado:  p.lesionado || false,
+    jugador_id:   p.jugador_id,
+    nombre:       p.jugadores?.nombre || '',
+    equipo:       p.jugadores?.equipo || '',
+    posicion:     p.jugadores?.posicion || '',
+    valor:        p.jugadores?.valor_mercado || 0,
+    compra:       p.precio_compra || 0,
+    lesionado:    p.lesionado || false,
+    nacionalidad: p.jugadores?.nacionalidad || null,
+    edad:         calcularEdad(p.jugadores?.fecha_nacimiento),
   })).sort((a, b) => (POS_ORDER_EQ[a.posicion] ?? 4) - (POS_ORDER_EQ[b.posicion] ?? 4));
 
   const puedeOfrecer = !!(sesionParticipanteId && equipoId !== sesionParticipanteId && federacion?.ventas_habilitadas);
@@ -4181,7 +4279,8 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
           : <table>
               <thead>
                 <tr>
-                  <th>Jugador</th><th>Pos</th><th>Equipo</th>
+                  <th>Jugador</th><th>Pos</th><th style={{textAlign:'center'}}>Nac.</th>
+                  <th style={{textAlign:'right'}}>Edad</th><th style={{textAlign:'center'}}>Confed.</th><th>Equipo</th>
                   <th style={{textAlign:'right'}}>Valor actual</th>
                   <th style={{textAlign:'right'}}>Dif. compra</th>
                   {jornadasForma.length > 0 && <th style={{textAlign:'center'}}>Forma</th>}
@@ -4200,6 +4299,9 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                         </span>
                       </td>
                       <td><span className={`badge ${j.posicion}`}>{j.posicion}</span></td>
+                      <td style={{textAlign:'center'}}><Bandera nacionalidad={j.nacionalidad} /></td>
+                      <td style={{textAlign:'right', color:'var(--texto2)'}}>{j.edad ?? '—'}</td>
+                      <td style={{textAlign:'center', fontSize:'.72rem', color:'var(--texto2)'}}>{confederacionDe(j.nacionalidad) || '—'}</td>
                       <td style={{color:'var(--texto2)'}}>
                         {j.posicion === 'POR' ? null
                           : <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
@@ -5460,7 +5562,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     if (!sb || !participanteId) return;
     Promise.all([
       sb.from('plantillas')
-        .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt)')
+        .select('jugador_id, lesionado, jugadores(id, nombre, equipo, posicion, posicion_alt, nacionalidad)')
         .eq('participante_id', participanteId),
       sb.from('jugadores_posicion_fed')
         .select('jugador_id, posicion, posicion_alt')
@@ -5486,7 +5588,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
         sb.from('jornadas_cierre').select('cierre')
           .eq('federacion_id', federacionId).eq('jornada', jornada).maybeSingle(),
         sb.from('cesiones')
-          .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt)')
+          .select('jugador_id, jugadores(id, nombre, equipo, posicion, posicion_alt, nacionalidad)')
           .eq('participante_id', participanteId).eq('federacion_id', federacionId)
           .eq('jornada', jornada).eq('estado', 'aprobada'),
         sb.from('jugadores_aplazados').select('jugador_id')
@@ -5966,6 +6068,11 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                               }
                             </td>
                             <td style={{fontWeight:600}}>
+                              {j.nacionalidad && (
+                                <span style={{marginRight:5, verticalAlign:'middle', display:'inline-block'}}>
+                                  <Bandera nacionalidad={j.nacionalidad} size={16} />
+                                </span>
+                              )}
                               {nombreJugador(j.nombre, j.posicion, j.equipo)}
                               {lesionadosSet.has(j.id) && (
                                 <span style={{marginLeft:5, fontSize:'.63rem', fontWeight:700, letterSpacing:.4,
@@ -8540,7 +8647,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const cargarJugadores = async () => {
     const partIds = participantes.map(p => p.id);
     const [{ data }, { data: pl }, { data: ovr }] = await Promise.all([
-      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, baja').order('equipo').order('nombre'),
+      sb.from('jugadores').select('id, nombre, equipo, posicion, posicion_alt, valor_mercado, baja, nacionalidad').order('equipo').order('nombre'),
       partIds.length ? sb.from('plantillas').select('jugador_id, participante_id, lesionado').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       sb.from('jugadores_posicion_fed').select('jugador_id, posicion, posicion_alt').eq('federacion_id', federacion?.id),
     ]);
@@ -8588,6 +8695,14 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     const nomJug = j.nombre;
     publicar(federacion?.id, 'admin', `${nomJug}: posición cambiada de ${j.posicion} a ${nuevaPos}.`, actorNombre);
     setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, posicion: nuevaPos, posicion_alt: posAltActual } : p));
+  };
+
+  const cambiarNacionalidad = async (j, nuevaNac) => {
+    const val = nuevaNac.trim() || null;
+    if (val === (j.nacionalidad || null)) return;
+    const { error } = await sb.from('jugadores').update({ nacionalidad: val }).eq('id', j.id);
+    if (error) { alert('Error: ' + error.message); return; }
+    setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, nacionalidad: val } : p));
   };
 
   const cambiarPosAlt = async (j, nuevaAlt) => {
@@ -8794,7 +8909,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
             ? <div className="empty">No hay jugadores que coincidan.</div>
             : <table>
                 <thead>
-                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th>Pos. alt</th><th>Equipo fantasy</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
+                  <tr><th>Jugador</th><th>Equipo</th><th>Pos</th><th>Pos. alt</th><th style={{textAlign:'center'}}>Nacionalidad</th><th style={{textAlign:'center'}}>Confed.</th><th>Equipo fantasy</th><th style={{ textAlign:'right' }}>Valor</th><th>Lesión</th><th></th></tr>
                 </thead>
                 <tbody>
                   {listaFiltrada.map(j => (
@@ -8833,6 +8948,27 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                               )}
                             </select>
                         }
+                      </td>
+                      <td>
+                        <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
+                          <Bandera nacionalidad={j.nacionalidad} size={16} />
+                          <input type="text" defaultValue={j.nacionalidad || ''}
+                                 placeholder="—"
+                                 onBlur={e => cambiarNacionalidad(j, e.target.value)}
+                                 onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                 style={{ width:110, padding:'.2rem .4rem', borderRadius:6,
+                                          border:'1.5px solid var(--borde)', fontSize:'.8rem',
+                                          background:'var(--fondo)', color:'var(--texto)' }} />
+                        </span>
+                      </td>
+                      <td style={{ textAlign:'center' }}>
+                        {(() => {
+                          const conf = confederacionDe(j.nacionalidad);
+                          return conf
+                            ? <span style={{ fontSize:'.72rem', fontWeight:700, padding:'2px 7px', borderRadius:10,
+                                             background:'var(--gris)', color:'var(--texto2)' }}>{conf}</span>
+                            : <span style={{ color:'var(--texto2)', fontSize:'.78rem' }}>—</span>;
+                        })()}
                       </td>
                       <td style={{ fontSize:'.82rem', color: propietarios[j.id] ? 'var(--texto)' : 'var(--texto2)' }}>
                         {propietarios[j.id] || 'Libre'}

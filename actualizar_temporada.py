@@ -92,13 +92,21 @@ def main():
             valor = float(valor_raw) if valor_raw else 0.0
         except ValueError:
             valor = 0.0
+        nacionalidad = j.get("nacionalidad")
+        if nacionalidad in (None, "", "N/D"):
+            nacionalidad = None
+        fecha_nacimiento = j.get("fecha_nacimiento")
+        if fecha_nacimiento in (None, "", "N/D"):
+            fecha_nacimiento = None
         registros.append({
-            "nombre":        j["nombre"],
-            "equipo":        j["equipo"],
-            "posicion":      pos,
-            "valor_mercado": valor,
-            "url_tm":        j.get("url"),
-            "activo":        True,
+            "nombre":           j["nombre"],
+            "equipo":           j["equipo"],
+            "posicion":         pos,
+            "valor_mercado":    valor,
+            "url_tm":           j.get("url"),
+            "nacionalidad":     nacionalidad,
+            "fecha_nacimiento": fecha_nacimiento,
+            "activo":           True,
         })
 
     if sin_pos:
@@ -114,7 +122,7 @@ def main():
     if args.prueba:
         print("\nMuestra (primeros 5):")
         for r in registros[:5]:
-            print(f"  {r['nombre']:<30} {r['equipo']:<25} {r['posicion']}  {r['valor_mercado']:,.0f}€")
+            print(f"  {r['nombre']:<30} {r['equipo']:<25} {r['posicion']}  {(r['nacionalidad'] or 'N/D'):<15} {(r['fecha_nacimiento'] or 'N/D'):<12} {r['valor_mercado']:,.0f}€")
         print("\n[PRUEBA] No se ha guardado nada.")
         return
 

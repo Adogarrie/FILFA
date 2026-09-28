@@ -1422,6 +1422,23 @@ ${seccionesHtml}
   );
 }
 
+// Milisegundos hasta la próxima hora de cierre ("HH:MM" o "HH:MM:SS"),
+// interpretada en hora de Madrid igual que procesar_cierre_pujas en SQL, sea
+// cual sea la zona horaria del dispositivo. El día de cambio de hora puede
+// desviarse 1 h; se corrige solo al reprogramar tras la siguiente llamada.
+function msHastaCierre(horaCierre) {
+  const [h, m, s = 0] = horaCierre.split(':').map(Number);
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', hourCycle: 'h23',
+                                       hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(new Date()).map(x => [x.type, x.value])
+  );
+  const ahora = Number(p.hour) * 3600 + Number(p.minute) * 60 + Number(p.second);
+  let diff = h * 3600 + m * 60 + s - ahora;
+  if (diff <= 0) diff += 86400;
+  return diff * 1000;
+}
+
 // ── COUNTDOWN cierre de pujas (componente aislado) ─────────────
 // Vive fuera de Mercado para que su setInterval no cause re-renders
 // en el componente padre y no interfiera con los <select> del mercado.
@@ -1494,13 +1511,20 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   // Ref siempre apunta a la cargar más reciente (evita stale closures en el intervalo)
   const cargarRef = useRef(null);
 
-  // Sondeo periódico de cierre — cada 60 s el RPC comprueba si la hora llegó.
-  // La función SQL es idempotente (log_cierres_pujas), así que llamarla 1440 veces
-  // al día es seguro: 1439 retornan "ya_procesado" o "sin_cierre_pendiente" de inmediato.
+  // Cierre de pujas: en vez de sondear cada minuto (1440 llamadas/día por
+  // pestaña abierta, casi todas inútiles), se llama al RPC solo cuando toca:
+  //   1. al montar (por si el cierre pasó con la app cerrada),
+  //   2. justo después de la hora de cierre (temporizador reprogramado cada día),
+  //   3. al volver a la pestaña, SOLO si la hora de cierre ya pasó mientras
+  //      estaba oculta/dormida (los temporizadores se congelan en segundo plano).
+  // La función SQL es idempotente (log_cierres_pujas): llamarla de más es seguro.
   useEffect(() => {
     if (!sb || !federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
 
-    const fedId = federacion.id;
+    const fedId      = federacion.id;
+    const horaCierre = federacion.hora_cierre_pujas;
+    let timer = null;
+    let proximoCierre = 0; // timestamp (ms) del próximo cierre programado
 
     const poll = () => {
       sb.rpc('procesar_cierre_pujas', { p_federacion_id: fedId })
@@ -1517,10 +1541,28 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
         });
     };
 
+    // +5 s de margen para que el now() del servidor ya haya pasado la hora de cierre.
+    const programar = () => {
+      clearTimeout(timer);
+      const ms = msHastaCierre(horaCierre) + 5000;
+      proximoCierre = Date.now() + ms;
+      timer = setTimeout(() => { poll(); programar(); }, ms);
+    };
+
+    const alVolver = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() >= proximoCierre) poll(); // el cierre pasó mientras estaba oculta
+      programar();
+    };
+
     poll(); // comprobación inmediata al montar o cuando cambia hora/mercado
-    const iv = setInterval(poll, 60_000); // sondeo cada minuto
-    return () => clearInterval(iv);
-  }, [federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
+    programar();
+    document.addEventListener('visibilitychange', alVolver);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', alVolver);
+    };
+  }, [federacion?.id, federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
 
   const cargar = async () => {
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); setPresupuesto(null); setMisOfertas([]); return; }

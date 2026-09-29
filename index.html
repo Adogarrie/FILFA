@@ -1568,10 +1568,12 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); setPresupuesto(null); setMisOfertas([]); return; }
 
     const partIds = participantes.map(p => p.id);
-    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }, { data: lesData }] = await Promise.all([
-      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,lesionado,nacionalidad').eq('activo', true).eq('baja', false),
+    // `lesionado` sale de las plantillas (es por liga), no de la columna de
+    // jugadores, así que no se pide en el catálogo: es la consulta más pesada.
+    const [{ data: jugs }, { data: plants }, { data: allPujas }, { data: pends }, { data: presupData }, { data: ofertasData }] = await Promise.all([
+      sb.from('jugadores').select('id,nombre,equipo,posicion,valor_mercado,nacionalidad').eq('activo', true).eq('baja', false),
       partIds.length
-        ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra').in('participante_id', partIds)
+        ? sb.from('plantillas').select('participante_id, jugador_id, precio_compra, lesionado').in('participante_id', partIds)
         : Promise.resolve({ data: [] }),
       partIds.length
         ? sb.from('pujas').select('id, participante_id, jugador_id, cantidad').eq('resuelta', false).in('participante_id', partIds)
@@ -1585,11 +1587,8 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       participanteId
         ? sb.from('ofertas_jugadores').select('cantidad').eq('ofertante_id', participanteId).eq('estado', 'pendiente')
         : Promise.resolve({ data: [] }),
-      partIds.length
-        ? sb.from('plantillas').select('jugador_id').in('participante_id', partIds).eq('lesionado', true)
-        : Promise.resolve({ data: [] }),
     ]);
-    const lesionadosFedSet = new Set((lesData || []).map(r => r.jugador_id));
+    const lesionadosFedSet = new Set((plants || []).filter(r => r.lesionado).map(r => r.jugador_id));
     setJugadores((jugs || []).map(j => ({ ...j, lesionado: lesionadosFedSet.has(j.id) })));
     setTodasPlantillas(plants || []);
     setTodasPendientes(pends || []);
@@ -1607,7 +1606,11 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   };
   cargarRef.current = cargar; // siempre actualizado al último render
 
-  useEffect(() => { if (participantes.length) cargar(); }, [participantes]);
+  // Recargar solo si cambian de verdad los equipos de la liga o el participante
+  // activo — no cada vez que App recrea el array `participantes` (p. ej. al
+  // volver a la pestaña), porque cada carga baja el catálogo entero de jugadores.
+  const partKey = participantes.map(p => p.id).join(',');
+  useEffect(() => { if (participantes.length) cargar(); }, [partKey, participanteId]);
   useEffect(() => { setSubtabMercado('jugadores'); }, [participanteId]);
   useEffect(() => {
     if (!participanteId || !sb || (isAdmin && participanteId !== miParticipanteId)) { setSustLesion(0); return; }
@@ -11066,6 +11069,14 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
 // categoría (progresoLogros, calculado en vivo desde h2h_partidos).
 // LOGROS_CATALOGO/detectarLogros/progresoLogros están definidos junto a
 // AdminLigaH2H, más abajo en este archivo.
+// Caché en memoria (por pestaña del navegador) del histórico de temporada que
+// usa LogrosVista para calcular el progreso: es la descarga más pesada de la
+// app (~1 MB a final de temporada) y solo cambia cuando el admin mete puntos
+// o cierra jornadas. Se reutiliza durante LOGROS_CACHE_MS y se descarta si
+// cambia la jornada actual o los equipos de la liga.
+const _logrosHistCache = {};
+const LOGROS_CACHE_MS = 10 * 60 * 1000;
+
 function LogrosVista({ federacion, participantes }) {
   const [partidos,      setPartidos]      = useState([]);
   const [logros,        setLogros]        = useState(null);
@@ -11075,6 +11086,7 @@ function LogrosVista({ federacion, participantes }) {
   const [sustitucionesAuto, setSustitucionesAuto] = useState([]);
   const [jugadoresCat, setJugadoresCat] = useState([]);
   const [plantillas,   setPlantillas]   = useState([]);
+  const [histCargado,  setHistCargado]  = useState(false);
   const [descAbiertas, setDescAbiertas] = useState(new Set()); // claves "participanteId_categoria"
   const [vistaLogros, setVistaLogros] = useState('tarjetas'); // 'tarjetas' | 'tabla'
 
@@ -11089,26 +11101,44 @@ function LogrosVista({ federacion, participantes }) {
   useEffect(() => {
     if (!sb || !federacion?.id || !federacion?.logros_habilitado) return;
     const partIds = participantes.map(p => p.id);
+    const aplicar = d => {
+      setPartidos(d.partidos); setClasificacion(d.clasificacion); setAlineaciones(d.alineaciones);
+      setPuntosJugador(d.puntosJugador); setSustitucionesAuto(d.sustitucionesAuto);
+      setJugadoresCat(d.jugadoresCat); setPlantillas(d.plantillas);
+      setHistCargado(true);
+    };
+    // Los logros ya conseguidos (tabla pequeña) se piden siempre, para que uno
+    // nuevo aparezca al momento. El histórico de la temporada (lo pesado: solo
+    // sirve para el "progreso") se reutiliza de la caché si es reciente.
+    sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
+      .eq('federacion_id', federacion.id)
+      .then(({ data: l }) => setLogros(l || []));
+
+    const claveCache = `${federacion.id}|${federacion.jornada_actual}|${partIds.join(',')}`;
+    const cache = _logrosHistCache[federacion.id];
+    if (cache && cache.clave === claveCache && Date.now() - cache.t < LOGROS_CACHE_MS) { aplicar(cache.datos); return; }
+
     Promise.all([
       sb.from('h2h_partidos').select('id, jornada, local_id, visitante_id, pts_local, pts_visitante')
-        .eq('federacion_id', federacion.id),
-      sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
         .eq('federacion_id', federacion.id),
       partIds.length ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
       sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
       sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
-      sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento'),
-      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
-    ]).then(([{ data: p }, { data: l }, { data: c }, { data: a }, { data: pj }, { data: s }, { data: jc }, { data: pl }]) => {
-      setPartidos(p || []);
-      setLogros(l || []);
-      setClasificacion(c || []);
-      setAlineaciones(a || []);
-      setPuntosJugador(pj || []);
-      setSustitucionesAuto(s || []);
-      setJugadoresCat(jc || []);
-      setPlantillas(pl || []);
+      // Solo hacen falta los datos de los jugadores fichados (nacionalidad,
+      // edad, once ideal), así que van embebidos en plantillas en vez de
+      // descargar el catálogo entero de jugadores.
+      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id, jugadores(id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento)').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+    ]).then(([{ data: p }, { data: c }, { data: a }, { data: pj }, { data: s }, { data: pl }]) => {
+      const catMap = {};
+      (pl || []).forEach(r => { if (r.jugadores) catMap[r.jugadores.id] = r.jugadores; });
+      const datos = {
+        partidos: p || [], clasificacion: c || [], alineaciones: a || [], puntosJugador: pj || [],
+        sustitucionesAuto: s || [], jugadoresCat: Object.values(catMap),
+        plantillas: (pl || []).map(r => ({ jugador_id: r.jugador_id, participante_id: r.participante_id })),
+      };
+      _logrosHistCache[federacion.id] = { clave: claveCache, t: Date.now(), datos };
+      aplicar(datos);
     });
   }, [federacion?.id, federacion?.logros_habilitado]);
 
@@ -11120,7 +11150,7 @@ function LogrosVista({ federacion, participantes }) {
       </div>
     );
   }
-  if (logros === null) return <div className="card"><Spinner /></div>;
+  if (logros === null || !histCargado) return <div className="card"><Spinner /></div>;
 
   const progreso = progresoLogros(partidos, participantes, {
     clasificacion, alineaciones, puntosJugador, sustitucionesAuto, jugadoresCat, plantillas,
@@ -11313,6 +11343,13 @@ function LogrosVista({ federacion, participantes }) {
   );
 }
 
+// Pestaña 🏆 Logros desactivada temporalmente: LogrosVista descarga el
+// histórico de toda la temporada (~1 MB) para calcular el progreso y dispara
+// el egress de Supabase. El palmarés de Equipos (tabla `logros`, ligera) sigue
+// visible. Para reactivarla, poner a true (idealmente tras precalcular el
+// progreso en una tabla pequeña).
+const MOSTRAR_PESTANA_LOGROS = false;
+
 function Competiciones({ federacion, participantes, isAdmin }) {
   const [tab, setTab] = useState('calendario');
   return (
@@ -11324,7 +11361,7 @@ function Competiciones({ federacion, participantes, isAdmin }) {
                 onClick={() => setTab('h2h')}>Liga FILFA</button>
         <button className={`tab ${tab==='torneos'?'active':''}`}
                 onClick={() => setTab('torneos')}>Torneos</button>
-        {federacion?.logros_habilitado && (
+        {MOSTRAR_PESTANA_LOGROS && federacion?.logros_habilitado && (
           <button className={`tab ${tab==='logros'?'active':''}`}
                   onClick={() => setTab('logros')}>🏆 Logros</button>
         )}
@@ -11335,7 +11372,7 @@ function Competiciones({ federacion, participantes, isAdmin }) {
       {tab === 'h2h' && (
         <LigaH2H federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
       )}
-      {tab === 'logros' && (
+      {MOSTRAR_PESTANA_LOGROS && tab === 'logros' && (
         <LogrosVista federacion={federacion} participantes={participantes} />
       )}
       {tab === 'torneos' && (
@@ -11381,7 +11418,25 @@ function App() {
     if (part?.id) localStorage.setItem('filfa_part_id', part.id);
   };
 
+  // Supabase emite SIGNED_IN no solo al iniciar sesión, sino cada vez que la
+  // pestaña recupera el foco. Recargar el perfil entero entonces provocaba una
+  // cascada (perfil → participantes → Mercado → vista actual) de ~15 peticiones
+  // y cientos de KB cada vez. Si es el mismo usuario ya cargado, solo se
+  // refresca la fila de la federación (por si el admin cambió jornada/mercado).
+  const perfilCargadoRef = useRef(null); // user.id cuyo perfil ya está cargado
+  const federacionRef    = useRef(null);
+  federacionRef.current  = federacion;
+
+  const refrescarFederacion = async () => {
+    const fed = federacionRef.current;
+    if (!sb || !fed?.id) return;
+    const { data } = await sb.from('federaciones').select('*').eq('id', fed.id).single();
+    // Solo si cambió algo: un objeto nuevo relanza la carga de participantes y vistas.
+    if (data && JSON.stringify(data) !== JSON.stringify(federacionRef.current)) setFederacion(data);
+  };
+
   const cargarPerfil = async (user) => {
+    perfilCargadoRef.current = user.id;
     setAuthUser(user);
     // Cargar TODOS los participantes del usuario
     const [{ data: parts }, { data: adminFedData }] = await Promise.all([
@@ -11430,8 +11485,11 @@ function App() {
       setSesionLista(true);
     });
     const { data: sub } = sb.auth.onAuthStateChange((event, sess) => {
-      if (event === 'SIGNED_OUT') { setSession(null); setAuthUser(null); setFederacion(null); }
-      if (event === 'SIGNED_IN' && sess?.user) cargarPerfil(sess.user);
+      if (event === 'SIGNED_OUT') { perfilCargadoRef.current = null; setSession(null); setAuthUser(null); setFederacion(null); }
+      if (event === 'SIGNED_IN' && sess?.user) {
+        if (perfilCargadoRef.current === sess.user.id) refrescarFederacion(); // vuelta a la pestaña
+        else cargarPerfil(sess.user);                                         // inicio de sesión real
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);

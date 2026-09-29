@@ -3752,8 +3752,13 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     if (!ids.length) return;
     const estaAplazado = ids.some(id => aplazados.has(id));
     if (estaAplazado) {
+      // Quitar también las marcas de jugadores de ese equipo que ya no están
+      // fichados (no salen en `jugadores`); si no, quedarían huérfanas y
+      // bloquearían el cierre de la jornada.
+      const { data: todosEq } = await sb.from('jugadores').select('id').eq('equipo', equipoName);
+      const idsBorrar = [...new Set([...ids, ...(todosEq || []).map(j => j.id)])];
       await sb.from('jugadores_aplazados').delete()
-        .eq('federacion_id', federacion?.id).eq('jornada', jornada).in('jugador_id', ids);
+        .eq('federacion_id', federacion?.id).eq('jornada', jornada).in('jugador_id', idsBorrar);
       setAplazados(s => { const n = new Set(s); ids.forEach(id => n.delete(id)); return n; });
     } else {
       const nuevos = ids.filter(id => !aplazados.has(id));
@@ -3769,9 +3774,24 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
   const cerrarJornada = async () => {
     if (!sb || !federacion || !participantes.length) return;
     const partIds = participantes.map(p => p.id);
+    // Aplazados de la jornada. Esta pantalla solo lista jugadores fichados, así
+    // que una marca de un jugador vendido/liberado después de aplazar su equipo
+    // no se ve en ningún sitio pero bloquearía el cierre ("huérfana").
     const { data: aplPend } = await sb.from('jugadores_aplazados')
-      .select('id').eq('federacion_id', federacion.id).eq('jornada', jornada).limit(1);
-    if (aplPend?.length) { alert('No se puede cerrar: hay jugadores aplazados pendientes en esta jornada.'); return; }
+      .select('id, jugador_id, jugadores(nombre, equipo)')
+      .eq('federacion_id', federacion.id).eq('jornada', jornada);
+    if (aplPend?.length) {
+      const visibles  = new Set(jugadores.map(j => j.id));
+      const huerfanos = aplPend.filter(a => !visibles.has(a.jugador_id));
+      const listar = arr => arr.map(a => `• ${a.jugadores?.nombre || '?'} (${a.jugadores?.equipo || '?'})`).join('\n');
+      if (huerfanos.length < aplPend.length) {
+        alert(`No se puede cerrar: hay jugadores aplazados pendientes en esta jornada:\n${listar(aplPend.filter(a => visibles.has(a.jugador_id)))}\n\nQuita el aplazado de su equipo cuando tengan sus puntos.`);
+        return;
+      }
+      if (!window.confirm(`Hay ${huerfanos.length} jugador(es) marcados como aplazados en J${jornada} que ya no están en ninguna plantilla (por eso no aparecen en esta pantalla):\n${listar(huerfanos)}\n\n¿Quitar esas marcas y continuar con el cierre?`)) return;
+      const { error: errApl } = await sb.from('jugadores_aplazados').delete().in('id', huerfanos.map(a => a.id));
+      if (errApl) { alert('Error al quitar los aplazados: ' + errApl.message); return; }
+    }
     const { data: ptsCheck } = await sb.from('puntos_jugador')
       .select('jugador_id').eq('jornada', jornada).eq('federacion_id', federacion.id).limit(1);
     if (!ptsCheck?.length) { alert('No se puede cerrar: no hay puntos introducidos para esta jornada.'); return; }

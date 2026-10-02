@@ -1476,8 +1476,67 @@ function CountdownCierre({ horaCierre, habilitado }) {
   );
 }
 
+// ── CIERRE AUTOMÁTICO DE PUJAS (componente sin interfaz) ───────
+// Siempre montado mientras hay una federación activa, para que el cierre se
+// procese aunque el usuario no abra el Mercado (que se monta solo al visitarlo).
+// No hay cron en el servidor: son los clientes abiertos quienes lo disparan.
+function CierrePujasAuto({ federacion, onCierre }) {
+  // Cierre de pujas: en vez de sondear cada minuto (1440 llamadas/día por
+  // pestaña abierta, casi todas inútiles), se llama al RPC solo cuando toca:
+  //   1. al montar (por si el cierre pasó con la app cerrada),
+  //   2. justo después de la hora de cierre (temporizador reprogramado cada día),
+  //   3. al volver a la pestaña, SOLO si la hora de cierre ya pasó mientras
+  //      estaba oculta/dormida (los temporizadores se congelan en segundo plano).
+  // La función SQL es idempotente (log_cierres_pujas): llamarla de más es seguro.
+  useEffect(() => {
+    if (!sb || !federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
+
+    const fedId      = federacion.id;
+    const horaCierre = federacion.hora_cierre_pujas;
+    let timer = null;
+    let proximoCierre = 0; // timestamp (ms) del próximo cierre programado
+
+    const poll = () => {
+      sb.rpc('procesar_cierre_pujas', { p_federacion_id: fedId })
+        .then(({ data, error }) => {
+          if (error) {
+            console.error('[FILFA cierre] Error RPC:', error.message, error);
+            return;
+          }
+          console.log('[FILFA cierre] RPC resultado:', data);
+          if (data?.ok && !data?.skipped) {
+            onCierre?.(data); // App refresca el Tablón (y el Mercado si hubo fichajes)
+          }
+        });
+    };
+
+    // +5 s de margen para que el now() del servidor ya haya pasado la hora de cierre.
+    const programar = () => {
+      clearTimeout(timer);
+      const ms = msHastaCierre(horaCierre) + 5000;
+      proximoCierre = Date.now() + ms;
+      timer = setTimeout(() => { poll(); programar(); }, ms);
+    };
+
+    const alVolver = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() >= proximoCierre) poll(); // el cierre pasó mientras estaba oculta
+      programar();
+    };
+
+    poll(); // comprobación inmediata al montar o cuando cambia hora/mercado
+    programar();
+    document.addEventListener('visibilitychange', alVolver);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', alVolver);
+    };
+  }, [federacion?.id, federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
+  return null;
+}
+
 // ── MERCADO ────────────────────────────────────────────────────
-function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaje, federacion, miParticipanteId, onBadgeChange, onCierre, ofertasBadge }) {
+function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaje, federacion, miParticipanteId, onBadgeChange, ofertasBadge, refreshKey = 0 }) {
   const [jugadores, setJugadores]           = useState(null);
   const [todasPlantillas, setTodasPlantillas] = useState([]);
   const [misPujas, setMisPujas]             = useState({}); // jugador_id → {id, cantidad}
@@ -1508,61 +1567,14 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
   const [presupuesto, setPresupuesto]       = useState(null);
   const [misOfertas, setMisOfertas]         = useState([]);
 
-  // Ref siempre apunta a la cargar más reciente (evita stale closures en el intervalo)
-  const cargarRef = useRef(null);
-
-  // Cierre de pujas: en vez de sondear cada minuto (1440 llamadas/día por
-  // pestaña abierta, casi todas inútiles), se llama al RPC solo cuando toca:
-  //   1. al montar (por si el cierre pasó con la app cerrada),
-  //   2. justo después de la hora de cierre (temporizador reprogramado cada día),
-  //   3. al volver a la pestaña, SOLO si la hora de cierre ya pasó mientras
-  //      estaba oculta/dormida (los temporizadores se congelan en segundo plano).
-  // La función SQL es idempotente (log_cierres_pujas): llamarla de más es seguro.
+  // El cierre automático de pujas vive en CierrePujasAuto (siempre montado,
+  // aunque Mercado aún no se haya abierto). Cuando un cierre firma fichajes,
+  // App incrementa `refreshKey` y aquí se recarga el mercado.
+  const primerRefresh = useRef(true);
   useEffect(() => {
-    if (!sb || !federacion?.hora_cierre_pujas || !federacion?.ventas_habilitadas) return;
-
-    const fedId      = federacion.id;
-    const horaCierre = federacion.hora_cierre_pujas;
-    let timer = null;
-    let proximoCierre = 0; // timestamp (ms) del próximo cierre programado
-
-    const poll = () => {
-      sb.rpc('procesar_cierre_pujas', { p_federacion_id: fedId })
-        .then(({ data, error }) => {
-          if (error) {
-            console.error('[FILFA cierre] Error RPC:', error.message, error);
-            return;
-          }
-          console.log('[FILFA cierre] RPC resultado:', data);
-          if (data?.ok && !data?.skipped) {
-            if (data.firmados > 0) cargarRef.current?.(); // refresca el mercado solo si hay fichajes
-            onCierre?.(); // señal al Tablón para que recargue
-          }
-        });
-    };
-
-    // +5 s de margen para que el now() del servidor ya haya pasado la hora de cierre.
-    const programar = () => {
-      clearTimeout(timer);
-      const ms = msHastaCierre(horaCierre) + 5000;
-      proximoCierre = Date.now() + ms;
-      timer = setTimeout(() => { poll(); programar(); }, ms);
-    };
-
-    const alVolver = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (Date.now() >= proximoCierre) poll(); // el cierre pasó mientras estaba oculta
-      programar();
-    };
-
-    poll(); // comprobación inmediata al montar o cuando cambia hora/mercado
-    programar();
-    document.addEventListener('visibilitychange', alVolver);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('visibilitychange', alVolver);
-    };
-  }, [federacion?.id, federacion?.hora_cierre_pujas, federacion?.ventas_habilitadas, sb]);
+    if (primerRefresh.current) { primerRefresh.current = false; return; }
+    cargar();
+  }, [refreshKey]);
 
   const cargar = async () => {
     if (!sb) { setJugadores([]); setTodasPlantillas([]); setTodasPendientes([]); setPresupuesto(null); setMisOfertas([]); return; }
@@ -1604,7 +1616,6 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
     setMisPujas(mp);
     setConteosPujas(cp);
   };
-  cargarRef.current = cargar; // siempre actualizado al último render
 
   // Recargar solo si cambian de verdad los equipos de la liga o el participante
   // activo — no cada vez que App recrea el array `participantes` (p. ej. al
@@ -1800,14 +1811,19 @@ function Mercado({ participanteId, participantes, isAdmin, isModerador, onFichaj
       { onConflict: 'participante_id,jugador_id' }
     );
     if (errPuja) { alert('Error al registrar la puja: ' + errPuja.message); return; }
-    setModalPuja(null); setCantidadPuja(''); cargar();
+    // Una puja solo cambia las pujas: no hace falta recargar el mercado entero
+    // (catálogo incluido). El presupuesto no varía hasta el cierre, pero ya se
+    // ha leído arriba, así que se aprovecha para mostrarlo actualizado.
+    setModalPuja(null); setCantidadPuja('');
+    setPresupuesto(partData?.presupuesto ?? null);
+    recargarMisPujas();
   };
 
   const cancelarPuja = async (jugadorId) => {
     if (!sb) return;
     await sb.from('pujas').delete()
       .eq('participante_id', participanteId).eq('jugador_id', jugadorId);
-    cargar();
+    recargarMisPujas();
   };
 
   const recargarMisPujas = async () => {
@@ -4681,6 +4697,22 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
 
 // ── TABLÓN DE ANUNCIOS ─────────────────────────────────────────
 // Función utilitaria global para registrar acciones
+// PostgREST corta cada respuesta en 1000 filas (max-rows por defecto) sin
+// avisar. Para consultas que pueden superarlo (histórico de la temporada) se
+// piden páginas hasta agotar los datos. `crearConsulta` debe devolver una
+// consulta NUEVA en cada llamada y con orden estable (p. ej. por id), o las
+// páginas podrían solaparse o saltarse filas.
+const FILAS_POR_PAGINA = 1000;
+async function obtenerTodasLasFilas(crearConsulta) {
+  const filas = [];
+  for (let desde = 0; ; desde += FILAS_POR_PAGINA) {
+    const { data, error } = await crearConsulta().range(desde, desde + FILAS_POR_PAGINA - 1);
+    if (error) return { data: null, error };
+    filas.push(...(data || []));
+    if (!data || data.length < FILAS_POR_PAGINA) return { data: filas, error: null };
+  }
+}
+
 async function publicar(federacionId, tipo, texto, actorNombre) {
   if (!sb || !federacionId) return;
   const { error } = await sb.from('anuncios').insert({ federacion_id: federacionId, tipo, texto, actor_nombre: actorNombre || null, estado: 'aprobado' });
@@ -11402,6 +11434,11 @@ function App() {
   const [ofertasBadge,  setOfertasBadge]  = useState(0);
   const [tablonBadge,       setTablonBadge]       = useState(0);
   const [tablonRefreshKey,  setTablonRefreshKey]  = useState(0);
+  const [mercadoRefreshKey, setMercadoRefreshKey] = useState(0);
+  // Mercado se monta la primera vez que se visita (no al abrir la app) y
+  // después se mantiene montado para no relanzar sus queries al volver.
+  const [mercadoVisitado, setMercadoVisitado] = useState(vista === 'Mercado');
+  useEffect(() => { if (vista === 'Mercado') setMercadoVisitado(true); }, [vista]);
 
   const seleccionarFederacion = async (part, fed, userOverride, resetear = true) => {
     const u = userOverride || authUser;
@@ -11414,7 +11451,7 @@ function App() {
     setFederacion(fed || null);
     setSession({ email: u?.email || '', participante_id: part?.id || null, es_moderador: esMod });
     setVerOnboarding(false);
-    if (resetear) navegarA('Tablón');
+    if (resetear) { navegarA('Tablón'); setMercadoVisitado(false); }
     if (part?.id) localStorage.setItem('filfa_part_id', part.id);
   };
 
@@ -11549,6 +11586,7 @@ function App() {
     await sb.auth.signOut();
     setSession(null); setAuthUser(null); setFederacion(null);
     setMisParticipantes([]); setAdminFeds([]); setVerOnboarding(false);
+    setMercadoVisitado(false);
     localStorage.removeItem('filfa_part_id');
   };
 
@@ -11663,14 +11701,22 @@ function App() {
                      miParticipanteId={session?.participante_id}
                      onPerfilUpdate={recargarParticipantes} />
         )}
-        {/* Mercado se mantiene montado para no relanzar queries al volver */}
-        <div style={{display: vista === 'Mercado' ? '' : 'none'}}>
-          <Mercado participanteId={participanteId} participantes={participantes}
-                   isAdmin={isAdmin} isModerador={isModerador} onFichaje={() => {}} federacion={federacion}
-                   miParticipanteId={session?.participante_id}
-                   onBadgeChange={refrescarBadge} ofertasBadge={ofertasBadge}
-                   onCierre={() => setTablonRefreshKey(k => k + 1)} />
-        </div>
+        {/* Cierre automático de pujas: siempre activo, se abra o no el Mercado */}
+        <CierrePujasAuto federacion={federacion}
+                         onCierre={data => {
+                           setTablonRefreshKey(k => k + 1);
+                           if (data?.firmados > 0) setMercadoRefreshKey(k => k + 1);
+                         }} />
+        {/* Mercado: se monta al visitarlo por primera vez y luego se mantiene montado */}
+        {(mercadoVisitado || vista === 'Mercado') && (
+          <div style={{display: vista === 'Mercado' ? '' : 'none'}}>
+            <Mercado participanteId={participanteId} participantes={participantes}
+                     isAdmin={isAdmin} isModerador={isModerador} onFichaje={() => {}} federacion={federacion}
+                     miParticipanteId={session?.participante_id}
+                     onBadgeChange={refrescarBadge} ofertasBadge={ofertasBadge}
+                     refreshKey={mercadoRefreshKey} />
+          </div>
+        )}
         {vista === 'Alineación' && (
           <Alineacion participanteId={participanteId}
                       participanteNombre={participanteActual?.nombre}
@@ -13897,18 +13943,40 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setRecalculandoLogros(true);
     try {
       const partIds = participantes.map(p => p.id);
-      const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas }, { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }] = await Promise.all([
-        sb.from('h2h_partidos')
+      // Todo paginado: el histórico de la temporada supera las 1000 filas y
+      // una respuesta truncada otorgaría (o saltaría) logros para siempre.
+      const vacio = Promise.resolve({ data: [], error: null });
+      const resultados = await Promise.all([
+        obtenerTodasLasFilas(() => sb.from('h2h_partidos')
           .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
-          .eq('federacion_id', federacion.id),
-        sb.from('logros').select('participante_id, categoria, tier').eq('federacion_id', federacion.id),
-        partIds.length ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds) : Promise.resolve({ data: [] }),
-        partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
-        sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
-        sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
-        sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento'),
-        partIds.length ? sb.from('plantillas').select('jugador_id, participante_id').in('participante_id', partIds) : Promise.resolve({ data: [] }),
+          .eq('federacion_id', federacion.id).order('id')),
+        obtenerTodasLasFilas(() => sb.from('logros').select('participante_id, categoria, tier')
+          .eq('federacion_id', federacion.id).order('id')),
+        partIds.length ? obtenerTodasLasFilas(() => sb.from('clasificacion').select('participante_id, jornada, puntos_jornada')
+          .in('participante_id', partIds).order('participante_id').order('jornada')) : vacio,
+        partIds.length ? obtenerTodasLasFilas(() => sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular')
+          .in('participante_id', partIds).order('id')) : vacio,
+        obtenerTodasLasFilas(() => sb.from('puntos_jugador').select('jugador_id, jornada, pts')
+          .eq('federacion_id', federacion.id).order('id')),
+        obtenerTodasLasFilas(() => sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada')
+          .eq('federacion_id', federacion.id).order('id')),
+        obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento')
+          .order('id')),
+        partIds.length ? obtenerTodasLasFilas(() => sb.from('plantillas').select('jugador_id, participante_id')
+          .in('participante_id', partIds).order('id')) : vacio,
       ]);
+      // Con datos parciales se detectarían logros erróneos (y son permanentes):
+      // ante cualquier fallo se aborta sin guardar nada.
+      const fallo = resultados.find(r => r.error);
+      if (fallo) {
+        console.error('[Logros] Error al leer datos, recálculo cancelado:', fallo.error.message);
+        setMsg('Error al recalcular logros: ' + fallo.error.message);
+        setTimeout(() => setMsg(''), 5000);
+        setRecalculandoLogros(false);
+        return;
+      }
+      const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas },
+             { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }] = resultados;
       const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
       const detectados = detectarLogros(partidosTodos || [], participantes, {
         clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],

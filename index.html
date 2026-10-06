@@ -558,7 +558,7 @@ function calcularEdad(fechaNacimiento) {
 
 // Umbrales de los logros de edad (ver LOGROS_CATALOGO: Parvulito/Residencia):
 // joven = menos de 22 años (≤21), veterano = más de 29 años (≥30).
-const EDAD_MAX_JOVEN    = 21;
+const EDAD_MAX_JOVEN    = 23;
 const EDAD_MIN_VETERANO = 30;
 
 // Estadísticas de edad de una plantilla (lista de jugador_id) a partir del
@@ -13623,7 +13623,7 @@ const LOGROS_CATALOGO = {
   racha_porteria_cero: {
     nombre: 'Muralla', icono: '🧱',
     descripcion: 'Partidos consecutivos de Liga FILFA sin encajar ningún gol.',
-    tiers: [3, 5, 10, 15, 20, 'temporada'],
+    tiers: [3, 5, 10, 15],
     desc: t => t === 'temporada' ? 'Toda la temporada sin encajar' : `${t} partidos seguidos sin encajar`,
   },
   goles_temporada: {
@@ -13701,7 +13701,7 @@ const LOGROS_CATALOGO = {
   jugadores_mismo_pais: {
     nombre: 'Colonia', icono: '🏘️',
     descripcion: 'El máximo de jugadores de un mismo país en la plantilla actual, sin contar España (para eso está "Casa España").',
-    tiers: [5, 9, 14],
+    tiers: [3, 5, 7],
     desc: t => `${t} jugadores del mismo país (no España) en plantilla`,
   },
   plantilla_diversa: {
@@ -13782,7 +13782,7 @@ const LOGROS_CATALOGO = {
   jugador_jornada: {
     nombre: 'Foco mediático', icono: '📸',
     descripcion: 'Veces que un jugador de tu plantilla ha sido nombrado Jugador de la Jornada (mayor puntuación entre todos los jugadores fichados esa semana).',
-    tiers: [1, 3, 5, 7, 10, 15, 20],
+    tiers: [1, 3, 5, 7, 10, 15],
     desc: t => `${t} veces con el Jugador de la Jornada`,
   },
   puntualidad: {

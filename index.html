@@ -3060,7 +3060,7 @@ async function recalcularEstadisticasJugadores(federacionId, participantes) {
       .eq('federacion_id', federacionId).order('participante_id').order('jornada')),
     obtenerTodasLasFilas(() => sb.from('puntos_jugador').select('jugador_id, jornada, pts')
       .eq('federacion_id', federacionId).order('id')),
-    obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion').order('id')),
+    obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento').order('id')),
     obtenerTodasLasFilas(() => sb.from('sustituciones_auto').select('participante_id, jornada, jugador_sale_id, jugador_entra_id')
       .eq('federacion_id', federacionId).order('id')),
     partIds.length ? obtenerTodasLasFilas(() => sb.from('plantillas').select('participante_id, jugador_id, precio_compra')
@@ -3095,7 +3095,11 @@ async function recalcularEstadisticasJugadores(federacionId, participantes) {
 
 // Clasificación de jugadores (pestaña Competiciones → 🏅 Jugadores), con las
 // jornadas cerradas. Se guarda compacta en `ranking_jugadores`:
-// { campos: [...], filas: [[id, nombre, equipo, posicion, puntos, jPuntuadas, jTitular, jSuplente], ...] }.
+// { campos: [...], filas: [[id, nombre, equipo, posicion, puntos, jPuntuadas, jTitular, jSuplente,
+//                           nacionalidad, fecha_nacimiento], ...] }.
+// (nacionalidad y fecha_nacimiento van al final: las filas guardadas antes de
+// añadirlas siguen siendo válidas. Se guarda la fecha, no la edad, para que la
+// edad mostrada no se quede desfasada.)
 // Un jugador duplicado (en dos equipos la misma jornada) cuenta una vez por
 // jornada: titular si lo fue en algún equipo; suplente si estuvo en algún
 // banquillo y no fue titular en ninguno.
@@ -3120,10 +3124,12 @@ function calcularRankingJugadores({ snapshots, puntosJugador, jugadoresCat }) {
     const j = cat[id] || infoSnap[id] || {};
     const suplente = [...a.supJ].filter(jn => !a.titJ.has(jn)).length;
     return [id, j.nombre || null, j.equipo || null, j.posicion || null,
-            Math.round(a.pts * 100) / 100, a.jp, a.titJ.size, suplente];
+            Math.round(a.pts * 100) / 100, a.jp, a.titJ.size, suplente,
+            j.nacionalidad || null, j.fecha_nacimiento || null];
   }).sort((x, y) => y[4] - x[4]);
   return {
-    campos: ['id', 'nombre', 'equipo', 'posicion', 'puntos', 'jornadas_puntuadas', 'jornadas_titular', 'jornadas_suplente'],
+    campos: ['id', 'nombre', 'equipo', 'posicion', 'puntos', 'jornadas_puntuadas', 'jornadas_titular', 'jornadas_suplente',
+             'nacionalidad', 'fecha_nacimiento'],
     filas,
   };
 }
@@ -11826,8 +11832,10 @@ function ClasificacionJugadores({ federacion, participantes }) {
     const nomPart = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
     const duenos = {};
     (datos?.plantillas || []).forEach(r => { (duenos[r.jugador_id] = duenos[r.jugador_id] || []).push(r.participante_id); });
-    return filas.map(([id, nombre, equipo, posicion, puntos, jp, tit, sup]) => ({
+    return filas.map(([id, nombre, equipo, posicion, puntos, jp, tit, sup, nacionalidad, fechaNac]) => ({
       id, nombre, equipo, posicion, puntos, jp, tit, sup,
+      nacionalidad: nacionalidad || null,
+      edad: calcularEdad(fechaNac), // null si no hay fecha (o fila guardada antes de añadirla)
       media: jp > 0 ? Math.round(puntos / jp * 10) / 10 : null,
       duenos: duenos[id] || [],
       nombreFantasy: (duenos[id] || []).map(pid => nomPart[pid] || '—').join(', '),
@@ -11873,6 +11881,8 @@ function ClasificacionJugadores({ federacion, participantes }) {
     : null;
   const estiloInput = { padding:'.35rem .5rem', borderRadius:7, border:'1.5px solid var(--borde)',
                         background:'var(--fondo)', color:'var(--texto)', fontSize:'.82rem' };
+  // Desplegables de dos en dos en el móvil (en vez de uno por fila).
+  const estiloSelect = { ...estiloInput, flex:'1 1 140px', minWidth:0 };
 
   return (
     <div className="card">
@@ -11885,63 +11895,90 @@ function ClasificacionJugadores({ federacion, participantes }) {
       <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', marginBottom:'.75rem'}}>
         <input type="text" placeholder="Buscar jugador…" value={filtroNombre}
                onChange={e => setFiltroNombre(e.target.value)} style={{...estiloInput, minWidth:150, flex:'1 1 150px'}} />
-        <select value={filtroPos} onChange={e => setFiltroPos(e.target.value)} style={estiloInput}>
-          <option value="">Todas las posiciones</option>
+        <select value={filtroPos} onChange={e => setFiltroPos(e.target.value)} style={estiloSelect}>
+          <option value="">Posición</option>
           {['POR', 'DEF', 'MED', 'DEL'].map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        <select value={filtroEquipo} onChange={e => setFiltroEquipo(e.target.value)} style={estiloInput}>
-          <option value="">Todos los equipos reales</option>
+        <select value={filtroEquipo} onChange={e => setFiltroEquipo(e.target.value)} style={estiloSelect}>
+          <option value="">Equipo real</option>
           {equiposReales.map(eq => <option key={eq} value={eq}>{eq}</option>)}
         </select>
-        <select value={filtroFantasy} onChange={e => setFiltroFantasy(e.target.value)} style={estiloInput}>
-          <option value="">Todos los equipos fantasy</option>
+        <select value={filtroFantasy} onChange={e => setFiltroFantasy(e.target.value)} style={estiloSelect}>
+          <option value="">Equipo fantasy</option>
           {[...participantes].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '')).map(p =>
             <option key={p.id} value={p.id}>{p.nombre}</option>)}
           <option value="libre">Libres</option>
         </select>
-        <select value={orden} onChange={e => setOrden(e.target.value)} style={estiloInput}>
-          <option value="puntos">Ordenar por puntos totales</option>
-          <option value="media">Ordenar por media</option>
+        <select value={orden} onChange={e => setOrden(e.target.value)} style={estiloSelect}>
+          <option value="puntos">Orden: puntos</option>
+          <option value="media">Orden: media</option>
         </select>
       </div>
 
       {filtradas.length === 0
         ? <div className="empty">Ningún jugador coincide con los filtros.</div>
         : <>
+            {/* Tabla compacta (misma clase que Mi Plantilla/Equipos): el equipo real,
+                la bandera, la edad y el equipo fantasy van en la 2ª línea bajo el
+                nombre, y solo quedan columnas numéricas cortas, para que quepa en
+                el móvil sin desplazamiento horizontal (overflowX queda como red
+                de seguridad en pantallas muy estrechas). */}
             <div style={{overflowX:'auto'}}>
-              <table>
+              <table className="tabla-jugadores">
                 <thead>
                   <tr>
                     <th>#</th>
                     <th>Jugador</th>
-                    <th>Pos</th>
-                    <th>Equipo real</th>
-                    <th>Equipo fantasy</th>
-                    <th style={{textAlign:'right'}}>Puntos</th>
-                    <th style={{textAlign:'right'}} title="Jornadas cerradas con puntos">J. punt.</th>
-                    <th style={{textAlign:'right'}}>Media</th>
-                    <th style={{textAlign:'right'}} title="Jornadas cerradas como titular">J. titular</th>
-                    <th style={{textAlign:'right'}} title="Jornadas cerradas en el banquillo (sin ser titular en ningún equipo)">J. suplente</th>
+                    <th style={{textAlign:'right'}} title="Puntos totales">Pts</th>
+                    <th style={{textAlign:'right'}} title="Jornadas cerradas con puntos">J</th>
+                    <th style={{textAlign:'right'}} title="Media de puntos por jornada con puntos">Med</th>
+                    <th style={{textAlign:'right'}} title="Jornadas cerradas como titular">Tit</th>
+                    <th style={{textAlign:'right'}} title="Jornadas cerradas en el banquillo (sin ser titular en ningún equipo)">Sup</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtradas.slice(0, visibles).map(f => (
-                    <tr key={f.id}>
-                      <td style={{color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>{f.puesto}</td>
-                      <td style={{fontWeight:600, whiteSpace:'nowrap'}}>{f.posicion === 'POR' ? `Portería ${f.equipo}` : (f.nombre || '?')}</td>
-                      <td>{f.posicion || '—'}</td>
-                      <td style={{whiteSpace:'nowrap'}}>{f.equipo || '—'}</td>
-                      <td style={{color: f.duenos.length ? 'var(--texto)' : 'var(--texto2)'}}>{f.nombreFantasy || 'Libre'}</td>
-                      <td style={{textAlign:'right', fontWeight:700, color: orden === 'puntos' && f.puesto === 1 ? 'var(--verde)' : 'var(--texto)'}}>{f.puntos}</td>
-                      <td style={{textAlign:'right'}}>{f.jp}</td>
-                      <td style={{textAlign:'right', fontWeight: orden === 'media' ? 700 : 400}}>{f.media ?? '—'}</td>
-                      <td style={{textAlign:'right'}}>{f.tit}</td>
-                      <td style={{textAlign:'right'}}>{f.sup}</td>
-                    </tr>
-                  ))}
+                  {filtradas.slice(0, visibles).map(f => {
+                    const num = { textAlign:'right', whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums' };
+                    return (
+                      <tr key={f.id}>
+                        <td style={{color:'var(--texto2)', fontVariantNumeric:'tabular-nums'}}>{f.puesto}</td>
+                        <td style={{fontWeight:600}}>
+                          {/* Línea 1: posición + nombre. Línea 2: escudo · bandera · edad · equipo fantasy. */}
+                          <div style={{display:'flex', alignItems:'center', gap:5, flexWrap:'wrap'}}>
+                            {f.posicion && <span className={`badge ${f.posicion}`}>{f.posicion}</span>}
+                            {nombreJugador(f.nombre || '?', f.posicion, f.equipo)}
+                          </div>
+                          <div className="jug-linea2">
+                            {f.posicion !== 'POR' && f.equipo && (
+                              <span title={f.equipo} style={{display:'inline-flex'}}><Escudo equipo={f.equipo} size={16}/></span>
+                            )}
+                            <Bandera nacionalidad={f.nacionalidad} size={16} />
+                            {f.edad != null && <span>{f.edad} años</span>}
+                            <span title={f.nombreFantasy || 'Libre'}
+                                  style={{maxWidth:96, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                                          fontStyle: f.duenos.length ? 'normal' : 'italic'}}>
+                              {f.nombreFantasy || 'Libre'}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{...num, fontWeight:700, color: orden === 'puntos' && f.puesto === 1 ? 'var(--verde)' : 'var(--texto)'}}>
+                          {f.puntos.toLocaleString('es-ES')}
+                        </td>
+                        <td style={num}>{f.jp}</td>
+                        <td style={{...num, fontWeight: orden === 'media' ? 700 : 400}}>
+                          {f.media != null ? f.media.toLocaleString('es-ES') : '—'}
+                        </td>
+                        <td style={num}>{f.tit}</td>
+                        <td style={num}>{f.sup}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+            <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+              Pts: puntos totales · J: jornadas con puntos · Med: media · Tit: jornadas como titular · Sup: jornadas en el banquillo.
+            </p>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:'.6rem',
                          fontSize:'.8rem', color:'var(--texto2)', flexWrap:'wrap', gap:'.5rem'}}>
               <span>Mostrando {Math.min(visibles, filtradas.length)} de {filtradas.length}</span>

@@ -2886,6 +2886,245 @@ function calcularJugadorJornada(ptsRows, jugadoresMap, fichadosMap) {
   return { pts: mejor, jugadores: candidatos };
 }
 
+// ── ESTADÍSTICAS DE JUGADORES DESTACADOS ───────────────────────
+// "Jugadores destacados" de cada equipo y ranking de la liga del once ideal.
+// Se precalculan (admin/moderador) al cerrar, reabrir o editar una jornada y
+// se guardan en `estadisticas_jugadores`: UNA fila por federación (ver
+// supabase_estadisticas_jugadores.sql). Los usuarios solo leen esa fila, así
+// que mostrarlas en Equipos y en Estadísticas no descarga el histórico.
+// Solo cuentan las jornadas cerradas (alineaciones_snapshot).
+//
+// Definiciones:
+//  - puntos:     puntos base (sin el doble del capitán) de las jornadas en
+//                que el jugador puntuó para el equipo (`jugo` en el snapshot,
+//                que ya contempla sustituciones y comodín de banquillo).
+//  - titular:    veces titular en el equipo, sin contar porterías.
+//  - onceIdeal:  veces en el once ideal en jornadas en que estaba alineado
+//                (titular o suplente) con ese equipo.
+//  - suplente /
+//    sustituido: sustituciones automáticas reales (sustituciones_auto).
+//  - rentable:   puntos aportados al equipo ÷ millones pagados, solo para la
+//                plantilla actual y fichajes con precio > 0.
+// En todas se devuelven TODOS los empatados en el valor máximo.
+
+// { valor, jugadores: [info] } con los empatados en el máximo, o null si no
+// hay candidatos (o el máximo no llega a `minimo`).
+function _mejoresConEmpate(conteo, jugInfo, minimo = -Infinity) {
+  let max = -Infinity;
+  for (const v of Object.values(conteo)) if (v > max) max = v;
+  if (max === -Infinity || max < minimo) return null;
+  const jugadores = Object.keys(conteo)
+    .filter(id => conteo[id] === max)
+    .map(jugInfo)
+    .sort((a, b) => (a.nombre || a.equipo || '').localeCompare(b.nombre || b.equipo || ''));
+  return { valor: max, jugadores };
+}
+
+function calcularEstadisticasJugadores({ participantes, snapshots, puntosJugador, jugadoresCat, sustituciones, plantillas }) {
+  const cat = Object.fromEntries(jugadoresCat.map(j => [j.id, j]));
+  // Datos guardados en el snapshot, por si el jugador ya no está en el catálogo.
+  const infoSnap = {};
+  snapshots.forEach(s => (s.datos || []).forEach(d => {
+    if (!infoSnap[d.jugador_id]) infoSnap[d.jugador_id] = { nombre: d.nombre, equipo: d.equipo_real, posicion: d.posicion };
+  }));
+  const jugInfo = id => {
+    const j = cat[id] || infoSnap[id] || {};
+    return { id, nombre: j.nombre || null, equipo: j.equipo || null, posicion: j.posicion || null };
+  };
+
+  const jornadasCerradas = [...new Set(snapshots.map(s => s.jornada))].sort((a, b) => a - b);
+  const cerradasSet = new Set(jornadasCerradas);
+  const nuevoMapa = () => Object.fromEntries(participantes.map(p => [p.id, {}]));
+  const sumar = (mapa, pid, jid, n = 1) => { if (mapa[pid]) mapa[pid][jid] = (mapa[pid][jid] || 0) + n; };
+
+  // Puntos aportados, titularidades y quién estaba alineado cada jornada.
+  const pts = nuevoMapa(), tit = nuevoMapa();
+  const alineados = {}; // jornada → jugador_id → [participante_id]
+  snapshots.forEach(s => {
+    const pid = s.participante_id;
+    (s.datos || []).forEach(d => {
+      if (d.jugo) sumar(pts, pid, d.jugador_id, Number(d.pts) || 0);
+      if (d.es_titular && d.posicion !== 'POR') sumar(tit, pid, d.jugador_id);
+      const porJug = (alineados[s.jornada] = alineados[s.jornada] || {});
+      (porJug[d.jugador_id] = porJug[d.jugador_id] || []).push(pid);
+    });
+  });
+
+  // Once ideal de cada jornada cerrada. Candidatos: jugadores fichados ahora
+  // o alineados por algún equipo esa jornada (los vendidos después cuentan).
+  const ptsPorJornada = {};
+  puntosJugador.forEach(r => {
+    if (cerradasSet.has(r.jornada)) (ptsPorJornada[r.jornada] = ptsPorJornada[r.jornada] || []).push(r);
+  });
+  const fichadosActuales = plantillas.map(r => r.jugador_id);
+  const onceGlobal = {}, oncePorEquipo = nuevoMapa();
+  jornadasCerradas.forEach(j => {
+    const alin = alineados[j] || {};
+    const candidatos = {};
+    fichadosActuales.forEach(id => { candidatos[id] = ''; });
+    Object.keys(alin).forEach(id => { candidatos[id] = ''; });
+    const once = calcularOnceIdeal(ptsPorJornada[j] || [], cat, candidatos);
+    if (!once) return;
+    once.titulares.forEach(t => {
+      onceGlobal[t.jugador_id] = (onceGlobal[t.jugador_id] || 0) + 1;
+      (alin[t.jugador_id] || []).forEach(pid => sumar(oncePorEquipo, pid, t.jugador_id));
+    });
+  });
+
+  // Sustituciones automáticas de jornadas cerradas.
+  const entra = nuevoMapa(), sale = nuevoMapa();
+  sustituciones.forEach(s => {
+    if (!cerradasSet.has(s.jornada)) return;
+    sumar(entra, s.participante_id, s.jugador_entra_id);
+    sumar(sale, s.participante_id, s.jugador_sale_id);
+  });
+
+  // Rentabilidad de la plantilla actual: puntos aportados ÷ M€ pagados.
+  const rent = nuevoMapa();
+  plantillas.forEach(r => {
+    const precio = Number(r.precio_compra) || 0;
+    if (precio <= 0 || !rent[r.participante_id]) return;
+    const aportados = pts[r.participante_id]?.[r.jugador_id] || 0;
+    rent[r.participante_id][r.jugador_id] = Math.round(aportados / (precio / 1e6) * 100) / 100;
+  });
+
+  const equipos = {};
+  participantes.forEach(p => {
+    equipos[p.id] = {
+      puntos:     _mejoresConEmpate(pts[p.id], jugInfo),
+      titular:    _mejoresConEmpate(tit[p.id], jugInfo, 1),
+      onceIdeal:  _mejoresConEmpate(oncePorEquipo[p.id], jugInfo, 1),
+      suplente:   _mejoresConEmpate(entra[p.id], jugInfo, 1),
+      sustituido: _mejoresConEmpate(sale[p.id], jugInfo, 1),
+      rentable:   _mejoresConEmpate(rent[p.id], jugInfo, 0.01),
+    };
+  });
+
+  // Ranking de la liga del once ideal: top 10, incluyendo empatados con el 10º.
+  const nomPart = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
+  const propietarios = {};
+  plantillas.forEach(r => { (propietarios[r.jugador_id] = propietarios[r.jugador_id] || []).push(nomPart[r.participante_id] || '—'); });
+  const ordenOnce = Object.entries(onceGlobal).sort((a, b) => b[1] - a[1]);
+  const corte = ordenOnce.length >= 10 ? ordenOnce[9][1] : 0;
+  const rankingOnceIdeal = ordenOnce
+    .filter(([, veces], i) => i < 10 || veces === corte)
+    .map(([id, veces]) => ({ ...jugInfo(id), veces, propietarios: propietarios[id] || [] }));
+
+  return { jornadasCerradas: jornadasCerradas.length, equipos, rankingOnceIdeal };
+}
+
+// Caché en memoria (compartida por Equipos y Estadísticas) de la fila de
+// estadísticas: cambia solo al cerrar/editar jornadas, así que basta con
+// pedirla una vez cada ESTADISTICAS_JUG_CACHE_MS.
+const _estadisticasJugCache = {}; // federacion_id → { t, promesa }
+const ESTADISTICAS_JUG_CACHE_MS = 15 * 60 * 1000;
+
+function cargarEstadisticasJugadores(federacionId) {
+  const c = _estadisticasJugCache[federacionId];
+  if (c && Date.now() - c.t < ESTADISTICAS_JUG_CACHE_MS) return c.promesa;
+  const promesa = sb.from('estadisticas_jugadores').select('datos, actualizado_at')
+    .eq('federacion_id', federacionId).maybeSingle()
+    .then(({ data, error }) => {
+      if (error) {
+        console.error('[Estadísticas] Error al leer:', error.message);
+        delete _estadisticasJugCache[federacionId];
+        return null;
+      }
+      return data || null;
+    });
+  _estadisticasJugCache[federacionId] = { t: Date.now(), promesa };
+  return promesa;
+}
+
+// undefined = cargando · null = aún no hay estadísticas · objeto = fila.
+function useEstadisticasJugadores(federacionId, activo = true) {
+  const [est, setEst] = useState(undefined);
+  useEffect(() => {
+    if (!sb || !federacionId || !activo) return;
+    let vivo = true;
+    cargarEstadisticasJugadores(federacionId).then(d => { if (vivo) setEst(d); });
+    return () => { vivo = false; };
+  }, [federacionId, activo]);
+  return est;
+}
+
+// Recalcula y guarda las estadísticas de la federación (admin/moderador).
+// Devuelve { ok: true } o { error: mensaje }. Si alguna lectura falla no se
+// guarda nada, para no publicar estadísticas calculadas con datos parciales.
+async function recalcularEstadisticasJugadores(federacionId, participantes) {
+  if (!sb || !federacionId) return { error: 'Sin federación' };
+  const partIds = participantes.map(p => p.id);
+  const vacio = Promise.resolve({ data: [], error: null });
+  const resultados = await Promise.all([
+    obtenerTodasLasFilas(() => sb.from('alineaciones_snapshot').select('participante_id, jornada, datos')
+      .eq('federacion_id', federacionId).order('participante_id').order('jornada')),
+    obtenerTodasLasFilas(() => sb.from('puntos_jugador').select('jugador_id, jornada, pts')
+      .eq('federacion_id', federacionId).order('id')),
+    obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion').order('id')),
+    obtenerTodasLasFilas(() => sb.from('sustituciones_auto').select('participante_id, jornada, jugador_sale_id, jugador_entra_id')
+      .eq('federacion_id', federacionId).order('id')),
+    partIds.length ? obtenerTodasLasFilas(() => sb.from('plantillas').select('participante_id, jugador_id, precio_compra')
+      .in('participante_id', partIds).order('id')) : vacio,
+  ]);
+  const fallo = resultados.find(r => r.error);
+  if (fallo) {
+    console.error('[Estadísticas] Error al leer datos, recálculo cancelado:', fallo.error.message);
+    return { error: fallo.error.message };
+  }
+  const [{ data: snapshots }, { data: puntosJugador }, { data: jugadoresCat }, { data: sustituciones }, { data: plantillas }] = resultados;
+  const datos = calcularEstadisticasJugadores({ participantes, snapshots, puntosJugador, jugadoresCat, sustituciones, plantillas });
+  const { error } = await sb.from('estadisticas_jugadores')
+    .upsert({ federacion_id: federacionId, datos, actualizado_at: new Date().toISOString() }, { onConflict: 'federacion_id' });
+  if (error) {
+    console.error('[Estadísticas] Error al guardar:', error.message);
+    return { error: error.message };
+  }
+  delete _estadisticasJugCache[federacionId]; // que la próxima lectura traiga lo nuevo
+  return { ok: true };
+}
+
+const ESTADISTICAS_JUG_DEF = [
+  ['puntos',     '💰 Más puntos aportados',      v => `${v} pts`],
+  ['titular',    '🧱 Más veces titular',          v => `${v} ${v === 1 ? 'vez' : 'veces'}`],
+  ['onceIdeal',  '⭐ Más veces en el once ideal', v => `${v} ${v === 1 ? 'vez' : 'veces'}`],
+  ['suplente',   '🔄 Más entradas como suplente', v => `${v} ${v === 1 ? 'vez' : 'veces'}`],
+  ['sustituido', '↩️ Más veces sustituido',       v => `${v} ${v === 1 ? 'vez' : 'veces'}`],
+  ['rentable',   '📈 Más rentable',               v => `${v.toLocaleString('es-ES')} pts/M€`],
+];
+
+const nomJugEst = j => j.posicion === 'POR' ? `Portería ${j.equipo}` : (j.nombre || '?');
+
+function textoActualizacionEst(est) {
+  const n = est?.datos?.jornadasCerradas || 0;
+  const fecha = est?.actualizado_at
+    ? new Date(est.actualizado_at).toLocaleString('es-ES', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })
+    : null;
+  return `Basado en ${n} jornada${n === 1 ? '' : 's'} cerrada${n === 1 ? '' : 's'}${fecha ? ` · actualizado el ${fecha}` : ''}.`;
+}
+
+// Tarjetas con las 6 estadísticas de un equipo (vista Equipos).
+function JugadoresDestacados({ datosEquipo }) {
+  return (
+    <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'.6rem'}}>
+      {ESTADISTICAS_JUG_DEF.map(([clave, titulo, fmtValor]) => {
+        const st = datosEquipo?.[clave];
+        return (
+          <div key={clave} style={{padding:'.55rem .7rem', borderRadius:8, background:'var(--fondo)',
+                                   border:'1px solid var(--borde)'}}>
+            <div style={{fontSize:'.75rem', color:'var(--texto2)', fontWeight:600, marginBottom:'.25rem'}}>{titulo}</div>
+            {st
+              ? <>
+                  <div style={{fontWeight:700, fontSize:'.88rem'}}>{st.jugadores.map(nomJugEst).join(', ')}</div>
+                  <div style={{fontSize:'.78rem', color:'var(--verde)', fontWeight:600}}>{fmtValor(st.valor)}</div>
+                </>
+              : <div style={{fontSize:'.82rem', color:'var(--texto2)'}}>—</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [clas, setClas]               = useState([]);
   const [vista, setVista]             = useState('acumulado');
@@ -2898,6 +3137,8 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   const [onceIdeal, setOnceIdeal]         = useState(null);
   const [onceIdealCargando, setOnceIdealCargando] = useState(false);
   const [jugadorJornada, setJugadorJornada] = useState(null);
+  // Jugadores destacados: solo se piden al abrir la pestaña Estadísticas.
+  const estJugadores = useEstadisticasJugadores(federacion?.id, vista === 'estadisticas');
 
   useEffect(() => {
     if (!sb) return;
@@ -3555,6 +3796,84 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
                   </table>
                 </div>
               </div>
+
+              {/* ── Jugadores destacados (precalculados en estadisticas_jugadores) ── */}
+              <div className="card" style={{marginBottom:'.75rem'}}>
+                <h2 style={{marginBottom:'.4rem'}}>⭐ Jugadores destacados por equipo</h2>
+                {estJugadores === undefined
+                  ? <Spinner />
+                  : !estJugadores?.datos?.equipos
+                    ? <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>Estarán disponibles cuando se cierre la primera jornada.</p>
+                    : <>
+                        <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                          {textoActualizacionEst(estJugadores)} Puntos sin el doble del capitán. Titular: sin contar porterías.
+                          Rentable: puntos aportados por millón pagado (plantilla actual). Si hay empate se muestran todos.
+                        </p>
+                        <div style={{overflowX:'auto'}}>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Equipo</th>
+                                {ESTADISTICAS_JUG_DEF.map(([clave, titulo]) => <th key={clave}>{titulo}</th>)}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {[...participantes].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '')).map(p => {
+                                const eq = estJugadores.datos.equipos[p.id];
+                                return (
+                                  <tr key={p.id}>
+                                    <td style={{fontWeight:600, whiteSpace:'nowrap'}}>{p.nombre}</td>
+                                    {ESTADISTICAS_JUG_DEF.map(([clave, , fmtValor]) => {
+                                      const st = eq?.[clave];
+                                      return (
+                                        <td key={clave} style={{minWidth:120}}>
+                                          {st
+                                            ? <>
+                                                <div style={{fontSize:'.82rem'}}>{st.jugadores.map(nomJugEst).join(', ')}</div>
+                                                <div style={{fontSize:'.72rem', color:'var(--verde)', fontWeight:600}}>{fmtValor(st.valor)}</div>
+                                              </>
+                                            : <span style={{color:'var(--texto2)'}}>—</span>}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>}
+              </div>
+
+              {estJugadores?.datos?.rankingOnceIdeal?.length > 0 && (
+                <div className="card" style={{marginBottom:'.75rem'}}>
+                  <h2 style={{marginBottom:'.4rem'}}>⭐ Más veces en el once ideal</h2>
+                  <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+                    Ranking de la liga en las jornadas cerradas.
+                  </p>
+                  <div style={{overflowX:'auto'}}>
+                    <table>
+                      <thead>
+                        <tr><th>#</th><th>Jugador</th><th>Equipo real</th><th>Equipo fantasy</th><th style={{textAlign:'right'}}>Veces</th></tr>
+                      </thead>
+                      <tbody>
+                        {estJugadores.datos.rankingOnceIdeal.map((j, i, arr) => {
+                          const pos = arr.findIndex(x => x.veces === j.veces) + 1; // empatados comparten puesto
+                          return (
+                            <tr key={j.id}>
+                              <td style={{color:'var(--texto2)'}}>{pos}</td>
+                              <td style={{fontWeight: pos === 1 ? 700 : 600}}>{nomJugEst(j)}</td>
+                              <td>{j.equipo || '—'}</td>
+                              <td style={{color:'var(--texto2)'}}>{j.propietarios.length ? j.propietarios.join(', ') : 'Libre'}</td>
+                              <td style={{textAlign:'right', fontWeight:700, color: pos === 1 ? 'var(--verde)' : 'var(--texto)'}}>{j.veces}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
       )}
 
@@ -3890,6 +4209,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       snaps2.forEach(s => { sm[s.participante_id] = s; });
       setSnapshotsMap(sm);
     }
+    actualizarEstadisticas(); // jornada nueva en el histórico de jugadores destacados
   };
 
   const reabrirJornada = async () => {
@@ -3897,6 +4217,19 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
     await sb.from('alineaciones_snapshot').delete().eq('federacion_id', federacion.id).eq('jornada', jornada);
     setJornadaCerrada(false); setSnapshotsMap({}); setSnapshotEditPid(null);
     publicar(federacion.id, 'admin', `J${jornada} re-abierta. Los datos vuelven a ser editables.`, actorNombre);
+    actualizarEstadisticas(); // la jornada deja de contar hasta que se vuelva a cerrar
+  };
+
+  // Jugadores destacados (estadisticas_jugadores): se recalculan tras cerrar,
+  // reabrir o editar una jornada cerrada, o a mano con el botón. Es una
+  // descarga del histórico por jornada solo para el admin/moderador.
+  const [recalculandoEst, setRecalculandoEst] = useState(false);
+  const actualizarEstadisticas = async (manual = false) => {
+    setRecalculandoEst(true);
+    const r = await recalcularEstadisticasJugadores(federacion?.id, participantes);
+    setRecalculandoEst(false);
+    if (r.error) { setMsg('Error al actualizar las estadísticas de jugadores: ' + r.error); setTimeout(() => setMsg(''), 6000); }
+    else if (manual) { setMsg('Estadísticas de jugadores actualizadas'); setTimeout(() => setMsg(''), 3000); }
   };
 
   const iniciarEdicion = async (pid) => {
@@ -3939,6 +4272,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       snaps2.forEach(s => { sm[s.participante_id] = s; });
       setSnapshotsMap(sm);
     }
+    actualizarEstadisticas(); // la edición puede cambiar puntos o quién jugó
   };
 
   const equiposReales = [...new Set(jugadores.map(j => j.equipo))].sort();
@@ -4165,8 +4499,15 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
             </>
       )}
 
-      <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', marginBottom:'1.5rem'}}>
+      <div style={{display:'flex', justifyContent:'flex-end', gap:'1rem', alignItems:'center', flexWrap:'wrap', marginBottom:'1.5rem'}}>
         {msg && <span style={{color:'var(--verde)', fontWeight:600}}>{msg}</span>}
+        <button onClick={() => actualizarEstadisticas(true)} disabled={recalculandoEst}
+                title="Recalcula los jugadores destacados (Equipos y Estadísticas) con todas las jornadas cerradas"
+                style={{background:'var(--gris)', color:'var(--texto)', border:'1.5px solid var(--borde)',
+                        padding:'.55rem 1rem', borderRadius:9, fontSize:'.9rem', fontWeight:600,
+                        cursor: recalculandoEst ? 'wait' : 'pointer', opacity: recalculandoEst ? .7 : 1}}>
+          {recalculandoEst ? 'Recalculando…' : '📊 Recalcular estadísticas'}
+        </button>
         {jornadaCerrada ? (
           <button onClick={reabrirJornada}
                   style={{background:'#6c757d', color:'#fff', border:'none', padding:'.55rem 1.5rem', borderRadius:9, fontSize:'1rem', fontWeight:700, cursor:'pointer'}}>
@@ -4209,6 +4550,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
   const [miPresupuesto, setMiPresupuesto] = useState(null);
   const [puntosHistorial, setPuntosHistorial] = useState({}); // jugador_id → { jornada: pts }
   const [logrosEquipo, setLogrosEquipo] = useState([]);
+  const estJugadores = useEstadisticasJugadores(federacion?.id); // fila precalculada, en caché
 
   useEffect(() => {
     if (participantes.length > 0 && !equipoId) setEquipoId(participantes[0].id);
@@ -4491,6 +4833,24 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                 })}
               </div>
           }
+        </div>
+      )}
+
+      {equipo && (
+        <div className="card">
+          <h2 style={{marginBottom:'.25rem'}}>⭐ Jugadores destacados</h2>
+          {estJugadores === undefined
+            ? <Spinner />
+            : !estJugadores?.datos?.equipos?.[equipoId]
+              ? <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>
+                  Estarán disponibles cuando se cierre la primera jornada.
+                </p>
+              : <>
+                  <p style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
+                    {textoActualizacionEst(estJugadores)}
+                  </p>
+                  <JugadoresDestacados datosEquipo={estJugadores.datos.equipos[equipoId]} />
+                </>}
         </div>
       )}
 
@@ -7522,6 +7882,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     // conserva): se borra para no mostrar el de la anterior hasta el próximo cálculo.
     const { error: errProg } = await sb.from('logros_progreso').delete().eq('federacion_id', federacion.id);
     if (errProg) console.error('[Reinicio] Error al borrar el progreso de logros:', errProg.message);
+    // Igual con los jugadores destacados: son de la temporada que termina.
+    const { error: errEst } = await sb.from('estadisticas_jugadores').delete().eq('federacion_id', federacion.id);
+    if (errEst) console.error('[Reinicio] Error al borrar las estadísticas de jugadores:', errEst.message);
+    delete _estadisticasJugCache[federacion.id];
     setResetModal(false);
     setResetConfirmNombre('');
     setJornada('1');
@@ -14236,9 +14600,11 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
             <div style={{flex:1}}>
               <div style={{fontWeight:700, marginBottom:'.2rem'}}>Logros de temporada</div>
               <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>
-                Insignias automáticas por rachas y récords (victorias seguidas, invicto, goles en un partido…).
-                Se recalculan solas cada vez que guardas resultados de Liga FILFA; una vez conseguidas son
-                permanentes, incluso si más adelante reinicias la temporada.
+                Insignias automáticas por rachas y récords de Liga FILFA (victorias seguidas, invicto, goles en un
+                partido…), puntuaciones de Liga Fantástica y composición de la plantilla (nacionalidades, edades).
+                Se recalculan solas, junto con el progreso que ven los equipos, al calcular una jornada H2H y al
+                guardar resultados de Liga FILFA. Usa "Recalcular logros" para forzarlo (por ejemplo, tras corregir
+                puntos). Una vez conseguidas son permanentes, incluso si más adelante reinicias la temporada.
               </div>
             </div>
             <div style={{display:'flex', alignItems:'center', gap:'.6rem', flexShrink:0, flexWrap:'wrap', justifyContent:'flex-end'}}>
@@ -14854,6 +15220,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga Fantástica — Clasificación', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. La pestaña se abre en esta vista por defecto.'],
         ['Liga Fantástica — Clasificación Por Jornada', 'Muestra el ranking de equipos para una jornada individual. Pulsa cualquier equipo para ver los jugadores que alineó esa jornada y los puntos de cada uno.'],
         ['Liga Fantástica — Estadísticas', 'Recoge métricas avanzadas por equipo: media de puntos, máximo y mínimo histórico, jornadas ganadas, desviación típica y contador de jornadas liderando la clasificación o en el podio.'],
+        ['Jugadores destacados', 'En Liga Fantástica → Estadísticas y en la ficha de cada equipo (pestaña Equipos) verás, para cada equipo: el jugador que más puntos le ha aportado (sin contar el doble del capitán), el que más veces ha sido titular (sin contar porterías), el que más veces ha estado en el once ideal estando alineado con ese equipo, el que más veces ha entrado como suplente y el que más veces ha sido sustituido (ambos por sustituciones automáticas) y el más rentable (puntos aportados por millón pagado, solo jugadores de la plantilla actual). Si hay empate se muestran todos. En Estadísticas también aparece el ranking de la liga de jugadores con más apariciones en el once ideal. Solo cuentan las jornadas cerradas por el admin, y los datos se actualizan cada vez que se cierra una jornada.'],
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
         ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
@@ -14903,6 +15270,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — plantillas para copiar', 'Desde Admin → Liga FILFA → Resultados, cada jornada dispone de tres botones para copiar al portapapeles: "Copiar plantilla En Directo" (resultado en vivo), "Copiar plantilla Partido" (solo los emparejamientos) y "Copiar plantilla Resultados" (resultado final con goles y puntos fantasy).'],
         ['Descargar Excel', 'El admin puede descargar los datos de cada competición en formato Excel (.xlsx) usando el botón ⬇ Excel de las pestañas de Liga Fantástica, Liga FILFA y Torneos. Cada archivo incluye varias hojas: clasificación, estadísticas, calendario y —en Liga Fantástica— también la clasificación por jornada.'],
         ['Logros', 'Los logros se activan o desactivan en Admin → Liga FILFA (requiere tener la Liga FILFA activada). Se recalculan solos al calcular una jornada H2H y al guardar resultados de Liga FILFA; en ese mismo momento se actualiza el progreso que ven los equipos. Con el botón "🏆 Recalcular logros" se puede forzar el recálculo, por ejemplo tras corregir puntos de una jornada. Si el recálculo no puede leer todos los datos, se cancela sin guardar nada y se muestra el error. Al reiniciar la temporada, los logros conseguidos se conservan y el progreso se borra.'],
+        ['Jugadores destacados', 'Las estadísticas de jugadores destacados (Equipos y Liga Fantástica → Estadísticas) se recalculan solas al cerrar, reabrir o editar una jornada en Admin → Pts Jugadores. El botón "📊 Recalcular estadísticas" de esa misma pantalla permite forzarlo. Solo cuentan las jornadas cerradas, así que conviene cerrar cada jornada cuando sus puntos sean definitivos. Al reiniciar la temporada se borran.'],
       ]
     },
     {

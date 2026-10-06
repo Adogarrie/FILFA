@@ -7518,6 +7518,10 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     const { error } = await sb.rpc('reiniciar_federacion', { p_federacion_id: federacion.id });
     setReseteando(false);
     if (error) { alert('Error: ' + error.message); return; }
+    // El progreso de logros es de la temporada (el palmarés en `logros` se
+    // conserva): se borra para no mostrar el de la anterior hasta el próximo cálculo.
+    const { error: errProg } = await sb.from('logros_progreso').delete().eq('federacion_id', federacion.id);
+    if (errProg) console.error('[Reinicio] Error al borrar el progreso de logros:', errProg.message);
     setResetModal(false);
     setResetConfirmNombre('');
     setJornada('1');
@@ -11098,27 +11102,16 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
 // ── LOGROS (vista de usuario) ───────────────────────────────────
 // Palmarés completo por equipo: logros ya conseguidos (LOGROS_CATALOGO,
 // tabla `logros`) más el progreso hacia el siguiente tramo de cada
-// categoría (progresoLogros, calculado en vivo desde h2h_partidos).
+// categoría. El progreso NO se calcula aquí: lo precalcula recalcularLogros
+// (AdminLigaH2H) al calcular cada jornada y lo guarda en `logros_progreso`
+// (ver supabase_logros_progreso.sql). Así esta vista solo lee dos tablas
+// pequeñas en vez de descargar todo el histórico de la temporada.
 // LOGROS_CATALOGO/detectarLogros/progresoLogros están definidos junto a
 // AdminLigaH2H, más abajo en este archivo.
-// Caché en memoria (por pestaña del navegador) del histórico de temporada que
-// usa LogrosVista para calcular el progreso: es la descarga más pesada de la
-// app (~1 MB a final de temporada) y solo cambia cuando el admin mete puntos
-// o cierra jornadas. Se reutiliza durante LOGROS_CACHE_MS y se descarta si
-// cambia la jornada actual o los equipos de la liga.
-const _logrosHistCache = {};
-const LOGROS_CACHE_MS = 10 * 60 * 1000;
-
 function LogrosVista({ federacion, participantes }) {
-  const [partidos,      setPartidos]      = useState([]);
-  const [logros,        setLogros]        = useState(null);
-  const [clasificacion, setClasificacion] = useState([]);
-  const [alineaciones,  setAlineaciones]  = useState([]);
-  const [puntosJugador, setPuntosJugador] = useState([]);
-  const [sustitucionesAuto, setSustitucionesAuto] = useState([]);
-  const [jugadoresCat, setJugadoresCat] = useState([]);
-  const [plantillas,   setPlantillas]   = useState([]);
-  const [histCargado,  setHistCargado]  = useState(false);
+  const [logros,       setLogros]       = useState(null);
+  const [progreso,     setProgreso]     = useState(null); // participante_id → { categoria: valor }
+  const [progresoAt,   setProgresoAt]   = useState(null); // fecha del último recálculo
   const [descAbiertas, setDescAbiertas] = useState(new Set()); // claves "participanteId_categoria"
   const [vistaLogros, setVistaLogros] = useState('tarjetas'); // 'tarjetas' | 'tabla'
 
@@ -11132,45 +11125,22 @@ function LogrosVista({ federacion, participantes }) {
 
   useEffect(() => {
     if (!sb || !federacion?.id || !federacion?.logros_habilitado) return;
-    const partIds = participantes.map(p => p.id);
-    const aplicar = d => {
-      setPartidos(d.partidos); setClasificacion(d.clasificacion); setAlineaciones(d.alineaciones);
-      setPuntosJugador(d.puntosJugador); setSustitucionesAuto(d.sustitucionesAuto);
-      setJugadoresCat(d.jugadoresCat); setPlantillas(d.plantillas);
-      setHistCargado(true);
-    };
-    // Los logros ya conseguidos (tabla pequeña) se piden siempre, para que uno
-    // nuevo aparezca al momento. El histórico de la temporada (lo pesado: solo
-    // sirve para el "progreso") se reutiliza de la caché si es reciente.
-    sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
-      .eq('federacion_id', federacion.id)
-      .then(({ data: l }) => setLogros(l || []));
-
-    const claveCache = `${federacion.id}|${federacion.jornada_actual}|${partIds.join(',')}`;
-    const cache = _logrosHistCache[federacion.id];
-    if (cache && cache.clave === claveCache && Date.now() - cache.t < LOGROS_CACHE_MS) { aplicar(cache.datos); return; }
-
     Promise.all([
-      sb.from('h2h_partidos').select('id, jornada, local_id, visitante_id, pts_local, pts_visitante')
+      sb.from('logros').select('participante_id, categoria, tier, valor, jornada, unlocked_at')
         .eq('federacion_id', federacion.id),
-      partIds.length ? sb.from('clasificacion').select('participante_id, jornada, puntos_jornada').in('participante_id', partIds) : Promise.resolve({ data: [] }),
-      partIds.length ? sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular').in('participante_id', partIds) : Promise.resolve({ data: [] }),
-      sb.from('puntos_jugador').select('jugador_id, jornada, pts').eq('federacion_id', federacion.id),
-      sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada').eq('federacion_id', federacion.id),
-      // Solo hacen falta los datos de los jugadores fichados (nacionalidad,
-      // edad, once ideal), así que van embebidos en plantillas en vez de
-      // descargar el catálogo entero de jugadores.
-      partIds.length ? sb.from('plantillas').select('jugador_id, participante_id, jugadores(id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento)').in('participante_id', partIds) : Promise.resolve({ data: [] }),
-    ]).then(([{ data: p }, { data: c }, { data: a }, { data: pj }, { data: s }, { data: pl }]) => {
-      const catMap = {};
-      (pl || []).forEach(r => { if (r.jugadores) catMap[r.jugadores.id] = r.jugadores; });
-      const datos = {
-        partidos: p || [], clasificacion: c || [], alineaciones: a || [], puntosJugador: pj || [],
-        sustitucionesAuto: s || [], jugadoresCat: Object.values(catMap),
-        plantillas: (pl || []).map(r => ({ jugador_id: r.jugador_id, participante_id: r.participante_id })),
-      };
-      _logrosHistCache[federacion.id] = { clave: claveCache, t: Date.now(), datos };
-      aplicar(datos);
+      sb.from('logros_progreso').select('participante_id, datos, actualizado_at')
+        .eq('federacion_id', federacion.id),
+    ]).then(([{ data: l }, { data: pr, error: errPr }]) => {
+      if (errPr) console.error('[Logros] Error al leer el progreso:', errPr.message);
+      setLogros(l || []);
+      const mapa = {};
+      let ultima = null;
+      (pr || []).forEach(r => {
+        mapa[r.participante_id] = r.datos || {};
+        if (!ultima || r.actualizado_at > ultima) ultima = r.actualizado_at;
+      });
+      setProgreso(mapa);
+      setProgresoAt(ultima);
     });
   }, [federacion?.id, federacion?.logros_habilitado]);
 
@@ -11182,11 +11152,8 @@ function LogrosVista({ federacion, participantes }) {
       </div>
     );
   }
-  if (logros === null || !histCargado) return <div className="card"><Spinner /></div>;
+  if (logros === null || progreso === null) return <div className="card"><Spinner /></div>;
 
-  const progreso = progresoLogros(partidos, participantes, {
-    clasificacion, alineaciones, puntosJugador, sustitucionesAuto, jugadoresCat, plantillas,
-  });
   const porEquipo = {};
   participantes.forEach(p => { porEquipo[p.id] = []; });
   logros.forEach(l => { (porEquipo[l.participante_id] = porEquipo[l.participante_id] || []).push(l); });
@@ -11194,7 +11161,7 @@ function LogrosVista({ federacion, participantes }) {
 
   const textoProgreso = (fila) => {
     const { cat, siguienteTier, valorActual } = fila;
-    if (siguienteTier == null) return null;
+    if (siguienteTier == null || valorActual == null) return null; // null = aún sin progreso calculado
     if (cat === 'jornada_pocos_puntos') {
       return `Tu peor jornada: ${valorActual} pts (objetivo: ${siguienteTier === 0 ? '0 o menos' : `menos de ${siguienteTier}`})`;
     }
@@ -11218,6 +11185,11 @@ function LogrosVista({ federacion, participantes }) {
 
   return (
     <div>
+      <p style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
+        {progresoAt
+          ? `Progreso actualizado el ${new Date(progresoAt).toLocaleString('es-ES', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}. Se actualiza cada vez que se calcula una jornada.`
+          : 'El progreso hacia cada logro se mostrará cuando se calcule la próxima jornada.'}
+      </p>
       <div style={{display:'flex', gap:'.4rem', marginBottom:'.75rem'}}>
         {[['tarjetas', '🔲 Tarjetas'], ['tabla', '📋 Tabla']].map(([v, l]) => (
           <button key={v} onClick={() => setVistaLogros(v)}
@@ -11234,10 +11206,10 @@ function LogrosVista({ federacion, participantes }) {
       {ordenados.map(p => {
         const misLogros = porEquipo[p.id] || [];
         const misLogrosSet = new Set(misLogros.map(l => `${l.categoria}|${l.tier}`));
-        const est = progreso[p.id] || {};
+        const est = progreso[p.id]; // undefined si aún no hay progreso calculado para el equipo
         const filas = Object.entries(LOGROS_CATALOGO).map(([cat, def]) => {
           const pendientes = def.tiers.filter(t => t !== 'temporada' && !misLogrosSet.has(`${cat}|${t}`));
-          return { cat, def, siguienteTier: pendientes.length ? pendientes[0] : null, valorActual: est[cat] || 0 };
+          return { cat, def, siguienteTier: pendientes.length ? pendientes[0] : null, valorActual: est ? (est[cat] || 0) : null };
         });
 
         return (
@@ -11293,7 +11265,7 @@ function LogrosVista({ federacion, participantes }) {
                           );
                         })}
                       </div>
-                      {siguienteTier != null && (
+                      {siguienteTier != null && valorActual != null && (
                         <div style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.25rem'}}>
                           {textoProgreso({ cat, siguienteTier, valorActual })}
                         </div>
@@ -11375,12 +11347,11 @@ function LogrosVista({ federacion, participantes }) {
   );
 }
 
-// Pestaña 🏆 Logros desactivada temporalmente: LogrosVista descarga el
-// histórico de toda la temporada (~1 MB) para calcular el progreso y dispara
-// el egress de Supabase. El palmarés de Equipos (tabla `logros`, ligera) sigue
-// visible. Para reactivarla, poner a true (idealmente tras precalcular el
-// progreso en una tabla pequeña).
-const MOSTRAR_PESTANA_LOGROS = false;
+// Pestaña 🏆 Logros. Estuvo oculta porque LogrosVista descargaba todo el
+// histórico de la temporada en cada visita; ahora lee el progreso
+// precalculado de `logros_progreso` (supabase_logros_progreso.sql), así que
+// es barata. Poner a false para ocultarla de nuevo sin tocar nada más.
+const MOSTRAR_PESTANA_LOGROS = true;
 
 function Competiciones({ federacion, participantes, isAdmin }) {
   const [tab, setTab] = useState('calendario');
@@ -13978,11 +13949,26 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas },
              { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }] = resultados;
       const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
-      const detectados = detectarLogros(partidosTodos || [], participantes, {
+      const extraLogros = {
         clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],
         sustitucionesAuto: sustsTodas || [], jugadoresCat: jugCatTodos || [], plantillas: plantsTodas || [],
         maxJugadores: federacion?.max_jugadores ?? 14,
-      });
+      };
+      const detectados = detectarLogros(partidosTodos || [], participantes, extraLogros);
+
+      // Progreso hacia el siguiente tramo, precalculado aquí (que ya tiene todo
+      // el histórico) para que la pestaña Logros solo lea una tabla pequeña.
+      const progreso = progresoLogros(partidosTodos || [], participantes, extraLogros);
+      const filasProgreso = participantes.map(p => ({
+        participante_id: p.id, federacion_id: federacion.id,
+        datos: progreso[p.id] || {}, actualizado_at: new Date().toISOString(),
+      }));
+      if (filasProgreso.length) {
+        const { error: errProg } = await sb.from('logros_progreso')
+          .upsert(filasProgreso, { onConflict: 'participante_id' });
+        if (errProg) console.error('[Logros] Error al guardar el progreso:', errProg.message);
+      }
+
       const nuevos = detectados.filter(l => !yaTiene.has(`${l.participante_id}|${l.categoria}|${l.tier}`));
       if (nuevos.length > 0) {
         const filas = nuevos.map(l => ({
@@ -14766,6 +14752,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Jugadores duplicados', 'Si el admin ha activado los jugadores duplicados, algunos jugadores ya fichados por otro equipo pueden seguir disponibles en el mercado. Aparecerá un indicador "X/N equipos" mostrando cuántas copias hay y cuántas quedan disponibles.'],
         ['Filtros avanzados', 'En la barra de filtros del Mercado puedes filtrar por nombre o equipo real, posición, equipo real, valor mínimo (M€) y valor máximo (M€). Todos los filtros son opcionales y se combinan entre sí.'],
         ['Ordenar jugadores', 'Pulsa cualquier cabecera de la tabla (Jugador, Pos, Equipo, Valor mín., Pujas) para ordenar la lista por ese criterio. Un segundo clic invierte el orden (↑ / ↓). La columna activa muestra una flecha indicando la dirección.'],
+        ['Datos actualizados', 'El Mercado se carga la primera vez que entras en él y se mantiene mientras uses la app: al cambiar de pestaña y volver conservas los filtros y la ordenación. Al pujar o retirar una puja solo se actualizan las pujas, no la lista completa. Para ver los fichajes que otros equipos hayan hecho mientras tanto, recarga la app. En cualquier caso, antes de registrar cada puja se comprueba que el jugador siga disponible.'],
       ]
     },
     {
@@ -14773,7 +14760,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
       titulo: '🔨 Pujas por jugadores',
       contenido: [
         ['Cómo pujar', 'En la pestaña Mercado encontrarás jugadores disponibles para puja. Introduce tu oferta y confírmala. Puedes modificar o retirar tu puja mientras el mercado esté abierto.'],
-        ['Cierre automático', 'El admin configura una hora de cierre diaria. En ese momento el sistema resuelve todas las pujas pendientes automáticamente.'],
+        ['Cierre automático', 'El admin configura una hora de cierre diaria. Llegada esa hora, las pujas pendientes se resuelven automáticamente en cuanto cualquier equipo tenga la app abierta (en cualquier pestaña, no hace falta estar en el Mercado) o la abra después. Si a esa hora nadie la tiene abierta, se resuelven en cuanto alguien entre; el resultado es el mismo y aparece en el tablón.'],
         ['Resolución', 'Gana la puja más alta. En caso de empate, gana la puja más antigua (la que se registró antes).'],
         ['Presupuesto insuficiente', 'Puedes quedarte con un presupuesto negativo en algún momento del mercado, pero debes regularizar tus cuentas antes del inicio de una jornada para poder puntuar. Si estás en negativo cuando comienza una jornada, no sumarás nigún punto fantasy.'],
         ['Portería única', 'Dentro de la misma división, solo puede haber un equipo con la portería de cada club real. Si ya está asignada, las pujas por esa portería quedan desiertas.'],
@@ -14863,7 +14850,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
       id: 'competiciones',
       titulo: '🏆 Competiciones',
       contenido: [
-        ['Secciones disponibles', 'La pestaña Competiciones agrupa tres ligas: Liga Fantástica (puntuaciones fantasy acumuladas), Liga FILFA (enfrentamientos H2H entre equipos) y Torneos (fases de grupos y eliminatorias).'],
+        ['Secciones disponibles', 'La pestaña Competiciones agrupa tres ligas: Liga Fantástica (puntuaciones fantasy acumuladas), Liga FILFA (enfrentamientos H2H entre equipos) y Torneos (fases de grupos y eliminatorias). Si el admin ha activado los logros, también incluye la sección 🏆 Logros (ver "Logros de temporada" más abajo).'],
         ['Liga Fantástica — Clasificación', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. La pestaña se abre en esta vista por defecto.'],
         ['Liga Fantástica — Clasificación Por Jornada', 'Muestra el ranking de equipos para una jornada individual. Pulsa cualquier equipo para ver los jugadores que alineó esa jornada y los puntos de cada uno.'],
         ['Liga Fantástica — Estadísticas', 'Recoge métricas avanzadas por equipo: media de puntos, máximo y mínimo histórico, jornadas ganadas, desviación típica y contador de jornadas liderando la clasificación o en el podio.'],
@@ -14871,6 +14858,17 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
+      ]
+    },
+    {
+      id: 'logros',
+      titulo: '🏅 Logros de temporada',
+      contenido: [
+        ['¿Qué son?', 'Insignias que tu equipo desbloquea automáticamente al alcanzar ciertos objetivos: rachas y récords en Liga FILFA (victorias seguidas, partidos invicto, goles…), puntuaciones en Liga Fantástica, composición de la plantilla (nacionalidades, edades) y otros. Cada logro tiene varios tramos (por ejemplo, 3, 5 y 10 victorias seguidas). Solo están disponibles si el admin los ha activado.'],
+        ['Dónde verlos', 'En Competiciones → 🏆 Logros puedes ver todos los logros de cada equipo, en formato de tarjetas o de tabla, con los tramos conseguidos resaltados. Pulsa la "i" junto a cada logro para leer su descripción. Los logros de un equipo también aparecen en su ficha de Equipos y en el resumen de la clasificación de Liga FILFA.'],
+        ['Progreso', 'Debajo de cada logro se indica cuánto te falta para el siguiente tramo (por ejemplo, "Progreso: 7/10"). El progreso no es en tiempo real: se actualiza cada vez que el admin calcula una jornada, y la fecha de la última actualización aparece arriba de la sección. Esto incluye los logros de plantilla: un fichaje cambia tu progreso de nacionalidades o edades en el siguiente cálculo, no al momento.'],
+        ['Cuándo se consiguen', 'Los logros se detectan al calcular cada jornada. Cuando un equipo desbloquea uno, se anuncia automáticamente en el tablón.'],
+        ['Son permanentes', 'Un logro conseguido no se pierde nunca, aunque después se corrijan resultados o se reinicie la temporada: forma parte del palmarés del equipo. Al reiniciar la temporada, lo que vuelve a empezar es el progreso.'],
       ]
     },
     {
@@ -14904,6 +14902,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Jugadores duplicados', 'El admin puede permitir que un mismo jugador (no porteros) pertenezca a varios equipos a la vez. Configura el valor mínimo de mercado y el número máximo de copias. Al desactivar o subir el umbral, el sistema elimina las copias extra con reembolso automático.'],
         ['Liga FILFA — plantillas para copiar', 'Desde Admin → Liga FILFA → Resultados, cada jornada dispone de tres botones para copiar al portapapeles: "Copiar plantilla En Directo" (resultado en vivo), "Copiar plantilla Partido" (solo los emparejamientos) y "Copiar plantilla Resultados" (resultado final con goles y puntos fantasy).'],
         ['Descargar Excel', 'El admin puede descargar los datos de cada competición en formato Excel (.xlsx) usando el botón ⬇ Excel de las pestañas de Liga Fantástica, Liga FILFA y Torneos. Cada archivo incluye varias hojas: clasificación, estadísticas, calendario y —en Liga Fantástica— también la clasificación por jornada.'],
+        ['Logros', 'Los logros se activan o desactivan en Admin → Liga FILFA (requiere tener la Liga FILFA activada). Se recalculan solos al calcular una jornada H2H y al guardar resultados de Liga FILFA; en ese mismo momento se actualiza el progreso que ven los equipos. Con el botón "🏆 Recalcular logros" se puede forzar el recálculo, por ejemplo tras corregir puntos de una jornada. Si el recálculo no puede leer todos los datos, se cancela sin guardar nada y se muestra el error. Al reiniciar la temporada, los logros conseguidos se conservan y el progreso se borra.'],
       ]
     },
     {

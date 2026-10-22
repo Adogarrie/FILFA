@@ -14916,7 +14916,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
 
   const generarPlantillaEnDirecto = (j) => {
     const ms = partidos.filter(p => p.jornada === j);
-    const lineas = [`EN DIRECTO J${j}`];
+    const lineas = [`*EN DIRECTO J${j}*`];
     ms.forEach((m, i) => {
       const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
       const { ptsLocal: ptsL } = getVueltaInfo(j, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, veDiv);

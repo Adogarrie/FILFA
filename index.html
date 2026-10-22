@@ -3250,7 +3250,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   }, [participantes]);
 
   // Once ideal de la jornada: solo se calcula si el usuario está realmente
-  // viendo la pestaña "Clasificación Por Jornada" (no en cada montaje del
+  // viendo la pestaña "Clasificación por jornada" (no en cada montaje del
   // componente), y la consulta va acotada a esa única jornada — coste
   // mínimo, a diferencia del ranking de puntos totales que se quitó antes.
   useEffect(() => {
@@ -3533,12 +3533,12 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
   return (
     <div>
       <div className="tabs">
-        <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Clasificación</button>
+        <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Clasificación por jornada</button>
+        <button className={`tab ${vista==='acumulado'?'active':''}`}    onClick={() => setVista('acumulado')}>Clasificación Fantástica</button>
         {/* Como en la Liga FILFA, solo aparece cuando ya hay 5 jornadas con puntos. */}
         {jornadasConDatos.length >= 5 && (
-          <button className={`tab ${vista==='ultimos5'?'active':''}`}   onClick={() => setVista('ultimos5')}>Últimos 5</button>
+          <button className={`tab ${vista==='ultimos5'?'active':''}`}   onClick={() => setVista('ultimos5')}>Últimas 5</button>
         )}
-        <button className={`tab ${vista==='jornada'?'active':''}`}      onClick={() => setVista('jornada')}>Clasificación Por Jornada</button>
         <button className={`tab ${vista==='estadisticas'?'active':''}`} onClick={() => setVista('estadisticas')}>Estadísticas</button>
         {isAdmin && <button onClick={() => {
           const sheetClasif = [
@@ -3709,7 +3709,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin }) {
       {vista === 'acumulado' && (() => {
         const clasFiltradas = jornadaAcum !== null ? clas.filter(r => r.jornada <= jornadaAcum) : clas;
         const filas = jornadaAcum !== null ? computeAcumRows(clasFiltradas) : filasAcum;
-        const titulo = jornadaAcum !== null ? `Clasificación hasta J${jornadaAcum}` : 'Clasificación';
+        const titulo = jornadaAcum !== null ? `Clasificación Fantástica hasta J${jornadaAcum}` : 'Clasificación Fantástica';
         const { ultimasJ, formaJ } = calcularFormaFantasy(clasFiltradas);
         return (
           <>
@@ -15610,9 +15610,9 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
       contenido: [
         ['Secciones disponibles', 'La pestaña Competiciones agrupa tres ligas: Liga Fantástica (puntuaciones fantasy acumuladas), Liga FILFA (enfrentamientos H2H entre equipos) y Torneos (fases de grupos y eliminatorias), además de la clasificación de jugadores (🏅 Jugadores). Si el admin ha activado los logros, también incluye la sección 🏆 Logros (ver "Logros de temporada" más abajo).'],
         ['Clasificación de jugadores', 'En Competiciones → 🏅 Jugadores tienes el ranking de puntos de los jugadores que han tenido puntos en la liga (el admin solo introduce puntos de jugadores fichados o cedidos, así que los que nunca han estado en un equipo no aparecen). Para cada jugador verás su posición, equipo real, equipo fantasy actual (o "Libre"), puntos totales, jornadas con puntos, media, jornadas como titular y jornadas como suplente (en el banquillo sin ser titular). Los puntos son del jugador, sin el doble del capitán, en cualquier equipo en el que haya estado. Puedes buscar por nombre, filtrar por posición, equipo real o equipo fantasy, y ordenar por puntos totales o por media; se muestran 50 jugadores y el botón "Ver más" carga los siguientes. Solo cuentan las jornadas cerradas y se actualiza cada vez que se cierra una jornada.'],
-        ['Liga Fantástica — Clasificación', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. Bajo el nombre de cada equipo aparecen sus puntos en las últimas 5 jornadas (hasta la jornada elegida), de más antigua a más reciente: verde si quedó en el tercio alto de esa jornada, amarillo en el medio y rojo en el bajo; «—» si no tiene puntos esa jornada. La pestaña se abre en esta vista por defecto.'],
-        ['Liga Fantástica — Últimos 5', 'Clasificación de forma reciente: suma solo los puntos de cada equipo en las últimas 5 jornadas con puntos, con los mismos colores por jornada que la clasificación general. Aparece cuando ya se han jugado al menos 5 jornadas, igual que en la Liga FILFA.'],
-        ['Liga Fantástica — Clasificación Por Jornada', 'Muestra el ranking de equipos para una jornada individual. Pulsa cualquier equipo para ver los jugadores que alineó esa jornada y los puntos de cada uno.'],
+        ['Liga Fantástica — Clasificación por jornada', 'Muestra el ranking de equipos para una jornada individual. Pulsa cualquier equipo para ver los jugadores que alineó esa jornada y los puntos de cada uno.'],
+        ['Liga Fantástica — Clasificación Fantástica', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. Bajo el nombre de cada equipo aparecen sus puntos en las últimas 5 jornadas (hasta la jornada elegida), de más antigua a más reciente: verde si quedó en el tercio alto de esa jornada, amarillo en el medio y rojo en el bajo; «—» si no tiene puntos esa jornada. La pestaña se abre en esta vista por defecto.'],
+        ['Liga Fantástica — Últimas 5', 'Clasificación de forma reciente: suma solo los puntos de cada equipo en las últimas 5 jornadas con puntos, con los mismos colores por jornada que la Clasificación Fantástica. Aparece cuando ya se han jugado al menos 5 jornadas, igual que en la Liga FILFA.'],
         ['Liga Fantástica — Estadísticas', 'Recoge métricas avanzadas por equipo: media de puntos, máximo y mínimo histórico, jornadas ganadas, desviación típica y contador de jornadas liderando la clasificación o en el podio.'],
         ['Jugadores destacados', 'En Liga Fantástica → Estadísticas y en la ficha de cada equipo (pestaña Equipos) verás, para cada equipo: el jugador que más puntos le ha aportado (sin contar el doble del capitán), el que más veces ha sido titular (sin contar porterías), el que más veces ha estado en el once ideal estando alineado con ese equipo, el que más veces ha entrado como suplente y el que más veces ha sido sustituido (ambos por sustituciones automáticas) y el más rentable (puntos aportados por millón pagado, solo jugadores de la plantilla actual). Si hay empate se muestran todos. En Estadísticas también aparece el ranking de la liga de jugadores con más apariciones en el once ideal. Solo cuentan las jornadas cerradas por el admin, y los datos se actualizan cada vez que se cierra una jornada.'],
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],

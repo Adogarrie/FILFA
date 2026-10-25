@@ -3049,23 +3049,37 @@ function useEstadisticasJugadores(federacionId, activo = true) {
 }
 
 // ── Predicción de la clasificación final (Liga Fantástica) ─────
-// Simulación de Monte Carlo: para cada equipo se estima su puntuación por
-// jornada (media y desviación ponderadas, con más peso en las jornadas
-// recientes) y se sortean las jornadas que faltan PREDICCION_SIMULACIONES
-// veces, contando en qué puesto termina cada equipo en cada temporada
-// simulada. La calcula SOLO el admin en su navegador con `clas` (ya
-// cargado) y se guarda en estadisticas_jugadores.prediccion; el resto solo
-// la lee (ver supabase_prediccion_fantasy.sql).
+// Simulación de Monte Carlo de las jornadas que faltan, repetida
+// PREDICCION_SIMULACIONES veces, contando en qué puesto termina cada equipo
+// en cada temporada simulada. La calcula SOLO el admin en su navegador con
+// `clas` (ya cargado) y se guarda en estadisticas_jugadores.prediccion; el
+// resto solo la lee (ver supabase_prediccion_fantasy.sql).
+//
+// Modelo, para cada equipo:
+//  1. Media y desviación de sus puntos por jornada, ponderadas: las
+//     jornadas recientes pesan más (ver PREDICCION_VIDA_MEDIA).
+//  2. Su NIVEL REAL (puntos esperados por jornada) no se conoce: la media
+//     observada mezcla nivel y suerte. Se estima con los datos de la propia
+//     liga (bayes empírico): se compara cuánto se diferencian las medias de
+//     los equipos con cuánto se diferenciarían solo por suerte; lo que sobra
+//     es la diferencia real entre equipos (τ²). Cada media se acerca a la de
+//     la liga tanto más cuanto más igualada esté la liga y menos jornadas
+//     lleve el equipo, y queda un margen de incertidumbre sobre ese nivel.
+//  3. En cada simulación se sortea primero el nivel real de cada equipo
+//     (dentro de ese margen) y después la suma de sus jornadas restantes
+//     alrededor de ese nivel, con su desviación por jornada.
 const PREDICCION_SIMULACIONES     = 10000;
 const PREDICCION_JORNADAS_TOTALES = 38;  // mismas 38 jornadas que usa el resto de la Liga Fantástica
 // Ponderación por antigüedad: el peso de una jornada se reduce a la mitad
 // cada PREDICCION_VIDA_MEDIA jornadas (la última pesa 1, la de hace 6 pesa
-// 0,5, la de hace 12 pesa 0,25…).
+// 0,5, la de hace 12 pesa 0,25…). Al pesar menos lo antiguo, el equipo
+// cuenta como si llevara menos jornadas ("jornadas efectivas"), así que el
+// margen de incertidumbre de su nivel es algo mayor.
 const PREDICCION_VIDA_MEDIA       = 6;
-// Ajuste por pocas jornadas: se mezcla el perfil del equipo con el de la
-// liga como si la liga aportara PREDICCION_PESO_LIGA jornadas "virtuales".
-// Con pocas jornadas manda la liga; según se juegan, manda el equipo.
-const PREDICCION_PESO_LIGA        = 3;
+// La desviación por jornada de cada equipo se mezcla con la de la liga como
+// si la liga aportara estas jornadas "virtuales" (con pocas jornadas, la
+// desviación propia es muy poco fiable).
+const PREDICCION_PESO_LIGA_DESV   = 3;
 
 function calcularPrediccionFantasy(clas, participantes) {
   const jornadas = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
@@ -3074,27 +3088,65 @@ function calcularPrediccionFantasy(clas, participantes) {
   const restantes = Math.max(0, PREDICCION_JORNADAS_TOTALES - ultima);
   const peso = j => Math.pow(0.5, (ultima - j) / PREDICCION_VIDA_MEDIA);
 
-  // Media y varianza ponderadas de una lista de registros de clasificación.
-  const perfil = regs => {
-    let w = 0, w2 = 0, wx = 0;
-    regs.forEach(r => { const k = peso(r.jornada); w += k; w2 += k * k; wx += k * Number(r.puntos_jornada); });
-    if (!w) return null;
-    const media = wx / w;
-    let wv = 0;
-    regs.forEach(r => { wv += peso(r.jornada) * (Number(r.puntos_jornada) - media) ** 2; });
-    return { media, varianza: wv / w, nEf: (w * w) / w2 }; // nEf: nº "efectivo" de jornadas tras ponderar
-  };
-  const liga = perfil(clas);
-  const k = PREDICCION_PESO_LIGA;
+  // 1. Media y varianza ponderadas de cada equipo; nEf = jornadas efectivas.
   const equipos = participantes.map(p => {
     const regs = clas.filter(r => r.participante_id === p.id);
     const actual = regs.reduce((s, r) => s + Number(r.puntos_jornada), 0);
-    const pe = perfil(regs) || { media: liga.media, varianza: liga.varianza, nEf: 0 };
-    return {
-      id: p.id, nombre: p.nombre, actual, jornadas: regs.length,
-      media: (pe.nEf * pe.media + k * liga.media) / (pe.nEf + k),
-      sd: Math.sqrt((pe.nEf * pe.varianza + k * liga.varianza) / (pe.nEf + k)),
-    };
+    let w = 0, w2 = 0, wx = 0;
+    regs.forEach(r => { const k = peso(r.jornada); w += k; w2 += k * k; wx += k * Number(r.puntos_jornada); });
+    const media = w ? wx / w : null;
+    let wv = 0;
+    regs.forEach(r => { wv += peso(r.jornada) * (Number(r.puntos_jornada) - media) ** 2; });
+    return { id: p.id, nombre: p.nombre, actual, jornadas: regs.length,
+             mediaObs: media, varObs: w ? wv / w : null, nEf: w ? (w * w) / w2 : 0 };
+  });
+  const conDatos = equipos.filter(e => e.nEf > 0);
+
+  // Ruido por jornada (s²): varianza dentro de cada equipo, corregida por el
+  // sesgo de las muestras pequeñas (× nEf/(nEf−1)). Se toma la MEDIANA entre
+  // equipos y no la media, para que uno o dos equipos que cambian mucho de
+  // nivel a mitad de temporada (fichajes) no inflen el ruido de todos y
+  // acerquen en exceso a todos los equipos a la media de la liga. La
+  // mediana de varianzas muestrales es algo menor que su media; se compensa
+  // con el factor de Wilson-Hilferty para la mediana de una χ². Si aún no
+  // hay equipos con 2+ jornadas, se usa la varianza de todas las puntuaciones.
+  const conVarianza = conDatos.filter(e => e.nEf > 1.0001);
+  let s2;
+  if (conVarianza.length) {
+    const vars = conVarianza.map(e => e.varObs * e.nEf / (e.nEf - 1)).sort((x, y) => x - y);
+    const m = vars.length >> 1;
+    const mediana = vars.length % 2 ? vars[m] : (vars[m - 1] + vars[m]) / 2;
+    const gl = conVarianza.reduce((s, e) => s + e.nEf - 1, 0) / conVarianza.length; // grados de libertad típicos
+    s2 = mediana / Math.pow(1 - 2 / (9 * gl), 3);
+  } else {
+    const pts = clas.map(r => Number(r.puntos_jornada));
+    const m = pts.reduce((s, x) => s + x, 0) / pts.length;
+    s2 = pts.reduce((s, x) => s + (x - m) ** 2, 0) / Math.max(1, pts.length - 1);
+  }
+  s2 = Math.max(s2, 1);
+
+  // 2. Bayes empírico: diferencia real entre equipos τ² = varianza de las
+  // medias observadas − la parte que se explica por la suerte (s²/nEf).
+  // Con menos de 3 equipos con datos no se puede estimar: no se ajusta.
+  const mediaLiga = conDatos.reduce((s, e) => s + e.mediaObs, 0) / Math.max(1, conDatos.length);
+  let tau2;
+  if (conDatos.length >= 3) {
+    const varMedias = conDatos.reduce((s, e) => s + (e.mediaObs - mediaLiga) ** 2, 0) / (conDatos.length - 1);
+    const ruidoMedias = conDatos.reduce((s, e) => s + s2 / e.nEf, 0) / conDatos.length;
+    tau2 = Math.max(varMedias - ruidoMedias, 1); // mínimo 1 (±1 punto): nunca se iguala del todo a los equipos
+  } else {
+    tau2 = s2;
+  }
+  const kDesv = PREDICCION_PESO_LIGA_DESV;
+  equipos.forEach(e => {
+    if (e.nEf > 0) {
+      const B = tau2 / (tau2 + s2 / e.nEf);          // cuánto se fía de la media del equipo (0-1)
+      e.nivel   = mediaLiga + B * (e.mediaObs - mediaLiga);
+      e.margen  = Math.sqrt(B * s2 / e.nEf);         // incertidumbre (desv.) del nivel estimado
+      e.sd      = Math.sqrt((e.nEf * e.varObs + kDesv * s2) / (e.nEf + kDesv));
+    } else {                                         // equipo sin jornadas: el de la liga
+      e.nivel = mediaLiga; e.margen = Math.sqrt(tau2); e.sd = Math.sqrt(s2);
+    }
   });
 
   // Normal(0,1) por Box-Muller.
@@ -3107,19 +3159,21 @@ function calcularPrediccionFantasy(clas, participantes) {
     return r * Math.cos(2 * Math.PI * v);
   };
 
+  // 3. Simulación. Los puntos de las jornadas que faltan se sortean de una
+  // vez: la suma de `restantes` jornadas independientes N(nivel, sd²) es
+  // N(restantes·nivel, restantes·sd²). (Una jornada negativa sería
+  // prácticamente imposible con valores reales, así que no se recorta a 0.)
   const n = equipos.length;
   const conteo = equipos.map(() => new Array(n).fill(0)); // conteo[equipo][puesto]
   const totales = new Float64Array(n);
   const orden = equipos.map((_, i) => i);
-  // Los puntos de las jornadas que faltan se sortean de una vez: la suma de
-  // `restantes` jornadas independientes N(media, sd²) es N(restantes·media,
-  // restantes·sd²). (Una jornada negativa sería prácticamente imposible con
-  // medias y desviaciones reales, así que no se recorta a 0.)
-  const mediaResto = equipos.map(e => e.actual + restantes * e.media);
-  const sdResto    = equipos.map(e => Math.sqrt(restantes) * e.sd);
+  const sdResto = equipos.map(e => Math.sqrt(restantes) * e.sd);
   for (let s = 0; s < PREDICCION_SIMULACIONES; s++) {
     for (let i = 0; i < n; i++) {
-      totales[i] = mediaResto[i] + sdResto[i] * normal() + Math.random() * 1e-6; // + desempate al azar en empates exactos
+      const e = equipos[i];
+      const nivel = e.nivel + e.margen * normal();   // nivel real de este equipo en esta temporada simulada
+      totales[i] = e.actual + restantes * nivel + sdResto[i] * normal()
+                 + Math.random() * 1e-6;             // desempate al azar en empates exactos
     }
     orden.sort((a, b) => totales[b] - totales[a]);
     orden.forEach((i, puesto) => { conteo[i][puesto]++; });
@@ -3130,9 +3184,13 @@ function calcularPrediccionFantasy(clas, participantes) {
     calculada_at: new Date().toISOString(),
     ultima_jornada: ultima, jornadas_jugadas: jornadas.length, restantes,
     simulaciones: PREDICCION_SIMULACIONES, vida_media: PREDICCION_VIDA_MEDIA,
+    modelo: 2,
+    // Desviación por jornada típica de la liga y diferencia real estimada entre equipos.
+    ruido_jornada: r1(Math.sqrt(s2)), diferencia_real: r1(Math.sqrt(tau2)),
     equipos: equipos.map((e, i) => ({
       id: e.id, nombre: e.nombre, actual: e.actual, jornadas: e.jornadas,
-      media: r1(e.media), sd: r1(e.sd),
+      media_obs: e.mediaObs != null ? r1(e.mediaObs) : null,
+      media: r1(e.nivel), margen: r1(e.margen), sd: r1(e.sd),
       esperado: Math.round(conteo[i].reduce((s, c, p) => s + c * (p + 1), 0) / PREDICCION_SIMULACIONES * 100) / 100,
       conteo: conteo[i],
     })),
@@ -4077,8 +4135,15 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
                                 <tr>
                                   <td colSpan={5} style={{background:'var(--fondo-alt)'}}>
                                     <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
-                                      Puntos actuales: <strong>{e.actual}</strong> · Media ponderada por jornada: <strong>{e.media.toLocaleString('es-ES')}</strong>
-                                      {' '}· Desv. típica: <strong>{e.sd.toLocaleString('es-ES')}</strong>
+                                      Puntos actuales: <strong>{e.actual}</strong>
+                                      {e.margen != null ? (
+                                        // Modelo 2: nivel estimado (media ajustada a la liga) ± su incertidumbre.
+                                        <> · Nivel estimado: <strong>{e.media.toLocaleString('es-ES')} ± {e.margen.toLocaleString('es-ES')}</strong> pts/jornada
+                                           {e.media_obs != null && <> (media ponderada {e.media_obs.toLocaleString('es-ES')})</>}</>
+                                      ) : (
+                                        <> · Media ponderada por jornada: <strong>{e.media.toLocaleString('es-ES')}</strong></>
+                                      )}
+                                      {' '}· Desv. típica por jornada: <strong>{e.sd.toLocaleString('es-ES')}</strong>
                                     </div>
                                     {/* Reparto por puestos: una barra por puesto; la del puesto más probable ocupa toda la altura. */}
                                     <div style={{display:'flex', alignItems:'flex-end', gap:2, height:70}}>
@@ -4109,7 +4174,8 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
                   </div>
                   <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
                     Pulsa un equipo para ver su probabilidad en cada puesto. Estimación estadística, no una certeza:
-                    supone que cada equipo seguirá puntuando como hasta ahora (las jornadas recientes pesan más),
+                    supone que cada equipo seguirá puntuando a su nivel estimado (las jornadas recientes pesan más y, como parte
+                    de cada media es suerte, se acerca a la media de la liga y se simula con un margen de incertidumbre),
                     sin tener en cuenta fichajes, lesiones ni alineaciones futuras.
                   </p>
                 </>
@@ -15941,7 +16007,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga Fantástica — Clasificación Fantástica', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. Bajo el nombre de cada equipo aparecen sus puntos en las últimas 5 jornadas (hasta la jornada elegida), de más antigua a más reciente: verde si quedó en el tercio alto de esa jornada, amarillo en el medio y rojo en el bajo; «—» si no tiene puntos esa jornada. La pestaña se abre en esta vista por defecto.'],
         ['Liga Fantástica — Últimas 5', 'Clasificación de forma reciente: suma solo los puntos de cada equipo en las últimas 5 jornadas con puntos, con los mismos colores por jornada que la Clasificación Fantástica. Aparece cuando ya se han jugado al menos 5 jornadas, igual que en la Liga FILFA.'],
         ['Liga Fantástica — Estadísticas', 'Recoge métricas avanzadas por equipo: media de puntos, máximo y mínimo histórico, jornadas ganadas, desviación típica y contador de jornadas liderando la clasificación o en el podio.'],
-        ['Liga Fantástica — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga Fantástica. Se simula 10.000 veces el resto de la temporada (hasta la J38) a partir de la media y la desviación típica de cada equipo, dando más peso a las jornadas recientes (una jornada pesa la mitad cada 6 jornadas de antigüedad) y, con pocas jornadas jugadas, acercando cada equipo a la media de la liga. Verás el puesto esperado y la probabilidad de ser campeón, de terminar en el podio y de terminar último; pulsa un equipo para ver su probabilidad en cada puesto (en pantallas grandes aparece además la tabla completa). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones ni alineaciones futuras.'],
+        ['Liga Fantástica — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga Fantástica. Se simula 10.000 veces el resto de la temporada (hasta la J38) a partir de la media y la desviación típica de cada equipo, dando más peso a las jornadas recientes (una jornada pesa la mitad cada 6 jornadas de antigüedad). Como parte de cada media es suerte, se estima el nivel real de cada equipo comparando las diferencias entre equipos con lo que se explicaría solo por suerte: cuanto más igualada esté la liga y menos jornadas se hayan jugado, más se acerca cada equipo a la media de la liga, y ese nivel se simula con un margen de incertidumbre (no se da por seguro que todo siga igual). Verás el puesto esperado y la probabilidad de ser campeón, de terminar en el podio y de terminar último; pulsa un equipo para ver su probabilidad en cada puesto (en pantallas grandes aparece además la tabla completa). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones ni alineaciones futuras.'],
         ['Jugadores destacados', 'En Liga Fantástica → Estadísticas y en la ficha de cada equipo (pestaña Equipos) verás, para cada equipo: el jugador que más puntos le ha aportado (sin contar el doble del capitán), el que más veces ha sido titular (sin contar porterías), el que más veces ha estado en el once ideal estando alineado con ese equipo, el que más veces ha entrado como suplente y el que más veces ha sido sustituido (ambos por sustituciones automáticas) y el más rentable (puntos aportados por millón pagado, solo jugadores de la plantilla actual). Si hay empate se muestran todos. En Estadísticas también aparece el ranking de la liga de jugadores con más apariciones en el once ideal. Solo cuentan las jornadas cerradas por el admin, y los datos se actualizan cada vez que se cierra una jornada.'],
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
         ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],

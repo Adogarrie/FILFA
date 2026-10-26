@@ -12465,6 +12465,9 @@ function LogrosVista({ federacion, participantes }) {
         ? `Edad media: ${valorActual} años (objetivo: menos de ${siguienteTier}, con plantilla completa)`
         : `Edad media: ${valorActual} años (objetivo: ${siguienteTier} o más, con plantilla completa)`;
     }
+    if (cat === 'jornada_record') {
+      return `Tu mejor jornada: ${valorActual} pts (objetivo: ${siguienteTier} o más)`;
+    }
     if (cat === 'brecha_generacional') {
       return `Diferencia de edad actual: ${valorActual}/${siguienteTier} años`;
     }
@@ -12548,7 +12551,7 @@ function LogrosVista({ federacion, participantes }) {
                                           background: conseguido ? 'rgba(245,166,35,.18)' : 'var(--gris)',
                                           color: conseguido ? '#b7791f' : 'var(--texto2)',
                                           border: '1px solid ' + (conseguido ? 'rgba(245,166,35,.5)' : 'var(--borde)')}}>
-                              {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? 'Temporada' : t}
+                              {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? (def.etiquetaTemporada || 'Temporada') : t}
                             </span>
                           );
                         })}
@@ -12604,7 +12607,7 @@ function LogrosVista({ federacion, participantes }) {
                                                 background: conseguido ? 'rgba(245,166,35,.18)' : 'var(--gris)',
                                                 color: conseguido ? '#b7791f' : 'var(--texto2)',
                                                 border: '1px solid ' + (conseguido ? 'rgba(245,166,35,.5)' : 'var(--borde)')}}>
-                                    {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? 'Temp' : t}
+                                    {conseguido ? '🏆' : '🔒'} {t === 'temporada' ? (def.etiquetaTemporada || 'Temp') : t}
                                   </span>
                                 );
                               })}
@@ -14670,6 +14673,10 @@ function getVueltaInfo(jornada, jornadasBase, ptsV1, ptsV2, vueltasExtra) {
 // permanentemente en la tabla `logros` (ver supabase_logros.sql) — una
 // vez desbloqueado un tramo, nunca se borra aunque después se editen
 // los resultados que lo originaron.
+// Pechofrío: puntos fantasy (sin bonus de local) a partir de los cuales no
+// ganar el partido de Liga FILFA cuenta para el logro (estrictamente más).
+const PECHOFRIO_PTS_MIN = 53;
+
 const LOGROS_CATALOGO = {
   racha_victorias: {
     nombre: 'Racha ganadora', icono: '🔥',
@@ -14743,6 +14750,30 @@ const LOGROS_CATALOGO = {
     tiers: [1, 3, 5, 10, 15, 20, 30],
     desc: t => `${t} jornada${t == 1 ? '' : 's'} de Liga Fantástica ganada${t == 1 ? '' : 's'}`,
   },
+  jornada_record: {
+    nombre: 'Jornada de récord', icono: '🚀',
+    descripcion: 'La mejor puntuación conseguida por el equipo en una jornada de la Liga Fantástica.',
+    tiers: [60, 70, 80, 90, 100],
+    desc: t => `Una jornada con ${t} puntos o más`,
+  },
+  regularidad: {
+    nombre: 'Regularidad', icono: '📈',
+    descripcion: 'Jornadas seguidas de Liga Fantástica puntuando por encima de la media de la liga en esa jornada. "Todas": en todas las jornadas de la temporada.',
+    tiers: [3, 5, 10, 15, 20, 25, 30, 'temporada'], etiquetaTemporada: 'Todas',
+    desc: t => t === 'temporada' ? 'Por encima de la media en todas las jornadas de la temporada' : `${t} jornadas seguidas por encima de la media`,
+  },
+  matagigantes: {
+    nombre: 'Matagigantes', icono: '🗡️',
+    descripcion: 'Victorias en Liga FILFA contra el líder de tu división (el líder antes de jugarse esa jornada).',
+    tiers: [1, 3, 5],
+    desc: t => `${t} victoria${t == 1 ? '' : 's'} contra el líder`,
+  },
+  bestia_negra: {
+    nombre: 'Bestia negra', icono: '😈',
+    descripcion: 'Rivales de Liga FILFA a los que has ganado en todos los partidos que habéis jugado (al menos la ida y la vuelta). "Todos": a todos los rivales de tu división, al terminar tu calendario.',
+    tiers: [1, 3, 5, 7, 'temporada'], etiquetaTemporada: 'Todos',
+    desc: t => t === 'temporada' ? 'Bestia negra de todos los rivales de su división' : `Bestia negra de ${t} rival${t == 1 ? '' : 'es'}`,
+  },
   // ── Logros "de broma" ────────────────────────────────────────
   jugadores_negativos_jornada: {
     nombre: 'Jornada aciaga', icono: '💩',
@@ -14773,6 +14804,24 @@ const LOGROS_CATALOGO = {
     descripcion: 'Partidos consecutivos de Liga FILFA terminados en empate.',
     tiers: [3, 5, 10],
     desc: t => `${t} partidos seguidos empatados`,
+  },
+  antidoblete: {
+    nombre: 'Antidoblete', icono: '🙃',
+    descripcion: 'Ganar una jornada de la Liga Fantástica (mayor puntuación de la liga) y no ganar tu partido de Liga FILFA basado en esa jornada.',
+    tiers: [1],
+    desc: () => 'Ganó la jornada fantástica y no ganó su partido de Liga FILFA',
+  },
+  error_mister: {
+    nombre: 'Error del míster', icono: '🪑',
+    descripcion: 'Una jornada en la que los suplentes de tu alineación guardada suman más puntos que los titulares.',
+    tiers: [1],
+    desc: () => 'Los suplentes sumaron más puntos que los titulares',
+  },
+  pechofrio: {
+    nombre: 'Pechofrío', icono: '🥶',
+    descripcion: `Partidos de Liga FILFA sin ganar (empate o derrota) habiendo hecho más de ${PECHOFRIO_PTS_MIN} puntos fantasy (sin contar el bonus de local).`,
+    tiers: [1, 3, 5, 7],
+    desc: t => `${t} partido${t == 1 ? '' : 's'} sin ganar con más de ${PECHOFRIO_PTS_MIN} puntos`,
   },
   // ── Logros de composición de plantilla (nacionalidad/confederación) ──
   // Se evalúan contra la plantilla ACTUAL en el momento de recalcular
@@ -14827,6 +14876,12 @@ const LOGROS_CATALOGO = {
     tiers: [2],
     desc: t => `${t} jugadores de CONCACAF en plantilla`,
   },
+  corazon_club: {
+    nombre: 'Corazón de club', icono: '💙',
+    descripcion: 'El máximo de jugadores de un mismo equipo de LaLiga en la plantilla actual.',
+    tiers: [3, 4, 5],
+    desc: t => `${t} jugadores del mismo club en plantilla`,
+  },
   // ── Logros de edad (plantilla actual) ──
   // La edad se calcula con calcularEdad (fecha_nacimiento contra hoy) en el
   // momento de recalcular; los jugadores sin fecha de nacimiento no cuentan.
@@ -14879,6 +14934,147 @@ const LOGROS_CATALOGO = {
     desc: t => `${t} jornadas seguidas con alineación propia guardada`,
   },
 };
+
+// Métricas de Jornada de récord, Regularidad, Matagigantes, Bestia negra,
+// Antidoblete, Error del míster, Pechofrío y Corazón de club, comunes a
+// detectarLogros y progresoLogros (mismos `extra`, más `jornadaConfig`:
+// filas de h2h_jornada_config para saber qué jornada fantasy decide cada
+// jornada de Liga FILFA). Devuelve, por equipo:
+//  · serie[categoria]: evolución { valor, jornada } en orden cronológico,
+//    para detectar en qué jornada se alcanzó cada tramo;
+//  · actual[categoria]: valor vivo, para el progreso;
+//  · temporada[categoria]: jornada en que se cumplió el especial
+//    "Todas"/"Todos" (tier 'temporada'), si se ha cumplido.
+function metricasLogrosExtra(partidos, participantes, extra = {}) {
+  const { clasificacion = [], alineaciones = [], puntosJugador = [], jugadoresCat = [],
+          plantillas = [], jornadaConfig = [] } = extra;
+  const jugados = partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null);
+
+  // Liga Fantástica: puntos de cada equipo, media y máximo de cada jornada.
+  const ptsFant = {}, porJornada = {};
+  clasificacion.forEach(r => {
+    const v = Number(r.puntos_jornada);
+    ptsFant[`${r.participante_id}_${r.jornada}`] = v;
+    (porJornada[r.jornada] = porJornada[r.jornada] || []).push(v);
+  });
+  const jornadasF = Object.keys(porJornada).map(Number).sort((a, b) => a - b);
+  const mediaJ = {}, maxJ = {};
+  jornadasF.forEach(j => {
+    const a = porJornada[j];
+    mediaJ[j] = a.reduce((s, x) => s + x, 0) / a.length;
+    maxJ[j] = Math.max(...a);
+  });
+  const ptsJug = {};
+  puntosJugador.forEach(r => { ptsJug[`${r.jugador_id}_${r.jornada}`] = Number(r.pts) || 0; });
+  const jornadasConPts = new Set(puntosJugador.map(r => r.jornada));
+  const jfDe = {};
+  jornadaConfig.forEach(r => { if (r.jornada_fantasy) jfDe[`${r.jornada_h2h}_${r.division_id ?? ''}`] = r.jornada_fantasy; });
+
+  // Líder(es) de cada división ANTES de jugarse cada jornada de Liga FILFA
+  // (puntos, diferencia y goles a favor; los empatados en todo son colíderes).
+  const lideresAntes = {}, porDiv = {};
+  jugados.forEach(m => { const d = m.division_id ?? ''; (porDiv[d] = porDiv[d] || []).push(m); });
+  const cmpTabla = (a, b) => b.pts - a.pts || b.dif - a.dif || b.gf - a.gf;
+  Object.entries(porDiv).forEach(([div, ms]) => {
+    const tabla = {};
+    const fila = id => tabla[id] || (tabla[id] = { pts: 0, dif: 0, gf: 0 });
+    [...new Set(ms.map(m => m.jornada))].sort((a, b) => a - b).forEach(j => {
+      const filas = Object.entries(tabla);
+      if (filas.length) {
+        const mejor = filas.map(([, f]) => f).sort(cmpTabla)[0];
+        lideresAntes[`${div}_${j}`] = new Set(filas.filter(([, f]) => cmpTabla(f, mejor) === 0).map(([id]) => id));
+      }
+      ms.filter(m => m.jornada === j).forEach(m => {
+        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+        const L = fila(m.local_id), V = fila(m.visitante_id);
+        L.gf += gl; V.gf += gv; L.dif += gl - gv; V.dif += gv - gl;
+        if (gl > gv) L.pts += 3; else if (gl < gv) V.pts += 3; else { L.pts++; V.pts++; }
+      });
+    });
+  });
+
+  const jugCat = Object.fromEntries(jugadoresCat.map(j => [j.id, j]));
+  const out = {};
+  participantes.forEach(p => {
+    const serie = {}, actual = {}, temporada = {};
+    const anotar = (cat, valor, jornada) => { (serie[cat] = serie[cat] || []).push({ valor, jornada }); };
+
+    // ── Jornada de récord y Regularidad (Liga Fantástica) ──
+    let mejor = 0, racha = 0;
+    jornadasF.forEach(j => {
+      const v = ptsFant[`${p.id}_${j}`];
+      if (v === undefined) { racha = 0; return; }
+      mejor = Math.max(mejor, v);
+      anotar('jornada_record', v, j);
+      racha = v > mediaJ[j] ? racha + 1 : 0;
+      anotar('regularidad', racha, j);
+    });
+    actual.jornada_record = mejor;
+    actual.regularidad = racha;
+    if (jornadasF.length >= PREDICCION_JORNADAS_TOTALES && racha === jornadasF.length) {
+      temporada.regularidad = jornadasF[jornadasF.length - 1];
+    }
+
+    // ── Error del míster: suplentes de la alineación guardada > titulares ──
+    const alin = {};
+    alineaciones.filter(a => a.participante_id === p.id).forEach(a => {
+      const x = alin[a.jornada] || (alin[a.jornada] = { tit: 0, sup: 0, nSup: 0 });
+      const pts = ptsJug[`${a.jugador_id}_${a.jornada}`] || 0;
+      if (a.es_titular) x.tit += pts; else { x.sup += pts; x.nSup++; }
+    });
+    let errores = 0;
+    Object.keys(alin).map(Number).sort((a, b) => a - b).forEach(j => {
+      const x = alin[j];
+      if (jornadasConPts.has(j) && x.nSup > 0 && x.sup > x.tit) { errores++; anotar('error_mister', errores, j); }
+    });
+    actual.error_mister = errores;
+
+    // ── Liga FILFA: Matagigantes, Bestia negra, Pechofrío y Antidoblete ──
+    const propios = partidos.filter(m => m.local_id === p.id || m.visitante_id === p.id);
+    const misJugados = jugados.filter(m => m.local_id === p.id || m.visitante_id === p.id).sort((a, b) => a.jornada - b.jornada);
+    let mata = 0, pecho = 0, anti = 0;
+    // Bestia negra: rivales con al menos 2 partidos jugados y todos ganados.
+    const vsRival = {};
+    const bestias = () => Object.values(vsRival).filter(r => r.j >= 2 && r.g === r.j).length;
+    misJugados.forEach(m => {
+      const esLocal = m.local_id === p.id;
+      const rival = esLocal ? m.visitante_id : m.local_id;
+      const gf = Number(esLocal ? m.pts_local : m.pts_visitante);
+      const gc = Number(esLocal ? m.pts_visitante : m.pts_local);
+      const gano = gf > gc;
+      const lideres = lideresAntes[`${m.division_id ?? ''}_${m.jornada}`];
+      if (gano && lideres?.has(rival) && !lideres.has(p.id)) { mata++; anotar('matagigantes', mata, m.jornada); }
+      const r = vsRival[rival] || (vsRival[rival] = { j: 0, g: 0 });
+      r.j++; if (gano) r.g++;
+      anotar('bestia_negra', bestias(), m.jornada);
+      const fant = esLocal ? m.fantasy_local : m.fantasy_visitante;
+      if (!gano && fant != null && Number(fant) > PECHOFRIO_PTS_MIN) { pecho++; anotar('pechofrio', pecho, m.jornada); }
+      const jf = jfDe[`${m.jornada}_${m.division_id ?? ''}`];
+      const misPtsJf = jf ? ptsFant[`${p.id}_${jf}`] : undefined;
+      if (!gano && misPtsJf !== undefined && misPtsJf === maxJ[jf]) { anti++; anotar('antidoblete', anti, m.jornada); }
+    });
+    actual.matagigantes = mata;
+    actual.bestia_negra = bestias();
+    actual.pechofrio = pecho;
+    actual.antidoblete = anti;
+    const rivales = new Set(propios.map(m => m.local_id === p.id ? m.visitante_id : m.local_id));
+    if (propios.length && misJugados.length === propios.length && rivales.size && actual.bestia_negra === rivales.size) {
+      temporada.bestia_negra = misJugados[misJugados.length - 1].jornada;
+    }
+
+    // ── Corazón de club: máximo de jugadores de un mismo club (plantilla actual) ──
+    const porClub = {};
+    plantillas.filter(r => r.participante_id === p.id).forEach(r => {
+      const club = jugCat[r.jugador_id]?.equipo;
+      if (club) porClub[club] = (porClub[club] || 0) + 1;
+    });
+    actual.corazon_club = Math.max(0, ...Object.values(porClub));
+    anotar('corazon_club', actual.corazon_club, null);
+
+    out[p.id] = { serie, actual, temporada };
+  });
+  return out;
+}
 
 // Recorre h2h_partidos, clasificacion (Liga Fantástica), alineaciones,
 // puntos_jugador y sustituciones_auto, y devuelve, por equipo, TODOS los
@@ -15150,6 +15346,18 @@ function detectarLogros(partidos, participantes, extra = {}) {
     });
   });
 
+  // ── Récord, Regularidad, Matagigantes, Bestia negra, Antidoblete,
+  // Error del míster, Pechofrío y Corazón de club (metricasLogrosExtra) ──
+  const metricasExtra = metricasLogrosExtra(partidos, participantes, extra);
+  participantes.forEach(p => {
+    const { serie, actual, temporada } = metricasExtra[p.id];
+    Object.entries(serie).forEach(([cat, puntos]) => {
+      const visto = new Set();
+      puntos.forEach(({ valor, jornada }) => tocarTier(visto, p.id, cat, LOGROS_CATALOGO[cat].tiers, valor, jornada));
+    });
+    Object.entries(temporada).forEach(([cat, jornada]) => marcar(p.id, cat, 'temporada', actual[cat], jornada));
+  });
+
   // Dedupe: nos quedamos con la primera vez (jornada más baja) que se alcanzó cada tramo.
   const porClave = new Map();
   out.forEach(l => {
@@ -15208,6 +15416,7 @@ function progresoLogros(partidos, participantes, extra = {}) {
   const jornadasFantasticas = [...new Set(clasificacion.map(r => r.jornada))].sort((a, b) => a - b);
   const tieneAlineacionPropia = new Set(alineaciones.map(a => `${a.participante_id}_${a.jornada}`));
 
+  const metricasExtra = metricasLogrosExtra(partidos, participantes, extra);
   const out = {};
   participantes.forEach(p => {
     const jugados = partidos
@@ -15307,6 +15516,7 @@ function progresoLogros(partidos, participantes, extra = {}) {
       once_ideal_equipo: onceIdealPorEquipo[p.id] || 0,
       jugador_jornada: jugadorJornadaPorEquipo[p.id] || 0,
       puntualidad: curPuntual,
+      ...metricasExtra[p.id].actual,
     };
   });
   return out;
@@ -15649,7 +15859,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       const vacio = Promise.resolve({ data: [], error: null });
       const resultados = await Promise.all([
         obtenerTodasLasFilas(() => sb.from('h2h_partidos')
-          .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante')
+          .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
           .eq('federacion_id', federacion.id).order('id')),
         obtenerTodasLasFilas(() => sb.from('logros').select('participante_id, categoria, tier')
           .eq('federacion_id', federacion.id).order('id')),
@@ -15665,6 +15875,9 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
           .order('id')),
         partIds.length ? obtenerTodasLasFilas(() => sb.from('plantillas').select('jugador_id, participante_id')
           .in('participante_id', partIds).order('id')) : vacio,
+        // Qué jornada fantasy decide cada jornada de Liga FILFA (para Antidoblete).
+        sb.from('h2h_jornada_config').select('jornada_h2h, division_id, jornada_fantasy')
+          .eq('federacion_id', federacion.id),
       ]);
       // Con datos parciales se detectarían logros erróneos (y son permanentes):
       // ante cualquier fallo se aborta sin guardar nada.
@@ -15677,11 +15890,12 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
         return;
       }
       const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas },
-             { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }] = resultados;
+             { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }, { data: jornadaCfg }] = resultados;
       const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
       const extraLogros = {
         clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],
         sustitucionesAuto: sustsTodas || [], jugadoresCat: jugCatTodos || [], plantillas: plantsTodas || [],
+        jornadaConfig: jornadaCfg || [],
         maxJugadores: federacion?.max_jugadores ?? 14,
       };
       const detectados = detectarLogros(partidosTodos || [], participantes, extraLogros);

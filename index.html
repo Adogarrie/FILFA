@@ -3604,6 +3604,25 @@ function PuntosNecesarios({ tabla, n, zonas = [], titulo = '¿Cuántos puntos ha
   );
 }
 
+// Probabilidades 1·X·2 de un partido pendiente de la Liga FILFA (de la
+// última predicción): barra de tres colores y porcentajes debajo.
+function ProbabilidadPartido({ pL, pE, local, visitante }) {
+  const pV = Math.max(0, 100 - pL - pE);
+  const tramo = (p, color) => p > 0 && <div style={{width:`${p}%`, background:color}} />;
+  return (
+    <div title={`${local || 'Local'} gana: ${pL}% · Empate: ${pE}% · ${visitante || 'Visitante'} gana: ${pV}%`}
+         style={{marginTop:'.15rem'}}>
+      <div style={{display:'flex', height:5, borderRadius:3, overflow:'hidden', background:'var(--fondo-alt)'}}>
+        {tramo(pL, 'var(--verde)')}{tramo(pE, '#b0b8c4')}{tramo(pV, '#5b8fd1')}
+      </div>
+      <div style={{display:'flex', justifyContent:'space-between', gap:'.35rem', fontSize:'.64rem',
+                   fontWeight:600, color:'var(--texto2)', marginTop:'.1rem', fontVariantNumeric:'tabular-nums'}}>
+        <span>1 · {pL}%</span><span>X · {pE}%</span><span>2 · {pV}%</span>
+      </div>
+    </div>
+  );
+}
+
 // Mapa de calor completo equipos × puestos. En el móvil se desliza en
 // horizontal con la columna del equipo fija a la izquierda.
 function MapaCalorPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId, zonas = [], titulo = 'Probabilidad por puesto' }) {
@@ -4795,7 +4814,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
 
 
 // ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
-function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
+function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador }) {
   const [jornada, setJornada] = useState(1);
   const [jugadores, setJugadores] = useState([]);
   const [ptsJug, setPtsJug]   = useState({});
@@ -5122,6 +5141,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre }) {
       setSnapshotsMap(sm);
     }
     actualizarEstadisticas(); // jornada nueva en el histórico de jugadores destacados
+    // Predicción (solo el admin) y crónica de la jornada en el Tablón, en segundo plano.
+    trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin: !isModerador });
   };
 
   const reabrirJornada = async () => {
@@ -6482,7 +6503,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
     admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
-    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆',
+    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆', cronica: '📰',
   };
 
   const fmtFecha = ts => {
@@ -6628,18 +6649,20 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
                                                     : a.tipo === 'mensaje_usuario' ? 'rgba(99,179,237,.07)'
                                                     : a.tipo === 'mensaje_club'    ? 'rgba(13,110,253,.06)'
                                                     : a.tipo === 'logro'           ? 'rgba(245,166,35,.08)'
+                                                    : a.tipo === 'cronica'         ? 'rgba(63,128,41,.05)'
                                                     : 'var(--gris)',
                                           border: a.tipo === 'mensaje_admin'   ? '1.5px solid var(--verde)'
                                                 : a.tipo === 'reinicio'        ? '1.5px solid #dc3545'
                                                 : a.tipo === 'mensaje_usuario' ? '1.5px solid rgba(99,179,237,.5)'
                                                 : a.tipo === 'mensaje_club'    ? '1.5px solid rgba(13,110,253,.4)'
                                                 : a.tipo === 'logro'           ? '1.5px solid rgba(245,166,35,.5)'
+                                                : a.tipo === 'cronica'         ? '1.5px solid rgba(63,128,41,.35)'
                                                 : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
                     <div style={{display:'flex', gap:'.75rem', alignItems:'flex-start'}}>
                       <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
                       <div style={{flex:1}}>
-                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario')
+                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario' || a.tipo === 'cronica')
                           ? <div className="md-content"
                                  dangerouslySetInnerHTML={renderMd(a.texto)} />
                           : <div style={{fontWeight: a.tipo === 'reinicio' ? 600 : 500,
@@ -11358,7 +11381,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
   );
 }
 
-function AdminPtsGroup({ participantes, federacion, actorNombre }) {
+function AdminPtsGroup({ participantes, federacion, actorNombre, isModerador }) {
   const [sub, setSub] = useState('pts');
   return (
     <div>
@@ -11366,7 +11389,7 @@ function AdminPtsGroup({ participantes, federacion, actorNombre }) {
         <button className={`tab ${sub==='pts'?'active':''}`} onClick={() => setSub('pts')}>Pts Jugadores</button>
         <button className={`tab ${sub==='nojugo'?'active':''}`} onClick={() => setSub('nojugo')}>No Jugaron</button>
       </div>
-      {sub === 'pts'    && <AdminPtsJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {sub === 'pts'    && <AdminPtsJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} isModerador={isModerador} />}
       {sub === 'nojugo' && <AdminNoJugo federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
     </div>
   );
@@ -11976,7 +11999,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       </div>
       {subtab === 'federacion'  && <AdminFederacion federacion={federacion} onFederacionUpdate={onFederacionUpdate} participantes={participantes} onParticipantesChange={onParticipantesChange} isModerador={isModerador} actorNombre={actorNombre} />}
       {subtab === 'equipos'     && <AdminEquipos participantes={participantes} federacion={federacion} onParticipantesChange={onParticipantesChange} actorNombre={actorNombre} />}
-      {subtab === 'ptsjug'      && <AdminPtsGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'ptsjug'      && <AdminPtsGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} isModerador={isModerador} />}
       {subtab === 'presupuestos'&& <AdminPresupuestos participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
       {subtab === 'ajustes'     && <AdminAjustesGroup federacion={federacion} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
       {subtab === 'mercado'     && <AdminMercadoGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
@@ -13504,6 +13527,455 @@ function LogrosResumenTable({ rowsParticipantes, logros }) {
   );
 }
 
+// Orden de criterios de desempate configurado por el admin (con fallback a
+// los 4 por defecto, y añadiendo al final cualquiera que falte por incluir).
+function criteriosDesempateH2H(federacion) {
+  const ALL = ['h2h', 'gf', 'dif', 'pf'];
+  try {
+    const parsed = JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif","pf"]');
+    return [...parsed, ...ALL.filter(c => !parsed.includes(c))];
+  } catch { return ALL; }
+}
+
+// Aplica los criterios de desempate configurados sobre un conjunto de filas
+// de estadísticas ya calculadas (rows), usando msH2H (los partidos —jugados
+// o no— del ámbito correspondiente) para resolver el criterio "h2h".
+// Compartido por computeClasif, computeClasifNeutro y computeClasifSide para
+// que las 4 vistas de clasificación se comporten de forma consistente, y por
+// la predicción y la crónica de la Liga FILFA.
+function ordenarConDesempate(rows, msH2H, criteriosOrden, jEnd = null) {
+  // Mini-liga h2h: puntos y goles, solo de los partidos entre los ids dados.
+  // Si jEnd no es null, se ignoran los partidos de jornadas posteriores: para
+  // ese corte en el tiempo, todavía no han sucedido (aunque msH2H incluya ya
+  // el calendario completo de la temporada para poder detectarlos abajo).
+  const calcH2H = (ids) => {
+    const idSet = new Set(ids);
+    const h = {};
+    ids.forEach(id => { h[id] = { pts: 0, gf: 0, gc: 0 }; });
+    msH2H.forEach(m => {
+      if (jEnd !== null && m.jornada > jEnd) return;
+      if (m.pts_local === null || m.pts_visitante === null) return;
+      if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
+      const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+      h[m.local_id].gf += gl; h[m.local_id].gc += gv;
+      h[m.visitante_id].gf += gv; h[m.visitante_id].gc += gl;
+      if (gl > gv)        { h[m.local_id].pts     += 3; }
+      else if (gl === gv) { h[m.local_id].pts     += 1; h[m.visitante_id].pts += 1; }
+      else                { h[m.visitante_id].pts += 3; }
+    });
+    return h;
+  };
+
+  // ¿Han completado los equipos del grupo TODOS sus enfrentamientos directos
+  // programados entre sí (ida y vuelta / todas las vueltas configuradas)?
+  // Si falta alguno por jugar, el average particular no es un dato
+  // comparable entre todos y no se debe usar para desempatar este grupo.
+  // Un partido de una jornada posterior a jEnd cuenta como pendiente aunque
+  // ya tenga resultado real (aún no le tocaba en el corte que se está viendo).
+  const h2hCompleto = (ids) => {
+    const idSet = new Set(ids);
+    return msH2H.every(m => {
+      if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return true;
+      if (jEnd !== null && m.jornada > jEnd) return false;
+      return m.pts_local !== null && m.pts_visitante !== null;
+    });
+  };
+
+  // Resuelve el average particular en sus 3 capas —puntos, diferencia de
+  // goles y goles a favor, todo dentro de los enfrentamientos directos—.
+  // Si tras las 3 capas sigue habiendo empate, continúa con el resto de
+  // criterios configurados.
+  const resolverH2H = (group, rest) => {
+    const h = calcH2H(group.map(r => r.id));
+    const capas = [r => h[r.id].pts, r => h[r.id].gf - h[r.id].gc, r => h[r.id].gf];
+    const aplicarCapas = (grupo, idx) => {
+      if (grupo.length <= 1) return grupo;
+      if (idx >= capas.length) return sortGroup(grupo, rest);
+      const byScore = {};
+      grupo.forEach(r => { const s = capas[idx](r); (byScore[s] = byScore[s] || []).push(r); });
+      const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
+      if (scores.length === 1) return aplicarCapas(grupo, idx + 1);
+      const out = [];
+      scores.forEach(s => out.push(...aplicarCapas(byScore[s], idx + 1)));
+      return out;
+    };
+    return aplicarCapas(group, 0);
+  };
+
+  // Ordena un grupo de equipos empatados de forma recursiva, criterio a
+  // criterio. Si un criterio separa a algunos pero no a todos, los
+  // sub-grupos que sigan empatados continúan con los criterios restantes.
+  const sortGroup = (group, criterios) => {
+    if (group.length <= 1 || !criterios.length) return group;
+    const [first, ...rest] = criterios;
+
+    if (first === 'h2h') {
+      // Enfrentamientos directos incompletos → no es comparable para todo
+      // el grupo todavía. Se pospone al final de la lista por si un
+      // criterio posterior reduce el grupo a un subconjunto que sí los
+      // tenga completos entre sí (y entonces sí se le vuelve a dar opción).
+      if (!h2hCompleto(group.map(r => r.id))) {
+        if (rest.length === 0) return group;
+        return sortGroup(group, [...rest, 'h2h']);
+      }
+      return resolverH2H(group, rest);
+    }
+
+    let scoreOf;
+    if      (first === 'gf')  scoreOf = r => r.gf;
+    else if (first === 'dif') scoreOf = r => r.gf - r.gc;
+    else if (first === 'pf')  scoreOf = r => r.pf;
+    else                      return sortGroup(group, rest);
+
+    const byScore = {};
+    group.forEach(r => { const s = scoreOf(r); (byScore[s] = byScore[s] || []).push(r); });
+    const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
+
+    // Este criterio no separa a nadie → pasar al siguiente
+    if (scores.length === 1) return sortGroup(group, rest);
+
+    // Hay separación: ordenar cada sub-grupo con los criterios restantes
+    const out = [];
+    scores.forEach(s => out.push(...sortGroup(byScore[s], rest)));
+    return out;
+  };
+
+  const byPts = {};
+  rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
+
+  const result = [];
+  Object.keys(byPts).map(Number).sort((a, b) => b - a).forEach(pts => {
+    result.push(...sortGroup(byPts[pts], criteriosOrden));
+  });
+  return result;
+}
+
+// ── Predicción de la clasificación final (Liga FILFA) ──────────
+// Simula cada partido pendiente del calendario: los puntos fantasy de los
+// dos equipos se sortean según su nivel (estimarNivelesFantasy, con los
+// puntos de la Liga Fantástica), el local suma el bonus de esa vuelta y se
+// pasan a goles con el baremo de la liga. Los partidos ya jugados se
+// mantienen y la clasificación final se ordena con ordenarConDesempate
+// (mismos criterios que la tabla real). También cuenta, para cada partido
+// pendiente, cuántas veces gana el local, empatan o gana el visitante.
+// ctx = { federacion, participantes, partidos, vueltasExtra, baremo }.
+function simularDivisionH2H(ctx, niveles, divId, normal) {
+  const { federacion, participantes, partidos, vueltasExtra, baremo } = ctx;
+  const ptsV1 = federacion?.h2h_pts_local_v1 ?? 5;
+  const ptsV2 = federacion?.h2h_pts_local_v2 ?? 5;
+  const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+  const ids = equips.map(p => p.id);
+  const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
+  const nivelDe = Object.fromEntries(niveles.equipos.map(e => [e.id, e]));
+  const vacio = () => ({ pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 });
+  const sumar = (s, gf, gc, ff, fc) => {
+    s.pj++; s.gf += gf; s.gc += gc;
+    if (ff != null && fc != null) { s.pf += ff; s.pc += fc; }
+    if (gf > gc) { s.pg++; s.pts += 3; } else if (gf === gc) { s.pe++; s.pts++; } else s.pp++;
+  };
+  // Estadísticas reales de los partidos ya jugados (igual que computeClasif).
+  const base = ids.map(vacio);
+  const msBase = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+  // Copias mutables: los partidos pendientes se rellenan en cada simulación
+  // (ordenarConDesempate las lee para el enfrentamiento directo).
+  const msSim = msBase.map(m => ({ ...m }));
+  const pendientes = [];
+  msSim.forEach(m => {
+    const iL = idx[m.local_id], iV = idx[m.visitante_id];
+    if (iL === undefined || iV === undefined) return;
+    if (m.pts_local !== null && m.pts_visitante !== null) {
+      const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+      const conFantasy = m.fantasy_local != null && m.fantasy_visitante != null;
+      const fl = conFantasy ? Number(m.fantasy_local) : null, fv = conFantasy ? Number(m.fantasy_visitante) : null;
+      sumar(base[iL], gl, gv, fl, fv); sumar(base[iV], gv, gl, fv, fl);
+    } else {
+      const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+      const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, veDiv);
+      pendientes.push({ m, iL, iV, bonus: Number(ptsLocal) || 0 });
+    }
+  });
+  const n = ids.length;
+  const eqs = ids.map(id => nivelDe[id] || { nivel: niveles.mediaLiga, margen: Math.sqrt(niveles.tau2), sd: Math.sqrt(niveles.s2) });
+  const conteo = ids.map(() => new Array(n).fill(0));
+  const sumaPts = new Float64Array(n), sumaGF = new Float64Array(n), sumaGC = new Float64Array(n);
+  const ptsSim = ids.map(() => new Uint16Array(PREDICCION_SIMULACIONES));
+  const puestoSim = ids.map(() => new Uint8Array(PREDICCION_SIMULACIONES));
+  const criterios = criteriosDesempateH2H(federacion);
+  const ganaLocal = new Uint32Array(pendientes.length), empate = new Uint32Array(pendientes.length);
+  const nivelSim = new Float64Array(n);
+  // Puntos fantasy enteros (el baremo va por tramos de enteros).
+  const puntos = i => Math.max(0, Math.round(nivelSim[i] + eqs[i].sd * normal()));
+  for (let s = 0; s < PREDICCION_SIMULACIONES; s++) {
+    for (let i = 0; i < n; i++) nivelSim[i] = eqs[i].nivel + eqs[i].margen * normal(); // nivel real en esta temporada simulada
+    const rows = ids.map((id, i) => ({ id, ...base[i] }));
+    pendientes.forEach(({ m, iL, iV, bonus }, k) => {
+      const fl = puntos(iL), fv = puntos(iV);
+      const gl = ptsToGoles(fl + bonus, baremo), gv = ptsToGoles(fv, baremo);
+      m.pts_local = gl; m.pts_visitante = gv; m.fantasy_local = fl; m.fantasy_visitante = fv;
+      if (gl > gv) ganaLocal[k]++; else if (gl === gv) empate[k]++;
+      sumar(rows[iL], gl, gv, fl, fv); sumar(rows[iV], gv, gl, fv, fl);
+    });
+    ordenarConDesempate(rows, msSim, criterios).forEach((r, puesto) => {
+      const i = idx[r.id];
+      conteo[i][puesto]++; sumaPts[i] += r.pts; sumaGF[i] += r.gf; sumaGC[i] += r.gc;
+      ptsSim[i][s] = r.pts; puestoSim[i][s] = puesto;
+    });
+  }
+  const resumen = resumirPuntosSimulados(ptsSim, puestoSim, true);
+  return {
+    division_id: divId,
+    pendientes: pendientes.length,
+    equipos: ids.map((id, i) => ({
+      id, nombre: equips[i].nombre,
+      pts: base[i].pts, pj: base[i].pj,
+      pts_esperados: redondear1(sumaPts[i] / PREDICCION_SIMULACIONES),
+      pts_moda: resumen.equipos[i].moda, pts_p10: resumen.equipos[i].p10, pts_p90: resumen.equipos[i].p90,
+      gf_esperados: redondear1(sumaGF[i] / PREDICCION_SIMULACIONES),
+      gc_esperados: redondear1(sumaGC[i] / PREDICCION_SIMULACIONES),
+      media: redondear1(eqs[i].nivel), margen: redondear1(eqs[i].margen), sd: redondear1(eqs[i].sd),
+      esperado: puestoEsperado(conteo[i]),
+      conteo: conteo[i],
+    })),
+    puntos_puesto: resumen.tabla,
+    // Partido pendiente → [% gana el local, % empate] (el visitante, el resto).
+    prob_partidos: Object.fromEntries(pendientes.map(({ m }, k) => [m.id, [
+      Math.round(ganaLocal[k] / PREDICCION_SIMULACIONES * 100), Math.round(empate[k] / PREDICCION_SIMULACIONES * 100)]])),
+  };
+}
+
+
+// Puntos fantasy de toda la temporada de los equipos dados (paginado).
+function leerPuntosFantasy(participantes) {
+  return obtenerTodasLasFilas(() => sb.from('clasificacion')
+    .select('participante_id, jornada, puntos_jornada')
+    .in('participante_id', participantes.map(p => p.id))
+    .order('participante_id').order('jornada'));
+}
+
+// Predicción completa de la Liga FILFA (la usan el botón de LigaH2H y el
+// cálculo de jornada del admin). `partidos` = calendario completo con los
+// resultados ya jugados; `clas` = puntos fantasy de la temporada. Devuelve
+// el objeto que se guarda en prediccion_h2h, o null si aún no hay puntos.
+function calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas }) {
+  const niveles = estimarNivelesFantasy(clas || [], participantes);
+  if (!niveles) return null;
+  const normal = crearNormal();
+  const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))];
+  const jugados = partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null);
+  const ctx = { federacion, participantes, partidos, vueltasExtra: vueltasExtra || [], baremo };
+  return {
+    calculada_at: new Date().toISOString(), modelo: 2,
+    simulaciones: PREDICCION_SIMULACIONES, vida_media: PREDICCION_VIDA_MEDIA,
+    total_partidos: partidos.length, jugados: jugados.length,
+    ultima_jornada_h2h: jugados.length ? Math.max(...jugados.map(m => m.jornada)) : 0,
+    ultima_jornada_fantasy: niveles.ultima,
+    divisiones: (divIds.length ? divIds : [null]).map(d => simularDivisionH2H(ctx, niveles, d, normal)),
+  };
+}
+
+// ── Crónica automática de la jornada (Tablón, tipo 'cronica') ──────
+// Se publica al cerrar una jornada de la Liga Fantástica y al calcular una
+// jornada de la Liga FILFA, una sola vez por jornada (al re-abrir y volver a
+// cerrar no se repite). Antes, si quien cierra es el admin, se recalcula la
+// predicción correspondiente (la BD no deja hacerlo a los moderadores).
+const mdEsc = t => String(t ?? '').replace(/([\\`*_[\]#|<>])/g, '\\$1');
+const fmtPtsCronica = x => Number(x).toLocaleString('es-ES', { maximumFractionDigits: 1 });
+const CRONICA_SORPRESA_MAX = 30; // % máximo que tenía el resultado para contarlo como sorpresa
+const CRONICA_RACHA_MIN    = 3;  // victorias o derrotas seguidas para mencionarlas
+const CRONICA_GOLEADA_MIN  = 3;  // diferencia de goles para destacar la goleada
+
+async function cronicaYaPublicada(federacionId, cabecera) {
+  const { data } = await sb.from('anuncios').select('id')
+    .eq('federacion_id', federacionId).eq('tipo', 'cronica').like('texto', `${cabecera}%`).limit(1);
+  return !!data?.length;
+}
+
+// Clasificación general de la Liga Fantástica tras una jornada: [[id, pts]] de mayor a menor.
+function generalFantasy(participantes, clas, hastaJornada) {
+  const t = Object.fromEntries(participantes.map(p => [p.id, 0]));
+  clas.forEach(r => { if (r.jornada <= hastaJornada && t[r.participante_id] !== undefined) t[r.participante_id] += Number(r.puntos_jornada); });
+  return Object.entries(t).sort((a, b) => b[1] - a[1]);
+}
+
+// Texto (Markdown) de la crónica de una jornada de la Liga Fantástica.
+// `snapshots` = alineaciones archivadas al cerrar (para el mejor jugador);
+// `pred` = predicción recién recalculada (opcional, para el favorito).
+function textoCronicaFantasy({ cabecera, jornada, participantes, clas, snapshots, pred }) {
+  const nombre = id => mdEsc(participantes.find(p => p.id === id)?.nombre || '—');
+  const ptsJ = clas.filter(r => r.jornada === jornada && participantes.some(p => p.id === r.participante_id))
+    .map(r => ({ id: r.participante_id, pts: Number(r.puntos_jornada) })).sort((a, b) => b.pts - a.pts);
+  if (!ptsJ.length) return null;
+  const lineas = [cabecera, ''];
+  const max = ptsJ[0].pts, min = ptsJ[ptsJ.length - 1].pts;
+  const siguientes = ptsJ.filter(r => r.pts < max).slice(0, 2);
+  lineas.push(`🥇 **Ganador de la jornada:** ${ptsJ.filter(r => r.pts === max).map(r => nombre(r.id)).join(' y ')} con ${fmtPtsCronica(max)} pts` +
+    (siguientes.length ? ` (después, ${siguientes.map(r => `${nombre(r.id)} con ${fmtPtsCronica(r.pts)}`).join(' y ')})` : ''));
+  if (ptsJ.length > 2 && min < max) {
+    lineas.push(`📉 **Farolillo rojo:** ${ptsJ.filter(r => r.pts === min).map(r => nombre(r.id)).join(' y ')} con ${fmtPtsCronica(min)} pts`);
+  }
+  lineas.push(`📊 **Media de la jornada:** ${fmtPtsCronica(Math.round(ptsJ.reduce((s, r) => s + r.pts, 0) / ptsJ.length * 10) / 10)} pts`);
+  let mejor = null;
+  (snapshots || []).forEach(sn => (sn.datos || []).forEach(d => {
+    if (d.jugo && (!mejor || Number(d.pts) > mejor.pts)) mejor = { nombre: d.nombre, equipo: d.equipo_real, pts: Number(d.pts), pid: sn.participante_id };
+  }));
+  if (mejor && mejor.pts > 0) {
+    lineas.push(`⭐ **Mejor jugador alineado:** ${mdEsc(mejor.nombre)} (${mdEsc(mejor.equipo)}), ${fmtPtsCronica(mejor.pts)} pts para ${nombre(mejor.pid)}`);
+  }
+  const ahora = generalFantasy(participantes, clas, jornada);
+  const antes = clas.some(r => r.jornada < jornada) ? generalFantasy(participantes, clas, jornada - 1) : null;
+  const [lider, ptsLider] = ahora[0];
+  lineas.push(`👑 **Líder:** ${nombre(lider)} con ${fmtPtsCronica(ptsLider)} pts` +
+    (ahora[1] ? (ptsLider > ahora[1][1] ? `, ${fmtPtsCronica(ptsLider - ahora[1][1])} más que ${nombre(ahora[1][0])}` : `, empatado a puntos con ${nombre(ahora[1][0])}`) : '') +
+    (antes && antes[0][0] !== lider ? ' · ¡nuevo líder!' : ''));
+  if (antes) {
+    const posAntes = Object.fromEntries(antes.map(([id], i) => [id, i + 1]));
+    let subida = null;
+    ahora.forEach(([id], i) => {
+      const sube = posAntes[id] - (i + 1);
+      if (sube >= 2 && (!subida || sube > subida.sube)) subida = { id, sube, de: posAntes[id], a: i + 1 };
+    });
+    if (subida) lineas.push(`📈 **Mayor subida:** ${nombre(subida.id)}, del ${subida.de}º al ${subida.a}º`);
+  }
+  if (pred?.equipos?.length) {
+    const fav = pred.equipos.filter(e => participantes.some(p => p.id === e.id)).sort((a, b) => b.conteo[0] - a.conteo[0])[0];
+    if (fav) lineas.push(`🔮 **Favorito al título:** ${nombre(fav.id)} (${pctPrediccion(fav.conteo[0], pred.simulaciones)})`);
+  }
+  return lineas.join('  \n');
+}
+
+// Tras cerrar una jornada de la Liga Fantástica (en segundo plano: un fallo
+// aquí no afecta al cierre). Una sola lectura de los puntos de la temporada.
+async function trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin }) {
+  try {
+    const { data: clas, error } = await leerPuntosFantasy(participantes);
+    if (error) { console.error('[Crónica] Error al leer los puntos:', error.message); return; }
+    let pred = null;
+    if (esAdmin) {
+      pred = calcularPrediccionFantasy(clas || [], participantes);
+      const err = pred && await guardarPrediccion(federacion.id, 'prediccion', pred);
+      if (err) { console.error('[Predicción] No se pudo guardar:', err); pred = null; }
+    }
+    const cabecera = `**Crónica de la J${jornada} · Liga Fantástica**`;
+    if (await cronicaYaPublicada(federacion.id, cabecera)) return;
+    const texto = textoCronicaFantasy({ cabecera, jornada, participantes, clas: clas || [], snapshots, pred });
+    if (texto) await publicar(federacion.id, 'cronica', texto, null);
+  } catch (e) { console.error('[Crónica] Error:', e); }
+}
+
+// Texto (Markdown) de la crónica de una jornada de la Liga FILFA, por
+// división. `partidos` = calendario completo con los resultados de esta
+// jornada ya puestos; `predAntes` = predicción anterior a la jornada (para
+// la sorpresa); `predNueva` = la recién recalculada (para el favorito).
+function textoCronicaH2H({ cabecera, federacion, jornada, participantes, partidos, divisiones, predAntes, predNueva }) {
+  const nombre = id => mdEsc(participantes.find(p => p.id === id)?.nombre || '—');
+  const jugado = m => m.pts_local !== null && m.pts_visitante !== null;
+  const probAntes = Object.assign({}, ...(predAntes?.divisiones || []).map(d => d.prob_partidos || {}));
+  const criterios = criteriosDesempateH2H(federacion);
+  const divs = [...new Set(partidos.filter(m => m.jornada === jornada).map(m => m.division_id ?? null))]
+    .sort((a, b) => (a ?? 0) - (b ?? 0));
+  const lineas = [cabecera];
+  divs.forEach(div => {
+    const ms = partidos.filter(m => m.jornada === jornada && (m.division_id ?? null) === div && jugado(m));
+    if (!ms.length) return;
+    lineas.push('');
+    if (div != null) lineas.push(`**${mdEsc(divisiones.find(d => d.id === div)?.nombre || `División ${div}`)}**`);
+    lineas.push(`⚽ ${ms.map(m => `${nombre(m.local_id)} ${m.pts_local}-${m.pts_visitante} ${nombre(m.visitante_id)}`).join(' · ')}`);
+
+    const goleada = ms.map(m => ({ m, d: Math.abs(m.pts_local - m.pts_visitante) })).sort((a, b) => b.d - a.d)[0];
+    if (goleada.d >= CRONICA_GOLEADA_MIN) {
+      const m = goleada.m, ganaL = m.pts_local > m.pts_visitante;
+      lineas.push(`💥 **Mayor goleada:** ${nombre(ganaL ? m.local_id : m.visitante_id)} ${Math.max(m.pts_local, m.pts_visitante)}-${Math.min(m.pts_local, m.pts_visitante)} a ${nombre(ganaL ? m.visitante_id : m.local_id)}`);
+    }
+
+    let sorpresa = null;
+    ms.forEach(m => {
+      const p = probAntes[m.id];
+      if (!p) return;
+      const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+      const pRes = gl > gv ? p[0] : gl === gv ? p[1] : 100 - p[0] - p[1];
+      if (!sorpresa || pRes < sorpresa.p) sorpresa = { m, p: pRes, gl, gv };
+    });
+    if (sorpresa && sorpresa.p <= CRONICA_SORPRESA_MAX) {
+      const { m, p, gl, gv } = sorpresa;
+      lineas.push(gl === gv
+        ? `😱 **Sorpresa:** ${nombre(m.local_id)} y ${nombre(m.visitante_id)} empataron (solo un ${p}% de probabilidad)`
+        : `😱 **Sorpresa:** ${nombre(gl > gv ? m.local_id : m.visitante_id)} ganó a ${nombre(gl > gv ? m.visitante_id : m.local_id)} con solo un ${p}% de probabilidad`);
+    }
+
+    // Clasificación tras la jornada (y antes, para el cambio de líder), con
+    // los criterios de desempate reales.
+    const msDiv = partidos.filter(m => (m.division_id ?? null) === div);
+    const ids = participantes.filter(p => div == null || p.division_id === div).map(p => p.id)
+      .filter(id => msDiv.some(m => m.local_id === id || m.visitante_id === id));
+    const clasifHasta = hasta => {
+      const t = Object.fromEntries(ids.map(id => [id, { id, pts: 0, gf: 0, gc: 0, pf: 0 }]));
+      msDiv.forEach(m => {
+        if (m.jornada > hasta || !jugado(m) || !t[m.local_id] || !t[m.visitante_id]) return;
+        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+        const L = t[m.local_id], V = t[m.visitante_id];
+        L.gf += gl; L.gc += gv; V.gf += gv; V.gc += gl;
+        L.pf += Number(m.fantasy_local) || 0; V.pf += Number(m.fantasy_visitante) || 0;
+        if (gl > gv) L.pts += 3; else if (gl < gv) V.pts += 3; else { L.pts++; V.pts++; }
+      });
+      return ordenarConDesempate(Object.values(t), msDiv, criterios, hasta);
+    };
+    const ahora = clasifHasta(jornada);
+    const jAnterior = Math.max(0, ...msDiv.filter(m => m.jornada < jornada && jugado(m)).map(m => m.jornada));
+    const liderAntes = jAnterior ? clasifHasta(jAnterior)[0]?.id : null;
+    if (ahora[0]) {
+      lineas.push(`👑 **Líder:** ${nombre(ahora[0].id)} con ${ahora[0].pts} pts` +
+        (ahora[1] ? (ahora[0].pts > ahora[1].pts ? `, ${ahora[0].pts - ahora[1].pts} más que ${nombre(ahora[1].id)}` : `, empatado a puntos con ${nombre(ahora[1].id)} (por desempate)`) : '') +
+        (liderAntes && liderAntes !== ahora[0].id ? ' · ¡nuevo líder!' : ''));
+    }
+
+    // Rachas vivas (incluyen el partido de esta jornada).
+    const rachas = [];
+    ids.forEach(id => {
+      const suyos = msDiv.filter(m => jugado(m) && m.jornada <= jornada && (m.local_id === id || m.visitante_id === id))
+        .sort((a, b) => b.jornada - a.jornada);
+      if (!suyos.length || suyos[0].jornada !== jornada) return;
+      const res = m => { const gf = m.local_id === id ? m.pts_local : m.pts_visitante, gc = m.local_id === id ? m.pts_visitante : m.pts_local; return gf > gc ? 'G' : gf < gc ? 'P' : 'E'; };
+      const tipo = res(suyos[0]);
+      if (tipo === 'E') return;
+      let n = 0;
+      for (const m of suyos) { if (res(m) !== tipo) break; n++; }
+      if (n >= CRONICA_RACHA_MIN) rachas.push(tipo === 'G' ? `🔥 ${nombre(id)} suma ${n} victorias seguidas` : `🧊 ${nombre(id)} encadena ${n} derrotas seguidas`);
+    });
+    if (rachas.length) lineas.push(rachas.join(' · '));
+
+    const predDiv = predNueva?.divisiones?.find(d => (d.division_id ?? null) === div);
+    if (predDiv?.equipos?.length) {
+      const fav = [...predDiv.equipos].sort((a, b) => b.conteo[0] - a.conteo[0])[0];
+      lineas.push(`🔮 **Favorito al título:** ${nombre(fav.id)} (${pctPrediccion(fav.conteo[0], predNueva.simulaciones)})`);
+    }
+  });
+  return lineas.length > 1 ? lineas.join('  \n') : null;
+}
+
+// Tras calcular una jornada de la Liga FILFA (en segundo plano). `partidos`
+// = calendario completo con los resultados recién calculados.
+async function trasCalcularJornadaH2H({ federacion, participantes, jornada, partidos, vueltasExtra, baremo, divisiones, esAdmin }) {
+  try {
+    const cabecera = `**Crónica de la J${jornada} · Liga FILFA**`;
+    const yaPublicada = await cronicaYaPublicada(federacion.id, cabecera);
+    // Predicción anterior (para la sorpresa): se lee antes de sustituirla.
+    const predAntes = yaPublicada ? null : (await cargarPrediccion(federacion.id, 'prediccion_h2h', true)).prediccion;
+    let predNueva = null;
+    if (esAdmin) {
+      const { data: clas, error } = await leerPuntosFantasy(participantes);
+      if (error) console.error('[Predicción] Error al leer los puntos:', error.message);
+      else {
+        predNueva = calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas });
+        const err = predNueva && await guardarPrediccion(federacion.id, 'prediccion_h2h', predNueva);
+        if (err) { console.error('[Predicción] No se pudo guardar:', err); predNueva = null; }
+      }
+    }
+    if (yaPublicada) return;
+    const texto = textoCronicaH2H({ cabecera, federacion, jornada, participantes, partidos, divisiones, predAntes, predNueva });
+    if (texto) await publicar(federacion.id, 'cronica', texto, null);
+  } catch (e) { console.error('[Crónica] Error:', e); }
+}
+
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
 function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
   const [tab,              setTab]             = useState('clasificacion');
@@ -13523,8 +13995,9 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
     catch { return BAREMO_DEFAULT; }
   }, [federacion?.h2h_baremo]);
 
+  // También en el Calendario, para las probabilidades 1·X·2 de los partidos pendientes.
   useEffect(() => {
-    if (!sb || tab !== 'prediccion' || !federacion?.id) return;
+    if (!sb || (tab !== 'prediccion' && tab !== 'calendario') || !federacion?.id) return;
     let vivo = true;
     cargarPrediccion(federacion.id, 'prediccion_h2h').then(r => { if (vivo) setPredH2H(r); });
     return () => { vivo = false; };
@@ -13570,133 +14043,16 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p]));
   const jornadas = [...new Set(partidos.map(p => p.jornada))].sort((a, b) => a - b);
+  // Probabilidades de los partidos pendientes según la última predicción guardada.
+  const probPartidos = Object.assign({}, ...(predH2H?.prediccion?.divisiones || []).map(d => d.prob_partidos || {}));
   const jornadasJugadas = [...new Set(
     partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada)
   )].sort((a, b) => a - b);
   const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))];
   const hasDivs = divIds.length > 0;
 
-  // Orden de criterios de desempate configurado por el admin (con fallback a
-  // los 4 por defecto, y añadiendo al final cualquiera que falte por incluir).
-  const parseCriteriosH2H = () => {
-    const ALL = ['h2h', 'gf', 'dif', 'pf'];
-    try {
-      const parsed = JSON.parse(federacion?.h2h_desempate_orden || '["h2h","gf","dif","pf"]');
-      return [...parsed, ...ALL.filter(c => !parsed.includes(c))];
-    } catch { return ALL; }
-  };
+  const parseCriteriosH2H = () => criteriosDesempateH2H(federacion);
 
-  // Aplica los criterios de desempate configurados sobre un conjunto de filas
-  // de estadísticas ya calculadas (rows), usando msH2H (los partidos —jugados
-  // o no— del ámbito correspondiente) para resolver el criterio "h2h".
-  // Compartido por computeClasif, computeClasifNeutro y computeClasifSide para
-  // que las 4 vistas de clasificación se comporten de forma consistente.
-  const ordenarConDesempate = (rows, msH2H, criteriosOrden, jEnd = null) => {
-    // Mini-liga h2h: puntos y goles, solo de los partidos entre los ids dados.
-    // Si jEnd no es null, se ignoran los partidos de jornadas posteriores: para
-    // ese corte en el tiempo, todavía no han sucedido (aunque msH2H incluya ya
-    // el calendario completo de la temporada para poder detectarlos abajo).
-    const calcH2H = (ids) => {
-      const idSet = new Set(ids);
-      const h = {};
-      ids.forEach(id => { h[id] = { pts: 0, gf: 0, gc: 0 }; });
-      msH2H.forEach(m => {
-        if (jEnd !== null && m.jornada > jEnd) return;
-        if (m.pts_local === null || m.pts_visitante === null) return;
-        if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return;
-        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
-        h[m.local_id].gf += gl; h[m.local_id].gc += gv;
-        h[m.visitante_id].gf += gv; h[m.visitante_id].gc += gl;
-        if (gl > gv)        { h[m.local_id].pts     += 3; }
-        else if (gl === gv) { h[m.local_id].pts     += 1; h[m.visitante_id].pts += 1; }
-        else                { h[m.visitante_id].pts += 3; }
-      });
-      return h;
-    };
-
-    // ¿Han completado los equipos del grupo TODOS sus enfrentamientos directos
-    // programados entre sí (ida y vuelta / todas las vueltas configuradas)?
-    // Si falta alguno por jugar, el average particular no es un dato
-    // comparable entre todos y no se debe usar para desempatar este grupo.
-    // Un partido de una jornada posterior a jEnd cuenta como pendiente aunque
-    // ya tenga resultado real (aún no le tocaba en el corte que se está viendo).
-    const h2hCompleto = (ids) => {
-      const idSet = new Set(ids);
-      return msH2H.every(m => {
-        if (!idSet.has(m.local_id) || !idSet.has(m.visitante_id)) return true;
-        if (jEnd !== null && m.jornada > jEnd) return false;
-        return m.pts_local !== null && m.pts_visitante !== null;
-      });
-    };
-
-    // Resuelve el average particular en sus 3 capas —puntos, diferencia de
-    // goles y goles a favor, todo dentro de los enfrentamientos directos—.
-    // Si tras las 3 capas sigue habiendo empate, continúa con el resto de
-    // criterios configurados.
-    const resolverH2H = (group, rest) => {
-      const h = calcH2H(group.map(r => r.id));
-      const capas = [r => h[r.id].pts, r => h[r.id].gf - h[r.id].gc, r => h[r.id].gf];
-      const aplicarCapas = (grupo, idx) => {
-        if (grupo.length <= 1) return grupo;
-        if (idx >= capas.length) return sortGroup(grupo, rest);
-        const byScore = {};
-        grupo.forEach(r => { const s = capas[idx](r); (byScore[s] = byScore[s] || []).push(r); });
-        const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
-        if (scores.length === 1) return aplicarCapas(grupo, idx + 1);
-        const out = [];
-        scores.forEach(s => out.push(...aplicarCapas(byScore[s], idx + 1)));
-        return out;
-      };
-      return aplicarCapas(group, 0);
-    };
-
-    // Ordena un grupo de equipos empatados de forma recursiva, criterio a
-    // criterio. Si un criterio separa a algunos pero no a todos, los
-    // sub-grupos que sigan empatados continúan con los criterios restantes.
-    const sortGroup = (group, criterios) => {
-      if (group.length <= 1 || !criterios.length) return group;
-      const [first, ...rest] = criterios;
-
-      if (first === 'h2h') {
-        // Enfrentamientos directos incompletos → no es comparable para todo
-        // el grupo todavía. Se pospone al final de la lista por si un
-        // criterio posterior reduce el grupo a un subconjunto que sí los
-        // tenga completos entre sí (y entonces sí se le vuelve a dar opción).
-        if (!h2hCompleto(group.map(r => r.id))) {
-          if (rest.length === 0) return group;
-          return sortGroup(group, [...rest, 'h2h']);
-        }
-        return resolverH2H(group, rest);
-      }
-
-      let scoreOf;
-      if      (first === 'gf')  scoreOf = r => r.gf;
-      else if (first === 'dif') scoreOf = r => r.gf - r.gc;
-      else if (first === 'pf')  scoreOf = r => r.pf;
-      else                      return sortGroup(group, rest);
-
-      const byScore = {};
-      group.forEach(r => { const s = scoreOf(r); (byScore[s] = byScore[s] || []).push(r); });
-      const scores = Object.keys(byScore).map(Number).sort((a, b) => b - a);
-
-      // Este criterio no separa a nadie → pasar al siguiente
-      if (scores.length === 1) return sortGroup(group, rest);
-
-      // Hay separación: ordenar cada sub-grupo con los criterios restantes
-      const out = [];
-      scores.forEach(s => out.push(...sortGroup(byScore[s], rest)));
-      return out;
-    };
-
-    const byPts = {};
-    rows.forEach(r => { (byPts[r.pts] = byPts[r.pts] || []).push(r); });
-
-    const result = [];
-    Object.keys(byPts).map(Number).sort((a, b) => b - a).forEach(pts => {
-      result.push(...sortGroup(byPts[pts], criteriosOrden));
-    });
-    return result;
-  };
 
   // Racha de los últimos 5 partidos jugados por un equipo (V/E/D), de más
   // antiguo a más reciente. jEnd corta la racha "hasta esa jornada" (para la
@@ -13939,6 +14295,7 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
     const jugado = m.pts_local !== null && m.pts_visitante !== null;
     const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
     const lGana = jugado && gl > gv, vGana = jugado && gv > gl;
+    const prob = !jugado ? probPartidos[m.id] : null; // [% local, % empate] de la última predicción
     return (
       <div style={{display:'grid', gridTemplateColumns:'1fr auto 1fr',
                    alignItems:'center', gap:'.75rem',
@@ -13948,10 +14305,11 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
           <span style={{fontWeight: lGana ? 800 : 600, fontSize:'.88rem',
                         color: lGana ? 'var(--verde)' : 'var(--texto)'}}>{L.nombre || '—'}</span>
         </div>
-        <div style={{textAlign:'center', fontWeight:800, fontSize:'.95rem', minWidth:64, whiteSpace:'nowrap'}}>
+        <div style={{textAlign:'center', fontWeight:800, fontSize:'.95rem', minWidth: prob ? 104 : 64, whiteSpace:'nowrap'}}>
           {jugado
             ? `${m.pts_local} — ${m.pts_visitante}`
             : <span style={{color:'var(--texto2)', fontWeight:400, fontSize:'.78rem'}}>Pendiente</span>}
+          {prob && <ProbabilidadPartido pL={prob[0]} pE={prob[1]} local={L.nombre} visitante={V.nombre} />}
         </div>
         <div style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
           <span style={{fontWeight: vGana ? 800 : 600, fontSize:'.88rem',
@@ -14057,113 +14415,15 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
     );
   };
 
-  // ── Predicción de la clasificación final (Liga FILFA) ──────────
-  // Simula cada partido pendiente del calendario: los puntos fantasy de los
-  // dos equipos se sortean según su nivel (estimarNivelesFantasy, con los
-  // puntos de la Liga Fantástica), el local suma el bonus de esa vuelta y se
-  // pasan a goles con el baremo de la liga. Los partidos ya jugados se
-  // mantienen y la clasificación final se ordena con ordenarConDesempate
-  // (mismos criterios que la tabla real).
-  const simularPrediccionH2H = (niveles, divId, normal) => {
-    const ptsV1 = federacion?.h2h_pts_local_v1 ?? 5;
-    const ptsV2 = federacion?.h2h_pts_local_v2 ?? 5;
-    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
-    const ids = equips.map(p => p.id);
-    const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
-    const nivelDe = Object.fromEntries(niveles.equipos.map(e => [e.id, e]));
-    const vacio = () => ({ pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 });
-    const sumar = (s, gf, gc, ff, fc) => {
-      s.pj++; s.gf += gf; s.gc += gc;
-      if (ff != null && fc != null) { s.pf += ff; s.pc += fc; }
-      if (gf > gc) { s.pg++; s.pts += 3; } else if (gf === gc) { s.pe++; s.pts++; } else s.pp++;
-    };
-    // Estadísticas reales de los partidos ya jugados (igual que computeClasif).
-    const base = ids.map(vacio);
-    const msBase = divId ? partidos.filter(m => m.division_id === divId) : partidos;
-    // Copias mutables: los partidos pendientes se rellenan en cada simulación
-    // (ordenarConDesempate las lee para el enfrentamiento directo).
-    const msSim = msBase.map(m => ({ ...m }));
-    const pendientes = [];
-    msSim.forEach(m => {
-      const iL = idx[m.local_id], iV = idx[m.visitante_id];
-      if (iL === undefined || iV === undefined) return;
-      if (m.pts_local !== null && m.pts_visitante !== null) {
-        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
-        const conFantasy = m.fantasy_local != null && m.fantasy_visitante != null;
-        const fl = conFantasy ? Number(m.fantasy_local) : null, fv = conFantasy ? Number(m.fantasy_visitante) : null;
-        sumar(base[iL], gl, gv, fl, fv); sumar(base[iV], gv, gl, fv, fl);
-      } else {
-        const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
-        const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, veDiv);
-        pendientes.push({ m, iL, iV, bonus: Number(ptsLocal) || 0 });
-      }
-    });
-    const n = ids.length;
-    const eqs = ids.map(id => nivelDe[id] || { nivel: niveles.mediaLiga, margen: Math.sqrt(niveles.tau2), sd: Math.sqrt(niveles.s2) });
-    const conteo = ids.map(() => new Array(n).fill(0));
-    const sumaPts = new Float64Array(n), sumaGF = new Float64Array(n), sumaGC = new Float64Array(n);
-    const ptsSim = ids.map(() => new Uint16Array(PREDICCION_SIMULACIONES));
-    const puestoSim = ids.map(() => new Uint8Array(PREDICCION_SIMULACIONES));
-    const criterios = parseCriteriosH2H();
-    const nivelSim = new Float64Array(n);
-    // Puntos fantasy enteros (el baremo va por tramos de enteros).
-    const puntos = i => Math.max(0, Math.round(nivelSim[i] + eqs[i].sd * normal()));
-    for (let s = 0; s < PREDICCION_SIMULACIONES; s++) {
-      for (let i = 0; i < n; i++) nivelSim[i] = eqs[i].nivel + eqs[i].margen * normal(); // nivel real en esta temporada simulada
-      const rows = ids.map((id, i) => ({ id, ...base[i] }));
-      pendientes.forEach(({ m, iL, iV, bonus }) => {
-        const fl = puntos(iL), fv = puntos(iV);
-        const gl = ptsToGoles(fl + bonus, baremo), gv = ptsToGoles(fv, baremo);
-        m.pts_local = gl; m.pts_visitante = gv; m.fantasy_local = fl; m.fantasy_visitante = fv;
-        sumar(rows[iL], gl, gv, fl, fv); sumar(rows[iV], gv, gl, fv, fl);
-      });
-      ordenarConDesempate(rows, msSim, criterios).forEach((r, puesto) => {
-        const i = idx[r.id];
-        conteo[i][puesto]++; sumaPts[i] += r.pts; sumaGF[i] += r.gf; sumaGC[i] += r.gc;
-        ptsSim[i][s] = r.pts; puestoSim[i][s] = puesto;
-      });
-    }
-    const resumen = resumirPuntosSimulados(ptsSim, puestoSim, true);
-    return {
-      division_id: divId,
-      pendientes: pendientes.length,
-      equipos: ids.map((id, i) => ({
-        id, nombre: equips[i].nombre,
-        pts: base[i].pts, pj: base[i].pj,
-        pts_esperados: redondear1(sumaPts[i] / PREDICCION_SIMULACIONES),
-        pts_moda: resumen.equipos[i].moda, pts_p10: resumen.equipos[i].p10, pts_p90: resumen.equipos[i].p90,
-        gf_esperados: redondear1(sumaGF[i] / PREDICCION_SIMULACIONES),
-        gc_esperados: redondear1(sumaGC[i] / PREDICCION_SIMULACIONES),
-        media: redondear1(eqs[i].nivel), margen: redondear1(eqs[i].margen), sd: redondear1(eqs[i].sd),
-        esperado: puestoEsperado(conteo[i]),
-        conteo: conteo[i],
-      })),
-      puntos_puesto: resumen.tabla,
-    };
-  };
-
   const recalcularPrediccionH2H = async () => {
     setCalculandoPredH2H(true); setMsgPredH2H('');
     // Nivel de cada equipo con todos sus puntos de la Liga Fantástica (1 lectura).
-    const { data: clasH2H, error } = await obtenerTodasLasFilas(() => sb.from('clasificacion')
-      .select('participante_id, jornada, puntos_jornada')
-      .in('participante_id', participantes.map(p => p.id))
-      .order('participante_id').order('jornada'));
+    const { data: clasH2H, error } = await leerPuntosFantasy(participantes);
     if (error) { setCalculandoPredH2H(false); setMsgPredH2H('Error al leer los puntos: ' + error.message); return; }
-    const niveles = estimarNivelesFantasy(clasH2H || [], participantes);
-    if (!niveles) { setCalculandoPredH2H(false); setMsgPredH2H('Aún no hay puntos fantasy para estimar el nivel de los equipos.'); return; }
     // Ceder un instante para que se pinte "Calculando…" antes del cálculo (síncrono).
     await new Promise(r => setTimeout(r, 30));
-    const normal = crearNormal();
-    const jugados = partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null);
-    const nueva = {
-      calculada_at: new Date().toISOString(), modelo: 2,
-      simulaciones: PREDICCION_SIMULACIONES, vida_media: PREDICCION_VIDA_MEDIA,
-      total_partidos: partidos.length, jugados: jugados.length,
-      ultima_jornada_h2h: jugados.length ? Math.max(...jugados.map(m => m.jornada)) : 0,
-      ultima_jornada_fantasy: niveles.ultima,
-      divisiones: (hasDivs ? divIds : [null]).map(d => simularPrediccionH2H(niveles, d, normal)),
-    };
+    const nueva = calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas: clasH2H });
+    if (!nueva) { setCalculandoPredH2H(false); setMsgPredH2H('Aún no hay puntos fantasy para estimar el nivel de los equipos.'); return; }
     const err = await guardarPrediccion(federacion.id, 'prediccion_h2h', nueva);
     setCalculandoPredH2H(false);
     if (err) { setMsgPredH2H('Error al guardar la predicción: ' + err); return; }
@@ -14290,6 +14550,13 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
                     );
                   });
                 })()}
+                {partidos.some(m => m.jornada === jornada && m.pts_local === null && probPartidos[m.id]) && (
+                  <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+                    1 · X · 2: probabilidad de que gane el local, empaten o gane el visitante, según la última predicción
+                    (🔮 Predicción, calculada el {new Date(predH2H.prediccion.calculada_at).toLocaleString('es-ES', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})}).
+                    Tiene en cuenta el nivel de cada equipo y el bonus de local.
+                  </p>
+                )}
               </div>
             </>
       )}
@@ -14443,6 +14710,24 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
                 </>
               )}
             </div>
+            {(() => {
+              // Próxima jornada con partidos pendientes que tengan probabilidades.
+              const pend = partidos.filter(m => m.pts_local === null && probPartidos[m.id]);
+              if (!pend.length) return null;
+              const jProx = Math.min(...pend.map(m => m.jornada));
+              const msProx = pend.filter(m => m.jornada === jProx)
+                .sort((a, b) => (a.division_id ?? 0) - (b.division_id ?? 0));
+              return (
+                <div className="card">
+                  <h2 style={{marginBottom:'.6rem'}}>⚔️ Próxima jornada (J{jProx})</h2>
+                  {msProx.map(m => <PartidoFila key={m.id} m={m} />)}
+                  <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+                    1 · X · 2: probabilidad de que gane el local, empaten o gane el visitante en las temporadas simuladas.
+                    También las verás en el Calendario.
+                  </p>
+                </div>
+              );
+            })()}
             {p && p.divisiones.map(d => {
               const filas = d.equipos.filter(e => nomMap[e.id]).sort((a, b) => a.esperado - b.esperado);
               if (!filas.length) return null;
@@ -15775,12 +16060,15 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       }
     }
 
+    const nuevosRes = {}; // id → resultado recién calculado (para la crónica y la predicción)
     await Promise.all(ms.map(m => {
       if (!divToJf[m.division_id]) return Promise.resolve();
       const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
       const { ptsLocal } = getVueltaInfo(j_h2h, federacion?.h2h_jornadas_base, ptsLocalV1, ptsLocalV2, veDiv);
       const gl = ptsToGoles((ptsMap[m.local_id] ?? 0) + ptsLocal, baremo);
       const gv = ptsToGoles(ptsMap[m.visitante_id] ?? 0, baremo);
+      nuevosRes[m.id] = { pts_local: gl, pts_visitante: gv,
+                          fantasy_local: ptsMap[m.local_id] ?? null, fantasy_visitante: ptsMap[m.visitante_id] ?? null };
       return sb.from('h2h_partidos').update({
         pts_local: gl, pts_visitante: gv,
         fantasy_local: ptsMap[m.local_id] ?? null,
@@ -15800,6 +16088,11 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setMsg(`J${j_h2h} calculada`);
     setTimeout(() => setMsg(''), 3000);
     recalcularLogros();
+    // Predicción (solo el admin) y crónica de la jornada en el Tablón, en segundo plano.
+    trasCalcularJornadaH2H({
+      federacion, participantes, jornada: j_h2h, vueltasExtra, baremo, divisiones, esAdmin: !isModerador,
+      partidos: partidos.map(m => nuevosRes[m.id] ? { ...m, ...nuevosRes[m.id] } : m),
+    });
   };
 
   const moverCrit = (idx, dir) => {
@@ -16805,7 +17098,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga Fantástica — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga Fantástica. Se simula 10.000 veces el resto de la temporada (hasta la J38) a partir de la media y la desviación típica de cada equipo, dando más peso a las jornadas recientes (una jornada pesa la mitad cada 6 jornadas de antigüedad). Como parte de cada media es suerte, se estima el nivel real de cada equipo comparando las diferencias entre equipos con lo que se explicaría solo por suerte: cuanto más igualada esté la liga y menos jornadas se hayan jugado, más se acerca cada equipo a la media de la liga, y ese nivel se simula con un margen de incertidumbre (no se da por seguro que todo siga igual). Verás el puesto esperado y la probabilidad de ser campeón, de terminar en el podio y de terminar último; pulsa un equipo para ver su probabilidad en cada puesto (en pantallas grandes aparece además la tabla completa). Debajo verás la clasificación final estimada (puntos finales esperados de cada equipo y el rango en el que terminan 8 de cada 10 simulaciones) y "¿Cuántos puntos hacen falta?": la probabilidad de ser campeón, de entrar en el podio, en cada zona de color o de terminar último según los puntos con los que se acabe, y con cuántos puntos suele terminar el puesto frontera. La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones ni alineaciones futuras.'],
         ['Jugadores destacados', 'En Liga Fantástica → Estadísticas y en la ficha de cada equipo (pestaña Equipos) verás, para cada equipo: el jugador que más puntos le ha aportado (sin contar el doble del capitán), el que más veces ha sido titular (sin contar porterías), el que más veces ha estado en el once ideal estando alineado con ese equipo, el que más veces ha entrado como suplente y el que más veces ha sido sustituido (ambos por sustituciones automáticas) y el más rentable (puntos aportados por millón pagado, solo jugadores de la plantilla actual). Si hay empate se muestran todos. En Estadísticas también aparece el ranking de la liga de jugadores con más apariciones en el once ideal. Solo cuentan las jornadas cerradas por el admin, y los datos se actualizan cada vez que se cierra una jornada.'],
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
-        ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],
+        ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar. Bajo cada partido pendiente verás sus probabilidades 1 · X · 2 (gana el local, empate, gana el visitante) según la última predicción, que tiene en cuenta el nivel de cada equipo y el bonus de local; la próxima jornada también aparece en 🔮 Predicción.'],
+        ['Crónica de la jornada', 'Al cerrar cada jornada de la Liga Fantástica y al calcular cada jornada de la Liga FILFA se publica sola en el Tablón una crónica 📰: ganador y farolillo rojo de la jornada, mejor jugador alineado, media, líder (y si hay nuevo líder), mayor subida, y en la Liga FILFA los resultados, la mayor goleada, la sorpresa de la jornada (el resultado menos probable según la predicción), las rachas y el favorito al título. Se publica una sola vez por jornada.'],
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
@@ -16855,8 +17149,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Descargar Excel', 'El admin puede descargar los datos de cada competición en formato Excel (.xlsx) usando el botón ⬇ Excel de las pestañas de Liga Fantástica, Liga FILFA y Torneos. Cada archivo incluye varias hojas: clasificación, estadísticas, calendario y —en Liga Fantástica— también la clasificación por jornada.'],
         ['Logros', 'Los logros se activan o desactivan en Admin → Liga FILFA (requiere tener la Liga FILFA activada). Se recalculan solos al calcular una jornada H2H y al guardar resultados de Liga FILFA; en ese mismo momento se actualiza el progreso que ven los equipos. Con el botón "🏆 Recalcular logros" se puede forzar el recálculo, por ejemplo tras corregir puntos de una jornada. Si el recálculo no puede leer todos los datos, se cancela sin guardar nada y se muestra el error. Al reiniciar la temporada, los logros conseguidos se conservan y el progreso se borra.'],
         ['Jugadores destacados', 'Las estadísticas de jugadores destacados (Equipos y Liga Fantástica → Estadísticas) y la clasificación de jugadores (Competiciones → 🏅 Jugadores) se recalculan solas al cerrar, reabrir o editar una jornada en Admin → Pts Jugadores. El botón "📊 Recalcular estadísticas" de esa misma pantalla permite forzarlo. Solo cuentan las jornadas cerradas, así que conviene cerrar cada jornada cuando sus puntos sean definitivos. Al reiniciar la temporada se borran.'],
-        ['Predicción de la Liga Fantástica', 'El botón "🔄 Recalcular predicción" de Liga Fantástica → 🔮 Predicción solo lo ve el admin (los moderadores no pueden recalcularla). Simula en tu navegador el resto de la temporada con los puntos existentes y guarda el resultado para que lo vea toda la liga. No se recalcula sola: conviene pulsarlo tras introducir los puntos de cada jornada (si no, los usuarios verán un aviso de que está desactualizada). Al reiniciar la temporada se borra.'],
-        ['Predicción de la Liga FILFA', 'Igual que la de la Liga Fantástica: el botón "🔄 Recalcular predicción" de Liga FILFA → 🔮 Predicción solo lo ve el admin. Lee una vez los puntos fantasy de la liga, simula en tu navegador los partidos pendientes del calendario y guarda el resultado para toda la liga. Conviene pulsarlo tras calcular los resultados de cada jornada o tras añadir una vuelta extra (si no, los usuarios verán un aviso de que está desactualizada). Las zonas que aparecen salen de los colores de clasificación de la Liga FILFA (Admin → Mi Federación → Colores de clasificación), por división si los tienes configurados así. Al reiniciar la temporada se borra.'],
+        ['Predicción de la Liga Fantástica', 'El botón "🔄 Recalcular predicción" de Liga Fantástica → 🔮 Predicción solo lo ve el admin (los moderadores no pueden recalcularla). Simula en tu navegador el resto de la temporada con los puntos existentes y guarda el resultado para que lo vea toda la liga. Se recalcula sola cuando el admin cierra una jornada (🔒 Cerrar y archivar); si la cierra un moderador no, y conviene pulsar el botón después (si no, los usuarios verán un aviso de que está desactualizada). Al reiniciar la temporada se borra.'],
+        ['Predicción de la Liga FILFA', 'Igual que la de la Liga Fantástica: el botón "🔄 Recalcular predicción" de Liga FILFA → 🔮 Predicción solo lo ve el admin. Lee una vez los puntos fantasy de la liga, simula en tu navegador los partidos pendientes del calendario y guarda el resultado para toda la liga. Se recalcula sola cuando el admin calcula una jornada H2H desde la Liga Fantástica; si la calcula un moderador, si metes resultados a mano o si añades una vuelta extra, conviene pulsar el botón (si no, los usuarios verán un aviso de que está desactualizada). Las zonas que aparecen salen de los colores de clasificación de la Liga FILFA (Admin → Mi Federación → Colores de clasificación), por división si los tienes configurados así. Al reiniciar la temporada se borra.'],
       ]
     },
     {

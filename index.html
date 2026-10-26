@@ -3175,6 +3175,41 @@ function crearNormal() {
 const redondear1 = x => Math.round(x * 10) / 10;
 const puestoEsperado = conteo => Math.round(conteo.reduce((s, c, p) => s + c * (p + 1), 0) / PREDICCION_SIMULACIONES * 100) / 100;
 
+// Máximo de tramos de puntos de la tabla "puntos finales × puesto" cuando los
+// puntos no son enteros pequeños (Liga Fantástica): se agrupan de 5 en 5, de
+// 10 en 10… hasta que quepan.
+const PREDICCION_TRAMOS_MAX = 60;
+
+// A partir de los puntos finales (ptsSim[equipo][temporada]) y el puesto
+// final (puestoSim, 0 = 1º) de cada temporada simulada calcula:
+//  · por equipo, los percentiles 10/50/90 de sus puntos y su valor más
+//    repetido (moda, solo con sentido si `enteros`);
+//  · la tabla del resumen de puntos necesarios: filas[k][p] = nº de veces que
+//    un equipo terminó con puntos en el tramo k (desde + k·paso … +paso) y en
+//    el puesto p+1. Las filas vacías se guardan como 0 para ocupar menos.
+// Con `enteros` (Liga FILFA) cada tramo es un único valor de puntos.
+function resumirPuntosSimulados(ptsSim, puestoSim, enteros) {
+  const n = ptsSim.length, S = ptsSim[0]?.length || 0;
+  let min = Infinity, max = -Infinity;
+  ptsSim.forEach(a => { for (let s = 0; s < S; s++) { if (a[s] < min) min = a[s]; if (a[s] > max) max = a[s]; } });
+  const paso = enteros ? 1
+    : [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000].find(p => (max - min) / p <= PREDICCION_TRAMOS_MAX) || 1000;
+  const desde = Math.floor(min / paso) * paso;
+  const nTramos = Math.floor((max - desde) / paso) + 1;
+  const filas = Array.from({ length: nTramos }, () => new Array(n).fill(0));
+  const equipos = ptsSim.map((a, i) => {
+    const hist = new Array(nTramos).fill(0);
+    for (let s = 0; s < S; s++) {
+      const k = Math.floor((a[s] - desde) / paso);
+      hist[k]++; filas[k][puestoSim[i][s]]++;
+    }
+    const orden = Float64Array.from(a).sort();
+    const q = f => Math.round(orden[Math.min(S - 1, Math.floor(f * S))]);
+    return { p10: q(0.1), p50: q(0.5), p90: q(0.9), moda: desde + hist.indexOf(Math.max(...hist)) * paso };
+  });
+  return { equipos, tabla: { desde, paso, filas: filas.map(f => f.some(c => c) ? f : 0) } };
+}
+
 function calcularPrediccionFantasy(clas, participantes) {
   const est = estimarNivelesFantasy(clas, participantes);
   if (!est) return null;
@@ -3191,16 +3226,20 @@ function calcularPrediccionFantasy(clas, participantes) {
   const totales = new Float64Array(n);
   const orden = equipos.map((_, i) => i);
   const sdResto = equipos.map(e => Math.sqrt(restantes) * e.sd);
+  const ptsSim = equipos.map(() => new Float64Array(PREDICCION_SIMULACIONES));
+  const puestoSim = equipos.map(() => new Uint8Array(PREDICCION_SIMULACIONES));
   for (let s = 0; s < PREDICCION_SIMULACIONES; s++) {
     for (let i = 0; i < n; i++) {
       const e = equipos[i];
       const nivel = e.nivel + e.margen * normal();   // nivel real de este equipo en esta temporada simulada
       totales[i] = e.actual + restantes * nivel + sdResto[i] * normal()
                  + Math.random() * 1e-6;             // desempate al azar en empates exactos
+      ptsSim[i][s] = totales[i];
     }
     orden.sort((a, b) => totales[b] - totales[a]);
-    orden.forEach((i, puesto) => { conteo[i][puesto]++; });
+    orden.forEach((i, puesto) => { conteo[i][puesto]++; puestoSim[i][s] = puesto; });
   }
+  const resumen = resumirPuntosSimulados(ptsSim, puestoSim, false);
 
   return {
     calculada_at: new Date().toISOString(),
@@ -3214,8 +3253,11 @@ function calcularPrediccionFantasy(clas, participantes) {
       media_obs: e.mediaObs != null ? redondear1(e.mediaObs) : null,
       media: redondear1(e.nivel), margen: redondear1(e.margen), sd: redondear1(e.sd),
       esperado: puestoEsperado(conteo[i]),
+      pts_esperados: Math.round(ptsSim[i].reduce((s, x) => s + x, 0) / PREDICCION_SIMULACIONES),
+      pts_p10: resumen.equipos[i].p10, pts_p90: resumen.equipos[i].p90,
       conteo: conteo[i],
     })),
+    puntos_puesto: resumen.tabla,
   };
 }
 
@@ -3379,6 +3421,185 @@ function TablaPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId, zo
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// Clasificación final estimada (común a las dos ligas): equipos ordenados por
+// sus puntos finales esperados, con el rango en el que terminan 8 de cada 10
+// temporadas simuladas y, en la Liga FILFA, los puntos más probables (solo en
+// pantallas anchas) y los goles a favor y en contra esperados. Se ordena por
+// la media y no por la moda porque la moda salta de un valor a otro con
+// poca diferencia de probabilidad y desordenaría la tabla.
+function ClasificacionEstimada({ equipos, nombreDe, miParticipanteId, conGoles, titulo = 'Clasificación final estimada' }) {
+  const fmt = x => Math.round(x).toLocaleString('es-ES');
+  const filas = [...equipos].sort((a, b) => b.pts_esperados - a.pts_esperados || a.esperado - b.esperado);
+  const num = { textAlign:'right', fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap' };
+  return (
+    <div className="card">
+      <h2 style={{marginBottom:'.6rem'}}>{titulo}</h2>
+      <div style={{overflowX:'auto'}}>
+        <table className="tabla-jugadores">
+          <thead>
+            <tr>
+              <th style={{textAlign:'right'}}>#</th>
+              <th>Equipo</th>
+              <th style={{textAlign:'right'}} title="Puntos finales esperados (media de las temporadas simuladas)">Pts</th>
+              {conGoles && <th className="solo-escritorio" style={{textAlign:'right'}} title="Puntos finales que más veces se repiten en las simulaciones">Más prob.</th>}
+              <th style={{textAlign:'right'}} title="Puntos finales en 8 de cada 10 temporadas simuladas">Rango</th>
+              {conGoles && <>
+                <th style={{textAlign:'right'}} title="Goles a favor esperados al final">GF</th>
+                <th style={{textAlign:'right'}} title="Goles en contra esperados al final">GC</th>
+                <th style={{textAlign:'right'}} title="Diferencia de goles esperada">DG</th>
+              </>}
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((e, i) => {
+              const propio = e.id === miParticipanteId;
+              const dg = Math.round(e.gf_esperados) - Math.round(e.gc_esperados);
+              return (
+                <tr key={e.id} style={{background: propio ? 'rgba(63,128,41,.10)' : undefined}}>
+                  <td style={{...num, color:'var(--texto2)'}}>{i + 1}</td>
+                  <td style={{fontWeight: propio ? 800 : 600}}>{nombreDe(e)}</td>
+                  <td style={{...num, fontWeight:700}}>{fmt(e.pts_esperados)}</td>
+                  {conGoles && <td className="solo-escritorio" style={num}>{e.pts_moda}</td>}
+                  <td style={{...num, color:'var(--texto2)', fontSize:'.85em'}}>{fmt(e.pts_p10)}–{fmt(e.pts_p90)}</td>
+                  {conGoles && <>
+                    <td style={num}>{fmt(e.gf_esperados)}</td>
+                    <td style={num}>{fmt(e.gc_esperados)}</td>
+                    <td style={num}>{dg > 0 ? '+' : ''}{dg}</td>
+                  </>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+        {conGoles
+          ? 'Pts: puntos finales esperados (la puntuación más probable de cada equipo está al pulsarlo en la tabla de arriba y, en pantallas anchas, en la columna Más prob.). Rango: puntos con los que termina el equipo en 8 de cada 10 temporadas simuladas. GF, GC y DG: goles a favor, en contra y diferencia esperados al final.'
+          : 'Pts: puntos finales esperados. Rango: puntos con los que termina el equipo en 8 de cada 10 temporadas simuladas.'}
+        {' '}La ordenación exacta más probable casi nunca se da tal cual: es la clasificación que mejor resume las simulaciones.
+      </p>
+    </div>
+  );
+}
+
+// Ajuste monótono (pool adjacent violators): suaviza las probabilidades por
+// tramo de puntos para que siempre suban (o bajen) al sumar puntos, sin los
+// saltos que deja el azar de la simulación en los tramos con pocos casos.
+function ajusteMonotono(ps, pesos, creciente) {
+  const bloques = [];
+  ps.forEach((p, i) => {
+    bloques.push({ v: p, w: pesos[i], n: 1 });
+    while (bloques.length > 1) {
+      const b = bloques[bloques.length - 1], a = bloques[bloques.length - 2];
+      if (creciente ? a.v <= b.v : a.v >= b.v) break;
+      const w = a.w + b.w;
+      a.v = (a.v * a.w + b.v * b.w) / w; a.w = w; a.n += b.n;
+      bloques.pop();
+    }
+  });
+  return bloques.flatMap(b => new Array(b.n).fill(b.v));
+}
+
+const PUNTOS_NECESARIOS_MIN_CASOS = 20; // tramos con menos casos simulados no se muestran
+const PUNTOS_NECESARIOS_MAX_FILAS = 12; // más líneas por objetivo se resumen en saltos de probabilidad
+
+// "¿Cuántos puntos hacen falta?": para cada objetivo (campeón, podio, cada
+// zona de color y último) la probabilidad de lograrlo según los puntos con
+// los que se termine, y los puntos con los que suele terminar el puesto
+// frontera. `tabla` es puntos_puesto de la predicción (resumirPuntosSimulados).
+function PuntosNecesarios({ tabla, n, zonas = [], titulo = '¿Cuántos puntos hacen falta?' }) {
+  const { desde, paso } = tabla;
+  const fmt = x => Math.round(x).toLocaleString('es-ES');
+  const etiquetaTramo = k => {
+    const v = desde + k * paso;
+    return paso === 1 ? `${fmt(v)} pts` : `${fmt(v)}–${fmt(v + paso - 1)} pts`;
+  };
+  const filas = tabla.filas.map((f, k) => ({ k, f })).filter(x => Array.isArray(x.f));
+  // Objetivos "arriba": terminar en el puesto `lim` o mejor; "abajo": en el `lim` o peor.
+  const objetivos = [{ titulo: '🏆 Campeón', arriba: true, lim: 1, frase: 'de ser campeón' }];
+  if (n > 3) objetivos.push({ titulo: '🥉 Podio (1º–3º)', arriba: true, lim: 3, frase: 'de terminar en el podio' });
+  zonas.forEach(z => {
+    if (z.desde === 1 && (z.hasta === 1 || z.hasta === 3 || z.hasta === n)) return;
+    if (z.hasta === n) objetivos.push({ titulo: `Zona ${etiquetaZona(z)}`, color: z.bg, arriba: false, lim: z.desde, frase: `de terminar en la zona ${etiquetaZona(z)}` });
+    else if (z.desde === 1) objetivos.push({ titulo: `Zona ${etiquetaZona(z)}`, color: z.bg, arriba: true, lim: z.hasta, frase: `de terminar en la zona ${etiquetaZona(z)}` });
+    else objetivos.push({ titulo: `Zona ${etiquetaZona(z)} o mejor`, color: z.bg, arriba: true, lim: z.hasta, frase: `de terminar ${z.hasta}º o mejor` });
+  });
+  if (n > 1 && !zonas.some(z => z.hasta === n && z.desde > 1)) objetivos.push({ titulo: 'Último', arriba: false, lim: n, frase: 'de terminar último' });
+
+  const pctTexto = p => p < 0.01 ? '<1%' : p > 0.99 ? '>99%' : `${Math.round(p * 100)}%`;
+  // Percentiles 10/50/90 de una distribución por tramos → etiquetas.
+  const rangoTramos = conteos => {
+    const total = conteos.reduce((s, c) => s + c, 0);
+    if (!total) return null;
+    const q = f => { let acum = 0; for (let k = 0; k < conteos.length; k++) { acum += conteos[k]; if (acum >= f * total) return k; } return conteos.length - 1; };
+    const [a, m, b] = [q(0.1), q(0.5), q(0.9)];
+    return { desde: fmt(desde + a * paso), hasta: fmt(desde + b * paso + paso - 1), mediana: fmt(desde + m * paso + (paso - 1) / 2) };
+  };
+
+  const bloques = objetivos.map(o => {
+    const totales = filas.map(({ f }) => f.reduce((s, c) => s + c, 0));
+    const aciertos = filas.map(({ f }) => (o.arriba ? f.slice(0, o.lim) : f.slice(o.lim - 1)).reduce((s, c) => s + c, 0));
+    const ps = ajusteMonotono(aciertos.map((a, i) => a / totales[i]), totales, o.arriba);
+    let lineas = filas.map(({ k }, i) => ({ k, p: ps[i], casos: totales[i] }))
+      .filter(l => l.casos >= PUNTOS_NECESARIOS_MIN_CASOS && l.p >= 0.01 && l.p <= 0.99);
+    if (lineas.length > PUNTOS_NECESARIOS_MAX_FILAS) {
+      // Demasiados tramos: uno por cada salto de probabilidad representativo.
+      const objetivosP = [0.02, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.98];
+      const elegidas = new Set(objetivosP.map(t => lineas.reduce((mejor, l) => Math.abs(l.p - t) < Math.abs(mejor.p - t) ? l : mejor).k));
+      lineas = lineas.filter(l => elegidas.has(l.k));
+    }
+    // Puesto frontera: el último que cumple el objetivo ("arriba") o el
+    // primero que lo evita ("abajo", p. ej. el primero que se salva).
+    const puestoFrontera = o.arriba ? o.lim : o.lim - 1;
+    const frontera = puestoFrontera >= 1
+      ? rangoTramos(tabla.filas.map(f => Array.isArray(f) ? f[puestoFrontera - 1] : 0)) : null;
+    return { o, lineas, frontera, puestoFrontera };
+  });
+
+  return (
+    <div className="card">
+      <h2 style={{marginBottom:'.4rem'}}>{titulo}</h2>
+      <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
+        Probabilidad de lograr cada objetivo según los puntos con los que termine un equipo, en las temporadas simuladas
+        (incluye los desempates).
+      </p>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(210px, 1fr))', gap:'.75rem'}}>
+        {bloques.map(({ o, lineas, frontera, puestoFrontera }) => (
+          <div key={o.titulo} style={{border:'1px solid var(--borde)', borderRadius:10, padding:'.6rem .7rem'}}>
+            <div style={{fontWeight:700, fontSize:'.88rem', marginBottom:'.35rem'}}>
+              {o.color && muestraColor(o.color)}{o.titulo}
+            </div>
+            {lineas.length === 0 ? (
+              <div style={{fontSize:'.75rem', color:'var(--texto2)'}}>
+                Sin incertidumbre suficiente: con lo que queda por jugar ya está prácticamente decidido.
+              </div>
+            ) : lineas.map(l => (
+              <div key={l.k} style={{display:'flex', alignItems:'center', gap:'.4rem', fontSize:'.78rem', marginBottom:'.15rem'}}
+                   title={`Con ${etiquetaTramo(l.k)}: ${pctTexto(l.p)} ${o.frase}`}>
+                <span style={{flex:'0 0 auto', minWidth: paso === 1 ? '3.6rem' : '6.6rem', fontVariantNumeric:'tabular-nums'}}>{etiquetaTramo(l.k)}</span>
+                <div style={{flex:1, height:8, background:'var(--fondo-alt)', borderRadius:4, overflow:'hidden'}}>
+                  <div style={{width:`${Math.round(l.p * 100)}%`, height:'100%', background: o.color || 'var(--verde)',
+                               filter: o.color ? 'saturate(2.2) brightness(.85)' : undefined}} />
+                </div>
+                <span style={{flex:'0 0 2.6rem', textAlign:'right', fontWeight:700, fontVariantNumeric:'tabular-nums'}}>{pctTexto(l.p)}</span>
+              </div>
+            ))}
+            {frontera && (
+              <div style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+                El {puestoFrontera}º suele terminar con {frontera.desde}–{frontera.hasta} pts (lo típico, {frontera.mediana}).
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.5rem'}}>
+        Solo se muestran los puntos con los que el objetivo no está ni asegurado ni descartado. "Suele terminar": rango de
+        puntos del puesto frontera en 8 de cada 10 temporadas simuladas.
+      </p>
     </div>
   );
 }
@@ -4250,6 +4471,9 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
         // Solo equipos que siguen en la liga, ordenados por puesto esperado.
         const filas = p ? p.equipos.filter(e => participantes.some(x => x.id === e.id))
                                    .sort((a, b) => a.esperado - b.esperado) : [];
+        const nPuestos = p?.equipos[0]?.conteo.length || 0;
+        const zonas = zonasDeColores(federacion?.clasif_colores?.fantasia, nPuestos);
+        const conResumenPuntos = !!p?.puntos_puesto; // predicciones antiguas no lo tienen
         const detalle = e => (
           <>
             Puntos actuales: <strong>{e.actual}</strong>
@@ -4261,6 +4485,8 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
               <> · Media ponderada por jornada: <strong>{e.media.toLocaleString('es-ES')}</strong></>
             )}
             {' '}· Desv. típica por jornada: <strong>{e.sd.toLocaleString('es-ES')}</strong>
+            {e.pts_p10 != null && <> · Puntos finales esperados: <strong>{e.pts_esperados.toLocaleString('es-ES')}</strong>
+              {' '}(entre {e.pts_p10.toLocaleString('es-ES')} y {e.pts_p90.toLocaleString('es-ES')} en 8 de cada 10 simulaciones)</>}
           </>
         );
         return (
@@ -4307,19 +4533,29 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
                     </p>
                   )}
                   <TablaPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
-                                   miParticipanteId={miParticipanteId} detalle={detalle} />
+                                   miParticipanteId={miParticipanteId} zonas={zonas} detalle={detalle} />
                   <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
                     Pulsa un equipo para ver su probabilidad en cada puesto. Estimación estadística, no una certeza:
                     supone que cada equipo seguirá puntuando a su nivel estimado (las jornadas recientes pesan más y, como parte
                     de cada media es suerte, se acerca a la media de la liga y se simula con un margen de incertidumbre),
                     sin tener en cuenta fichajes, lesiones ni alineaciones futuras.
                   </p>
+                  {!conResumenPuntos && (
+                    <p style={{fontSize:'.75rem', color:'#b8860b', marginTop:'.4rem'}}>
+                      La clasificación final estimada y los puntos necesarios aparecerán
+                      {puedeCalcular ? ' al pulsar "Recalcular predicción".' : ' cuando el admin vuelva a calcular la predicción.'}
+                    </p>
+                  )}
                 </>
               )}
             </div>
+            {p && filas.length > 0 && conResumenPuntos && <>
+              <ClasificacionEstimada equipos={filas} nombreDe={nombreDe} miParticipanteId={miParticipanteId} />
+              <PuntosNecesarios tabla={p.puntos_puesto} n={nPuestos} zonas={zonas} />
+            </>}
             {p && filas.length > 0 && (
               <MapaCalorPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
-                                   miParticipanteId={miParticipanteId} />
+                                   miParticipanteId={miParticipanteId} zonas={zonas} />
             )}
           </>
         );
@@ -13862,7 +14098,9 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
     const n = ids.length;
     const eqs = ids.map(id => nivelDe[id] || { nivel: niveles.mediaLiga, margen: Math.sqrt(niveles.tau2), sd: Math.sqrt(niveles.s2) });
     const conteo = ids.map(() => new Array(n).fill(0));
-    const sumaPts = new Float64Array(n);
+    const sumaPts = new Float64Array(n), sumaGF = new Float64Array(n), sumaGC = new Float64Array(n);
+    const ptsSim = ids.map(() => new Uint16Array(PREDICCION_SIMULACIONES));
+    const puestoSim = ids.map(() => new Uint8Array(PREDICCION_SIMULACIONES));
     const criterios = parseCriteriosH2H();
     const nivelSim = new Float64Array(n);
     // Puntos fantasy enteros (el baremo va por tramos de enteros).
@@ -13877,9 +14115,12 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
         sumar(rows[iL], gl, gv, fl, fv); sumar(rows[iV], gv, gl, fv, fl);
       });
       ordenarConDesempate(rows, msSim, criterios).forEach((r, puesto) => {
-        conteo[idx[r.id]][puesto]++; sumaPts[idx[r.id]] += r.pts;
+        const i = idx[r.id];
+        conteo[i][puesto]++; sumaPts[i] += r.pts; sumaGF[i] += r.gf; sumaGC[i] += r.gc;
+        ptsSim[i][s] = r.pts; puestoSim[i][s] = puesto;
       });
     }
+    const resumen = resumirPuntosSimulados(ptsSim, puestoSim, true);
     return {
       division_id: divId,
       pendientes: pendientes.length,
@@ -13887,10 +14128,14 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
         id, nombre: equips[i].nombre,
         pts: base[i].pts, pj: base[i].pj,
         pts_esperados: redondear1(sumaPts[i] / PREDICCION_SIMULACIONES),
+        pts_moda: resumen.equipos[i].moda, pts_p10: resumen.equipos[i].p10, pts_p90: resumen.equipos[i].p90,
+        gf_esperados: redondear1(sumaGF[i] / PREDICCION_SIMULACIONES),
+        gc_esperados: redondear1(sumaGC[i] / PREDICCION_SIMULACIONES),
         media: redondear1(eqs[i].nivel), margen: redondear1(eqs[i].margen), sd: redondear1(eqs[i].sd),
         esperado: puestoEsperado(conteo[i]),
         conteo: conteo[i],
       })),
+      puntos_puesto: resumen.tabla,
     };
   };
 
@@ -14130,6 +14375,7 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
         const detalle = e => (
           <>
             Puntos: <strong>{e.pts}</strong> en {e.pj} partidos · Puntos esperados al final: <strong>{num(e.pts_esperados)}</strong>
+            {e.pts_moda != null && <> (lo más probable, {e.pts_moda}; entre {e.pts_p10} y {e.pts_p90} en 8 de cada 10 simulaciones)</>}
             {' '}· Nivel estimado: <strong>{num(e.media)} ± {num(e.margen)}</strong> pts fantasy/jornada
             {' '}· Desv. típica por jornada: <strong>{num(e.sd)}</strong>
           </>
@@ -14185,6 +14431,12 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
                     Pulsa un equipo para ver su probabilidad en cada puesto. Estimación estadística, no una certeza: no tiene en
                     cuenta fichajes, lesiones, alineaciones ni comodines futuros.
                   </p>
+                  {!p.divisiones.some(d => d.puntos_puesto) && (
+                    <p style={{fontSize:'.75rem', color:'#b8860b', marginTop:'.4rem'}}>
+                      La clasificación final estimada y los puntos necesarios aparecerán
+                      {puedeCalcular ? ' al pulsar "Recalcular predicción".' : ' cuando el admin vuelva a calcular la predicción.'}
+                    </p>
+                  )}
                 </>
               )}
             </div>
@@ -14209,6 +14461,12 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
                       </p>
                     )}
                   </div>
+                  {d.puntos_puesto && <>
+                    <ClasificacionEstimada equipos={filas} nombreDe={nombreDe} miParticipanteId={miParticipanteId} conGoles
+                                           titulo={nombreDiv ? `${nombreDiv} — clasificación final estimada` : undefined} />
+                    <PuntosNecesarios tabla={d.puntos_puesto} n={d.equipos.length} zonas={zonas}
+                                      titulo={nombreDiv ? `${nombreDiv} — ¿cuántos puntos hacen falta?` : undefined} />
+                  </>}
                   <MapaCalorPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
                                        miParticipanteId={miParticipanteId} zonas={zonas}
                                        titulo={nombreDiv ? `${nombreDiv} — probabilidad por puesto` : 'Probabilidad por puesto'} />
@@ -16330,12 +16588,12 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga Fantástica — Clasificación Fantástica', 'Muestra el ranking acumulado de todos los equipos por puntos fantasy totales. También puedes filtrar la clasificación hasta una jornada concreta usando los botones de jornada. Bajo el nombre de cada equipo aparecen sus puntos en las últimas 5 jornadas (hasta la jornada elegida), de más antigua a más reciente: verde si quedó en el tercio alto de esa jornada, amarillo en el medio y rojo en el bajo; «—» si no tiene puntos esa jornada. La pestaña se abre en esta vista por defecto.'],
         ['Liga Fantástica — Últimas 5', 'Clasificación de forma reciente: suma solo los puntos de cada equipo en las últimas 5 jornadas con puntos, con los mismos colores por jornada que la Clasificación Fantástica. Aparece cuando ya se han jugado al menos 5 jornadas, igual que en la Liga FILFA.'],
         ['Liga Fantástica — Estadísticas', 'Recoge métricas avanzadas por equipo: media de puntos, máximo y mínimo histórico, jornadas ganadas, desviación típica y contador de jornadas liderando la clasificación o en el podio.'],
-        ['Liga Fantástica — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga Fantástica. Se simula 10.000 veces el resto de la temporada (hasta la J38) a partir de la media y la desviación típica de cada equipo, dando más peso a las jornadas recientes (una jornada pesa la mitad cada 6 jornadas de antigüedad). Como parte de cada media es suerte, se estima el nivel real de cada equipo comparando las diferencias entre equipos con lo que se explicaría solo por suerte: cuanto más igualada esté la liga y menos jornadas se hayan jugado, más se acerca cada equipo a la media de la liga, y ese nivel se simula con un margen de incertidumbre (no se da por seguro que todo siga igual). Verás el puesto esperado y la probabilidad de ser campeón, de terminar en el podio y de terminar último; pulsa un equipo para ver su probabilidad en cada puesto (en pantallas grandes aparece además la tabla completa). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones ni alineaciones futuras.'],
+        ['Liga Fantástica — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga Fantástica. Se simula 10.000 veces el resto de la temporada (hasta la J38) a partir de la media y la desviación típica de cada equipo, dando más peso a las jornadas recientes (una jornada pesa la mitad cada 6 jornadas de antigüedad). Como parte de cada media es suerte, se estima el nivel real de cada equipo comparando las diferencias entre equipos con lo que se explicaría solo por suerte: cuanto más igualada esté la liga y menos jornadas se hayan jugado, más se acerca cada equipo a la media de la liga, y ese nivel se simula con un margen de incertidumbre (no se da por seguro que todo siga igual). Verás el puesto esperado y la probabilidad de ser campeón, de terminar en el podio y de terminar último; pulsa un equipo para ver su probabilidad en cada puesto (en pantallas grandes aparece además la tabla completa). Debajo verás la clasificación final estimada (puntos finales esperados de cada equipo y el rango en el que terminan 8 de cada 10 simulaciones) y "¿Cuántos puntos hacen falta?": la probabilidad de ser campeón, de entrar en el podio, en cada zona de color o de terminar último según los puntos con los que se acabe, y con cuántos puntos suele terminar el puesto frontera. La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones ni alineaciones futuras.'],
         ['Jugadores destacados', 'En Liga Fantástica → Estadísticas y en la ficha de cada equipo (pestaña Equipos) verás, para cada equipo: el jugador que más puntos le ha aportado (sin contar el doble del capitán), el que más veces ha sido titular (sin contar porterías), el que más veces ha estado en el once ideal estando alineado con ese equipo, el que más veces ha entrado como suplente y el que más veces ha sido sustituido (ambos por sustituciones automáticas) y el más rentable (puntos aportados por millón pagado, solo jugadores de la plantilla actual). Si hay empate se muestran todos. En Estadísticas también aparece el ranking de la liga de jugadores con más apariciones en el once ideal. Solo cuentan las jornadas cerradas por el admin, y los datos se actualizan cada vez que se cierra una jornada.'],
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
         ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
-        ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
+        ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
       ]
     },

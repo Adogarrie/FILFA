@@ -105,6 +105,7 @@
                      width: 22px; height: 22px; border-radius: 4px; flex-shrink: 0;
                      font-size: .62rem; font-weight: 700; font-variant-numeric: tabular-nums; }
     .lbl-corto { display: none; } /* etiqueta corta de botón: solo en <400px (ver @media) */
+    .solo-movil { display: none; } /* solo en ≤640px (ver @media) */
     .btn-fila { border: none; padding: .3rem .7rem; border-radius: 8px; cursor: pointer;
                 font-size: .8rem; font-weight: 600; color: #fff; white-space: nowrap; }
 
@@ -217,6 +218,11 @@
       .btn-fila { padding: .25rem .45rem; font-size: .72rem; white-space: normal; line-height: 1.15; }
       /* Alineación: menos relleno, botones algo más pequeños y sin nombre del club (solo escudo) */
       .solo-escritorio { display: none !important; }
+      .solo-movil { display: inline; }
+      /* Mapa de calor de la predicción: celdas compactas y nombre recortado */
+      .mapa-calor { font-size: .68rem !important; }
+      .mapa-calor th, .mapa-calor td { padding: .3rem .12rem !important; min-width: 1.6rem; }
+      .mapa-calor .mapa-equipo { max-width: 6.5rem; overflow: hidden; text-overflow: ellipsis; padding-left: .3rem !important; }
       .tabla-alineacion td { padding: .35rem .2rem; }
       .tabla-alineacion .badge { padding: .12rem .35rem; }
       .btn-ali { margin-left: 2px !important; padding: .2rem .35rem !important; font-size: .7rem !important; }
@@ -3377,19 +3383,21 @@ function TablaPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId, zo
   );
 }
 
-// Mapa de calor completo equipos × puestos (solo en pantallas anchas).
+// Mapa de calor completo equipos × puestos. En el móvil se desliza en
+// horizontal con la columna del equipo fija a la izquierda.
 function MapaCalorPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId, zonas = [], titulo = 'Probabilidad por puesto' }) {
   const sim = simulaciones || 1;
   const n = equipos[0]?.conteo.length || 0;
   const maxConteo = Math.max(1, ...equipos.flatMap(e => e.conteo));
+  const columnaFija = { position:'sticky', left:0, zIndex:1, background:'#fff', boxShadow:'2px 0 3px rgba(0,0,0,.08)' };
   return (
-    <div className="card solo-escritorio">
+    <div className="card">
       <h2 style={{marginBottom:'.75rem'}}>{titulo}</h2>
       <div style={{overflowX:'auto'}}>
-        <table style={{fontSize:'.75rem'}}>
+        <table className="mapa-calor" style={{fontSize:'.75rem'}}>
           <thead>
             <tr>
-              <th>Equipo</th>
+              <th className="mapa-equipo" style={{...columnaFija, zIndex:2}}>Equipo</th>
               {Array.from({length: n}, (_, i) => {
                 const z = zonas.find(z => i + 1 >= z.desde && i + 1 <= z.hasta);
                 return <th key={i} style={{textAlign:'center', padding:'.3rem .2rem', borderBottom: z ? `3px solid ${z.bg}` : undefined}}>{i + 1}º</th>;
@@ -3399,7 +3407,8 @@ function MapaCalorPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId
           <tbody>
             {equipos.map(e => (
               <tr key={e.id}>
-                <td style={{fontWeight: e.id === miParticipanteId ? 800 : 600, whiteSpace:'nowrap'}}>{nombreDe(e)}</td>
+                <td className="mapa-equipo" title={nombreDe(e)}
+                    style={{...columnaFija, fontWeight: e.id === miParticipanteId ? 800 : 600, whiteSpace:'nowrap'}}>{nombreDe(e)}</td>
                 {e.conteo.map((c, i) => {
                   const intensidad = c / maxConteo;
                   return (
@@ -3418,6 +3427,7 @@ function MapaCalorPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId
       </div>
       <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
         Porcentaje de temporadas simuladas en las que cada equipo termina en cada puesto (· = menos del 1%).
+        <span className="solo-movil"> Desliza la tabla hacia la izquierda para ver todos los puestos.</span>
         {zonas.length > 0 && ' La línea de color bajo cada puesto marca su zona de la clasificación.'}
       </p>
     </div>

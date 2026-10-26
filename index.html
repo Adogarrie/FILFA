@@ -3048,16 +3048,18 @@ function useEstadisticasJugadores(federacionId, activo = true) {
   return est;
 }
 
-// ── Predicción de la clasificación final (Liga Fantástica) ─────
-// Simulación de Monte Carlo de las jornadas que faltan, repetida
+// ── Predicción de la clasificación final (Liga Fantástica y Liga FILFA) ─
+// Simulación de Monte Carlo del resto de la temporada, repetida
 // PREDICCION_SIMULACIONES veces, contando en qué puesto termina cada equipo
 // en cada temporada simulada. La calcula SOLO el admin en su navegador con
-// `clas` (ya cargado) y se guarda en estadisticas_jugadores.prediccion; el
-// resto solo la lee (ver supabase_prediccion_fantasy.sql).
+// datos ya cargados y se guarda en estadisticas_jugadores (columnas
+// `prediccion` y `prediccion_h2h`); el resto solo la lee (ver
+// supabase_prediccion_fantasy.sql y supabase_prediccion_h2h.sql).
 //
-// Modelo, para cada equipo:
-//  1. Media y desviación de sus puntos por jornada, ponderadas: las
-//     jornadas recientes pesan más (ver PREDICCION_VIDA_MEDIA).
+// Nivel de cada equipo (estimarNivelesFantasy, común a las dos ligas), a
+// partir de sus puntos fantasy por jornada:
+//  1. Media y desviación ponderadas: las jornadas recientes pesan más (ver
+//     PREDICCION_VIDA_MEDIA).
 //  2. Su NIVEL REAL (puntos esperados por jornada) no se conoce: la media
 //     observada mezcla nivel y suerte. Se estima con los datos de la propia
 //     liga (bayes empírico): se compara cuánto se diferencian las medias de
@@ -3066,7 +3068,7 @@ function useEstadisticasJugadores(federacionId, activo = true) {
 //     la liga tanto más cuanto más igualada esté la liga y menos jornadas
 //     lleve el equipo, y queda un margen de incertidumbre sobre ese nivel.
 //  3. En cada simulación se sortea primero el nivel real de cada equipo
-//     (dentro de ese margen) y después la suma de sus jornadas restantes
+//     (dentro de ese margen) y después sus jornadas (o partidos) restantes
 //     alrededor de ese nivel, con su desviación por jornada.
 const PREDICCION_SIMULACIONES     = 10000;
 const PREDICCION_JORNADAS_TOTALES = 38;  // mismas 38 jornadas que usa el resto de la Liga Fantástica
@@ -3081,11 +3083,12 @@ const PREDICCION_VIDA_MEDIA       = 6;
 // desviación propia es muy poco fiable).
 const PREDICCION_PESO_LIGA_DESV   = 3;
 
-function calcularPrediccionFantasy(clas, participantes) {
+// Devuelve { jornadas, ultima, s2, tau2, equipos: [{ id, nombre, actual,
+// jornadas, mediaObs, nivel, margen, sd }] } o null si no hay puntos.
+function estimarNivelesFantasy(clas, participantes) {
   const jornadas = [...new Set(clas.map(r => r.jornada))].sort((a, b) => a - b);
   if (!jornadas.length || !participantes.length) return null;
-  const ultima    = jornadas[jornadas.length - 1];
-  const restantes = Math.max(0, PREDICCION_JORNADAS_TOTALES - ultima);
+  const ultima = jornadas[jornadas.length - 1];
   const peso = j => Math.pow(0.5, (ultima - j) / PREDICCION_VIDA_MEDIA);
 
   // 1. Media y varianza ponderadas de cada equipo; nEf = jornadas efectivas.
@@ -3148,21 +3151,35 @@ function calcularPrediccionFantasy(clas, participantes) {
       e.nivel = mediaLiga; e.margen = Math.sqrt(tau2); e.sd = Math.sqrt(s2);
     }
   });
+  return { jornadas, ultima, s2, tau2, mediaLiga, equipos };
+}
 
-  // Normal(0,1) por Box-Muller.
+// Generador de normales N(0,1) (Box-Muller).
+function crearNormal() {
   let reserva = null;
-  const normal = () => {
+  return () => {
     if (reserva !== null) { const z = reserva; reserva = null; return z; }
     let u = 0; while (u === 0) u = Math.random();
     const v = Math.random(), r = Math.sqrt(-2 * Math.log(u));
     reserva = r * Math.sin(2 * Math.PI * v);
     return r * Math.cos(2 * Math.PI * v);
   };
+}
 
-  // 3. Simulación. Los puntos de las jornadas que faltan se sortean de una
-  // vez: la suma de `restantes` jornadas independientes N(nivel, sd²) es
-  // N(restantes·nivel, restantes·sd²). (Una jornada negativa sería
-  // prácticamente imposible con valores reales, así que no se recorta a 0.)
+const redondear1 = x => Math.round(x * 10) / 10;
+const puestoEsperado = conteo => Math.round(conteo.reduce((s, c, p) => s + c * (p + 1), 0) / PREDICCION_SIMULACIONES * 100) / 100;
+
+function calcularPrediccionFantasy(clas, participantes) {
+  const est = estimarNivelesFantasy(clas, participantes);
+  if (!est) return null;
+  const { equipos, ultima, jornadas, s2, tau2 } = est;
+  const restantes = Math.max(0, PREDICCION_JORNADAS_TOTALES - ultima);
+  const normal = crearNormal();
+
+  // Los puntos de las jornadas que faltan se sortean de una vez: la suma de
+  // `restantes` jornadas independientes N(nivel, sd²) es N(restantes·nivel,
+  // restantes·sd²). (Una jornada negativa sería prácticamente imposible con
+  // valores reales, así que no se recorta a 0.)
   const n = equipos.length;
   const conteo = equipos.map(() => new Array(n).fill(0)); // conteo[equipo][puesto]
   const totales = new Float64Array(n);
@@ -3179,50 +3196,58 @@ function calcularPrediccionFantasy(clas, participantes) {
     orden.forEach((i, puesto) => { conteo[i][puesto]++; });
   }
 
-  const r1 = x => Math.round(x * 10) / 10;
   return {
     calculada_at: new Date().toISOString(),
     ultima_jornada: ultima, jornadas_jugadas: jornadas.length, restantes,
     simulaciones: PREDICCION_SIMULACIONES, vida_media: PREDICCION_VIDA_MEDIA,
     modelo: 2,
     // Desviación por jornada típica de la liga y diferencia real estimada entre equipos.
-    ruido_jornada: r1(Math.sqrt(s2)), diferencia_real: r1(Math.sqrt(tau2)),
+    ruido_jornada: redondear1(Math.sqrt(s2)), diferencia_real: redondear1(Math.sqrt(tau2)),
     equipos: equipos.map((e, i) => ({
       id: e.id, nombre: e.nombre, actual: e.actual, jornadas: e.jornadas,
-      media_obs: e.mediaObs != null ? r1(e.mediaObs) : null,
-      media: r1(e.nivel), margen: r1(e.margen), sd: r1(e.sd),
-      esperado: Math.round(conteo[i].reduce((s, c, p) => s + c * (p + 1), 0) / PREDICCION_SIMULACIONES * 100) / 100,
+      media_obs: e.mediaObs != null ? redondear1(e.mediaObs) : null,
+      media: redondear1(e.nivel), margen: redondear1(e.margen), sd: redondear1(e.sd),
+      esperado: puestoEsperado(conteo[i]),
       conteo: conteo[i],
     })),
   };
 }
 
-const _prediccionCache = {}; // federacion_id → { t, promesa } (misma caché de 15 min que las estadísticas)
-function cargarPrediccionFantasy(federacionId, forzar = false) {
-  const c = _prediccionCache[federacionId];
+// Lectura/escritura de una predicción guardada (columna `prediccion` para
+// la Liga Fantástica, `prediccion_h2h` para la Liga FILFA), con la misma
+// caché de 15 min que las estadísticas.
+const _prediccionCache = {}; // `${federacion_id}|${columna}` → { t, promesa }
+const MIGRACION_PREDICCION = { prediccion: 'supabase_prediccion_fantasy.sql', prediccion_h2h: 'supabase_prediccion_h2h.sql' };
+function cargarPrediccion(federacionId, columna, forzar = false) {
+  const clave = `${federacionId}|${columna}`;
+  const c = _prediccionCache[clave];
   if (!forzar && c && Date.now() - c.t < ESTADISTICAS_JUG_CACHE_MS) return c.promesa;
-  const promesa = sb.from('estadisticas_jugadores').select('prediccion')
+  const promesa = sb.from('estadisticas_jugadores').select(columna)
     .eq('federacion_id', federacionId).maybeSingle()
     .then(({ data, error }) => {
       if (error) {
         console.error('[Predicción] Error al leer:', error.message);
-        delete _prediccionCache[federacionId];
+        delete _prediccionCache[clave];
         return { error: error.message };
       }
-      return { prediccion: data?.prediccion || null };
+      return { prediccion: data?.[columna] || null };
     });
-  _prediccionCache[federacionId] = { t: Date.now(), promesa };
+  _prediccionCache[clave] = { t: Date.now(), promesa };
   return promesa;
 }
 
-async function guardarPrediccionFantasy(federacionId, prediccion) {
+async function guardarPrediccion(federacionId, columna, prediccion) {
   const { error } = await sb.from('estadisticas_jugadores')
-    .upsert({ federacion_id: federacionId, prediccion }, { onConflict: 'federacion_id' });
+    .upsert({ federacion_id: federacionId, [columna]: prediccion }, { onConflict: 'federacion_id' });
   if (error) return /solo el admin/i.test(error.message || '') ? 'Solo el admin de la liga puede recalcular la predicción.'
-    : /prediccion/.test(error.message || '') ? 'Falta ejecutar la migración supabase_prediccion_fantasy.sql en Supabase.'
+    : /prediccion/.test(error.message || '') ? `Falta ejecutar la migración ${MIGRACION_PREDICCION[columna]} en Supabase.`
     : error.message;
-  _prediccionCache[federacionId] = { t: Date.now(), promesa: Promise.resolve({ prediccion }) };
+  _prediccionCache[`${federacionId}|${columna}`] = { t: Date.now(), promesa: Promise.resolve({ prediccion }) };
   return null;
+}
+
+function limpiarCachePrediccion(federacionId) {
+  Object.keys(_prediccionCache).forEach(k => { if (k.startsWith(federacionId + '|')) delete _prediccionCache[k]; });
 }
 
 // Porcentaje legible de un conteo de simulaciones: "—" si nunca ocurre.
@@ -3230,6 +3255,173 @@ function pctPrediccion(c, total) {
   if (!c) return '—';
   const p = c / total * 100;
   return p < 1 ? '<1%' : p > 99 && c < total ? '>99%' : `${Math.round(p)}%`;
+}
+
+// Zonas de la clasificación a partir de los colores por puesto (Admin →
+// Mi Federación → Colores de clasificación): puestos consecutivos con el
+// mismo color de fondo forman una zona (p. ej. 10º-12º en rojo = descenso).
+// Solo se guarda el color, no un nombre, así que se identifican por puestos.
+function zonasDeColores(reglas, nPuestos) {
+  const zonas = [];
+  for (let pos = 1; pos <= nPuestos; pos++) {
+    const r = (reglas || []).find(x => x.pos === pos);
+    if (!r?.bg) continue;
+    const ult = zonas[zonas.length - 1];
+    if (ult && ult.bg === r.bg && ult.hasta === pos - 1) ult.hasta = pos;
+    else zonas.push({ desde: pos, hasta: pos, bg: r.bg });
+  }
+  return zonas;
+}
+const etiquetaZona = z => z.desde === z.hasta ? `${z.desde}º` : `${z.desde}º–${z.hasta}º`;
+const muestraColor = bg => (
+  <span style={{display:'inline-block', width:10, height:10, borderRadius:2, background:bg,
+                border:'1px solid var(--borde)', verticalAlign:'middle', marginRight:3}} />
+);
+
+// Tabla compacta de una predicción (común a las dos ligas): puesto
+// esperado, % campeón, % podio, % último y % de cada zona de color; al
+// pulsar un equipo se abre su reparto por puestos. `detalle(e)` pinta la
+// línea de datos propia de cada liga sobre las barras.
+function TablaPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId, zonas = [], detalle }) {
+  const [abierto, setAbierto] = useState(null);
+  const sim = simulaciones || 1;
+  const n = equipos[0]?.conteo.length || 0;
+  // Columnas de zona: se omiten las que repetirían Campeón (solo el 1º) o
+  // Podio (1º–3º). Si una zona incluye el último puesto (p. ej. descenso),
+  // sustituye a la columna "Último".
+  const zonasCol = zonas.filter(z => !(z.desde === 1 && (z.hasta === 1 || z.hasta === 3)));
+  const mostrarUltimo = !zonasCol.some(z => z.hasta === n);
+  const sumaRango = (e, desde, hasta) => e.conteo.slice(desde - 1, hasta).reduce((s, c) => s + c, 0);
+  const celdaPct = { textAlign:'right', fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap' };
+  const columnas = 4 + (mostrarUltimo ? 1 : 0) + zonasCol.length;
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table>
+        <thead>
+          <tr>
+            <th>Equipo</th>
+            <th style={{textAlign:'right'}} title="Puesto medio en las temporadas simuladas">
+              <span className="lbl-largo">Puesto esp.</span><span className="lbl-corto">Esp.</span>
+            </th>
+            <th style={{textAlign:'right'}} title="Probabilidad de terminar 1º">
+              <span className="lbl-largo">Campeón</span><span className="lbl-corto">1º</span>
+            </th>
+            <th style={{textAlign:'right'}} title="Probabilidad de terminar entre los 3 primeros">Podio</th>
+            {mostrarUltimo && (
+              <th style={{textAlign:'right'}} title="Probabilidad de terminar último">
+                <span className="lbl-largo">Último</span><span className="lbl-corto">Últ.</span>
+              </th>
+            )}
+            {zonasCol.map(z => (
+              <th key={z.desde} style={{textAlign:'right', whiteSpace:'nowrap'}}
+                  title={`Probabilidad de terminar en la zona ${etiquetaZona(z)}`}>
+                {muestraColor(z.bg)}{etiquetaZona(z)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {equipos.map(e => {
+            const propio = e.id === miParticipanteId;
+            const estaAbierto = abierto === e.id;
+            const maxEq = Math.max(1, ...e.conteo);
+            return (
+              <React.Fragment key={e.id}>
+                <tr onClick={() => setAbierto(estaAbierto ? null : e.id)}
+                    style={{cursor:'pointer', background: propio ? 'rgba(63,128,41,.10)' : undefined}}>
+                  <td style={{fontWeight: propio ? 800 : 600}}>
+                    <span style={{color:'var(--texto2)', fontSize:'.7rem', marginRight:4}}>{estaAbierto ? '▾' : '▸'}</span>
+                    {nombreDe(e)}
+                  </td>
+                  <td style={{...celdaPct, fontWeight:700}}>{e.esperado.toLocaleString('es-ES', {minimumFractionDigits:1, maximumFractionDigits:1})}</td>
+                  <td style={celdaPct}>{pctPrediccion(e.conteo[0], sim)}</td>
+                  <td style={celdaPct}>{pctPrediccion(sumaRango(e, 1, 3), sim)}</td>
+                  {mostrarUltimo && <td style={celdaPct}>{pctPrediccion(e.conteo[n - 1], sim)}</td>}
+                  {zonasCol.map(z => <td key={z.desde} style={celdaPct}>{pctPrediccion(sumaRango(e, z.desde, z.hasta), sim)}</td>)}
+                </tr>
+                {estaAbierto && (
+                  <tr>
+                    <td colSpan={columnas} style={{background:'var(--fondo-alt)'}}>
+                      <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.5rem'}}>{detalle(e)}</div>
+                      {/* Reparto por puestos: una barra por puesto; la del puesto más probable ocupa toda la altura. */}
+                      <div style={{display:'flex', alignItems:'flex-end', gap:2, height:70}}>
+                        {e.conteo.map((c, i) => (
+                          <div key={i} title={`${i + 1}º: ${pctPrediccion(c, sim)}`}
+                               style={{flex:1, display:'flex', flexDirection:'column', justifyContent:'flex-end', alignItems:'center', height:'100%'}}>
+                            <span style={{fontSize:'.5rem', color:'var(--texto2)', whiteSpace:'nowrap'}}>
+                              {c / sim >= 0.01 ? Math.round(c / sim * 100) : ''}
+                            </span>
+                            <div style={{width:'100%', height:`${Math.round(c / maxEq * 52)}px`, minHeight: c ? 2 : 0,
+                                         background:'var(--verde)', borderRadius:'2px 2px 0 0'}} />
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{display:'flex', gap:2, borderTop:'1px solid var(--borde)'}}>
+                        {e.conteo.map((_, i) => {
+                          const z = zonas.find(z => i + 1 >= z.desde && i + 1 <= z.hasta);
+                          return (
+                            <span key={i} style={{flex:1, textAlign:'center', fontSize:'.5rem', color:'var(--texto2)',
+                                                  borderTop: z ? `3px solid ${z.bg}` : '3px solid transparent'}}>{i + 1}º</span>
+                          );
+                        })}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Mapa de calor completo equipos × puestos (solo en pantallas anchas).
+function MapaCalorPrediccion({ equipos, simulaciones, nombreDe, miParticipanteId, zonas = [], titulo = 'Probabilidad por puesto' }) {
+  const sim = simulaciones || 1;
+  const n = equipos[0]?.conteo.length || 0;
+  const maxConteo = Math.max(1, ...equipos.flatMap(e => e.conteo));
+  return (
+    <div className="card solo-escritorio">
+      <h2 style={{marginBottom:'.75rem'}}>{titulo}</h2>
+      <div style={{overflowX:'auto'}}>
+        <table style={{fontSize:'.75rem'}}>
+          <thead>
+            <tr>
+              <th>Equipo</th>
+              {Array.from({length: n}, (_, i) => {
+                const z = zonas.find(z => i + 1 >= z.desde && i + 1 <= z.hasta);
+                return <th key={i} style={{textAlign:'center', padding:'.3rem .2rem', borderBottom: z ? `3px solid ${z.bg}` : undefined}}>{i + 1}º</th>;
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {equipos.map(e => (
+              <tr key={e.id}>
+                <td style={{fontWeight: e.id === miParticipanteId ? 800 : 600, whiteSpace:'nowrap'}}>{nombreDe(e)}</td>
+                {e.conteo.map((c, i) => {
+                  const intensidad = c / maxConteo;
+                  return (
+                    <td key={i} title={`${nombreDe(e)} · ${i + 1}º: ${pctPrediccion(c, sim)}`}
+                        style={{textAlign:'center', padding:'.3rem .2rem', fontVariantNumeric:'tabular-nums',
+                                background: c ? `rgba(63,128,41,${(0.08 + intensidad * 0.85).toFixed(2)})` : 'transparent',
+                                color: intensidad > 0.5 ? '#fff' : 'var(--texto)'}}>
+                      {c / sim >= 0.01 ? Math.round(c / sim * 100) : c ? '·' : ''}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+        Porcentaje de temporadas simuladas en las que cada equipo termina en cada puesto (· = menos del 1%).
+        {zonas.length > 0 && ' La línea de color bajo cada puesto marca su zona de la clasificación.'}
+      </p>
+    </div>
+  );
 }
 
 // Recalcula y guarda las estadísticas de la federación (admin/moderador).
@@ -3408,11 +3600,10 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
   const [pred, setPred]               = useState(undefined); // { prediccion } | { error }
   const [calculandoPred, setCalculandoPred] = useState(false);
   const [msgPred, setMsgPred]         = useState('');
-  const [predAbierto, setPredAbierto] = useState(null);
   useEffect(() => {
     if (!sb || vista !== 'prediccion' || !federacion?.id) return;
     let vivo = true;
-    cargarPrediccionFantasy(federacion.id).then(r => { if (vivo) setPred(r); });
+    cargarPrediccion(federacion.id, 'prediccion').then(r => { if (vivo) setPred(r); });
     return () => { vivo = false; };
   }, [vista, federacion?.id]);
   const recalcularPrediccion = async () => {
@@ -3421,7 +3612,7 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
     await new Promise(r => setTimeout(r, 30));
     const nueva = calcularPrediccionFantasy(clas, participantes);
     if (!nueva) { setCalculandoPred(false); setMsgPred('Aún no hay puntuaciones para predecir.'); return; }
-    const err = await guardarPrediccionFantasy(federacion.id, nueva);
+    const err = await guardarPrediccion(federacion.id, 'prediccion', nueva);
     setCalculandoPred(false);
     if (err) { setMsgPred('Error al guardar la predicción: ' + err); return; }
     setPred({ prediccion: nueva }); setMsgPred('Predicción actualizada.');
@@ -4049,10 +4240,19 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
         // Solo equipos que siguen en la liga, ordenados por puesto esperado.
         const filas = p ? p.equipos.filter(e => participantes.some(x => x.id === e.id))
                                    .sort((a, b) => a.esperado - b.esperado) : [];
-        const sim = p?.simulaciones || 1;
-        const nPuestos = p?.equipos.length || 0;
-        const maxConteo = p ? Math.max(1, ...p.equipos.flatMap(e => e.conteo)) : 1;
-        const celdaPct = { textAlign:'right', fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap' };
+        const detalle = e => (
+          <>
+            Puntos actuales: <strong>{e.actual}</strong>
+            {e.margen != null ? (
+              // Modelo 2: nivel estimado (media ajustada a la liga) ± su incertidumbre.
+              <> · Nivel estimado: <strong>{e.media.toLocaleString('es-ES')} ± {e.margen.toLocaleString('es-ES')}</strong> pts/jornada
+                 {e.media_obs != null && <> (media ponderada {e.media_obs.toLocaleString('es-ES')})</>}</>
+            ) : (
+              <> · Media ponderada por jornada: <strong>{e.media.toLocaleString('es-ES')}</strong></>
+            )}
+            {' '}· Desv. típica por jornada: <strong>{e.sd.toLocaleString('es-ES')}</strong>
+          </>
+        );
         return (
           <>
             <div className="card">
@@ -4096,82 +4296,8 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
                       Con menos de 5 jornadas jugadas la predicción es poco fiable: las probabilidades estarán muy repartidas.
                     </p>
                   )}
-                  <div style={{overflowX:'auto'}}>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Equipo</th>
-                          <th style={{textAlign:'right'}} title="Puesto medio en las temporadas simuladas">
-                            <span className="lbl-largo">Puesto esp.</span><span className="lbl-corto">Esp.</span>
-                          </th>
-                          <th style={{textAlign:'right'}} title="Probabilidad de terminar 1º">
-                            <span className="lbl-largo">Campeón</span><span className="lbl-corto">1º</span>
-                          </th>
-                          <th style={{textAlign:'right'}} title="Probabilidad de terminar entre los 3 primeros">Podio</th>
-                          <th style={{textAlign:'right'}} title="Probabilidad de terminar último">
-                            <span className="lbl-largo">Último</span><span className="lbl-corto">Últ.</span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filas.map(e => {
-                          const propio = e.id === miParticipanteId;
-                          const abierto = predAbierto === e.id;
-                          const podio = e.conteo.slice(0, 3).reduce((s, c) => s + c, 0);
-                          return (
-                            <React.Fragment key={e.id}>
-                              <tr onClick={() => setPredAbierto(abierto ? null : e.id)}
-                                  style={{cursor:'pointer', background: propio ? 'rgba(63,128,41,.10)' : undefined}}>
-                                <td style={{fontWeight: propio ? 800 : 600}}>
-                                  <span style={{color:'var(--texto2)', fontSize:'.7rem', marginRight:4}}>{abierto ? '▾' : '▸'}</span>
-                                  {nombreDe(e)}
-                                </td>
-                                <td style={{...celdaPct, fontWeight:700}}>{e.esperado.toLocaleString('es-ES', {minimumFractionDigits:1, maximumFractionDigits:1})}</td>
-                                <td style={celdaPct}>{pctPrediccion(e.conteo[0], sim)}</td>
-                                <td style={celdaPct}>{pctPrediccion(podio, sim)}</td>
-                                <td style={celdaPct}>{pctPrediccion(e.conteo[nPuestos - 1], sim)}</td>
-                              </tr>
-                              {abierto && (
-                                <tr>
-                                  <td colSpan={5} style={{background:'var(--fondo-alt)'}}>
-                                    <div style={{fontSize:'.75rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
-                                      Puntos actuales: <strong>{e.actual}</strong>
-                                      {e.margen != null ? (
-                                        // Modelo 2: nivel estimado (media ajustada a la liga) ± su incertidumbre.
-                                        <> · Nivel estimado: <strong>{e.media.toLocaleString('es-ES')} ± {e.margen.toLocaleString('es-ES')}</strong> pts/jornada
-                                           {e.media_obs != null && <> (media ponderada {e.media_obs.toLocaleString('es-ES')})</>}</>
-                                      ) : (
-                                        <> · Media ponderada por jornada: <strong>{e.media.toLocaleString('es-ES')}</strong></>
-                                      )}
-                                      {' '}· Desv. típica por jornada: <strong>{e.sd.toLocaleString('es-ES')}</strong>
-                                    </div>
-                                    {/* Reparto por puestos: una barra por puesto; la del puesto más probable ocupa toda la altura. */}
-                                    <div style={{display:'flex', alignItems:'flex-end', gap:2, height:70}}>
-                                      {e.conteo.map((c, i) => (
-                                        <div key={i} title={`${i + 1}º: ${pctPrediccion(c, sim)}`}
-                                             style={{flex:1, display:'flex', flexDirection:'column', justifyContent:'flex-end', alignItems:'center', height:'100%'}}>
-                                          <span style={{fontSize:'.5rem', color:'var(--texto2)', whiteSpace:'nowrap'}}>
-                                            {c / sim >= 0.01 ? Math.round(c / sim * 100) : ''}
-                                          </span>
-                                          <div style={{width:'100%', height:`${Math.round(c / Math.max(...e.conteo) * 52)}px`, minHeight: c ? 2 : 0,
-                                                       background:'var(--verde)', borderRadius:'2px 2px 0 0'}} />
-                                        </div>
-                                      ))}
-                                    </div>
-                                    <div style={{display:'flex', gap:2, borderTop:'1px solid var(--borde)'}}>
-                                      {e.conteo.map((_, i) => (
-                                        <span key={i} style={{flex:1, textAlign:'center', fontSize:'.5rem', color:'var(--texto2)'}}>{i + 1}º</span>
-                                      ))}
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  <TablaPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
+                                   miParticipanteId={miParticipanteId} detalle={detalle} />
                   <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
                     Pulsa un equipo para ver su probabilidad en cada puesto. Estimación estadística, no una certeza:
                     supone que cada equipo seguirá puntuando a su nivel estimado (las jornadas recientes pesan más y, como parte
@@ -4181,43 +4307,9 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
                 </>
               )}
             </div>
-
-            {/* Mapa de calor completo equipos × puestos: solo en pantallas anchas. */}
             {p && filas.length > 0 && (
-              <div className="card solo-escritorio">
-                <h2 style={{marginBottom:'.75rem'}}>Probabilidad por puesto</h2>
-                <div style={{overflowX:'auto'}}>
-                  <table style={{fontSize:'.75rem'}}>
-                    <thead>
-                      <tr>
-                        <th>Equipo</th>
-                        {Array.from({length: nPuestos}, (_, i) => <th key={i} style={{textAlign:'center', padding:'.3rem .2rem'}}>{i + 1}º</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filas.map(e => (
-                        <tr key={e.id}>
-                          <td style={{fontWeight: e.id === miParticipanteId ? 800 : 600, whiteSpace:'nowrap'}}>{nombreDe(e)}</td>
-                          {e.conteo.map((c, i) => {
-                            const intensidad = c / maxConteo;
-                            return (
-                              <td key={i} title={`${nombreDe(e)} · ${i + 1}º: ${pctPrediccion(c, sim)}`}
-                                  style={{textAlign:'center', padding:'.3rem .2rem', fontVariantNumeric:'tabular-nums',
-                                          background: c ? `rgba(63,128,41,${(0.08 + intensidad * 0.85).toFixed(2)})` : 'transparent',
-                                          color: intensidad > 0.5 ? '#fff' : 'var(--texto)'}}>
-                                {c / sim >= 0.01 ? Math.round(c / sim * 100) : c ? '·' : ''}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
-                  Porcentaje de temporadas simuladas en las que cada equipo termina en cada puesto (· = menos del 1%).
-                </p>
-              </div>
+              <MapaCalorPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
+                                   miParticipanteId={miParticipanteId} />
             )}
           </>
         );
@@ -8470,7 +8562,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     const { error: errEst } = await sb.from('estadisticas_jugadores').delete().eq('federacion_id', federacion.id);
     if (errEst) console.error('[Reinicio] Error al borrar las estadísticas de jugadores:', errEst.message);
     delete _estadisticasJugCache[federacion.id];
-    delete _prediccionCache[federacion.id];
+    limpiarCachePrediccion(federacion.id);
     delete _rankingJugCache[federacion.id];
     setResetModal(false);
     setResetConfirmNombre('');
@@ -12518,7 +12610,8 @@ function Competiciones({ federacion, participantes, isAdmin, miParticipanteId })
                            miParticipanteId={miParticipanteId} />
       )}
       {tab === 'h2h' && (
-        <LigaH2H federacion={federacion} participantes={participantes} isAdmin={isAdmin} />
+        <LigaH2H federacion={federacion} participantes={participantes} isAdmin={isAdmin}
+                 miParticipanteId={miParticipanteId} />
       )}
       {MOSTRAR_PESTANA_LOGROS && tab === 'logros' && (
         <LogrosVista federacion={federacion} participantes={participantes} />
@@ -13163,7 +13256,7 @@ function LogrosResumenTable({ rowsParticipantes, logros }) {
 }
 
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
-function LigaH2H({ federacion, participantes, isAdmin }) {
+function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
   const [tab,              setTab]             = useState('clasificacion');
   const [subTabClasif,     setSubTabClasif]     = useState('general');
   const [partidos,         setPartidos]         = useState([]);
@@ -13172,6 +13265,21 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
   const [divisiones,       setDivisiones]       = useState([]);
   const [vueltasExtra,     setVueltasExtra]     = useState([]);
   const [logros,           setLogros]           = useState([]);
+  // Predicción: solo se pide al abrir su pestaña (undefined = cargando); la calcula solo el admin.
+  const [predH2H,          setPredH2H]          = useState(undefined); // { prediccion } | { error }
+  const [calculandoPredH2H, setCalculandoPredH2H] = useState(false);
+  const [msgPredH2H,       setMsgPredH2H]       = useState('');
+  const baremo = useMemo(() => {
+    try { return JSON.parse(federacion?.h2h_baremo || 'null') || BAREMO_DEFAULT; }
+    catch { return BAREMO_DEFAULT; }
+  }, [federacion?.h2h_baremo]);
+
+  useEffect(() => {
+    if (!sb || tab !== 'prediccion' || !federacion?.id) return;
+    let vivo = true;
+    cargarPrediccion(federacion.id, 'prediccion_h2h').then(r => { if (vivo) setPredH2H(r); });
+    return () => { vivo = false; };
+  }, [tab, federacion?.id]);
 
   useEffect(() => {
     if (!sb) return;
@@ -13700,12 +13808,118 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
     );
   };
 
+  // ── Predicción de la clasificación final (Liga FILFA) ──────────
+  // Simula cada partido pendiente del calendario: los puntos fantasy de los
+  // dos equipos se sortean según su nivel (estimarNivelesFantasy, con los
+  // puntos de la Liga Fantástica), el local suma el bonus de esa vuelta y se
+  // pasan a goles con el baremo de la liga. Los partidos ya jugados se
+  // mantienen y la clasificación final se ordena con ordenarConDesempate
+  // (mismos criterios que la tabla real).
+  const simularPrediccionH2H = (niveles, divId, normal) => {
+    const ptsV1 = federacion?.h2h_pts_local_v1 ?? 5;
+    const ptsV2 = federacion?.h2h_pts_local_v2 ?? 5;
+    const equips = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+    const ids = equips.map(p => p.id);
+    const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
+    const nivelDe = Object.fromEntries(niveles.equipos.map(e => [e.id, e]));
+    const vacio = () => ({ pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0, pf:0, pc:0 });
+    const sumar = (s, gf, gc, ff, fc) => {
+      s.pj++; s.gf += gf; s.gc += gc;
+      if (ff != null && fc != null) { s.pf += ff; s.pc += fc; }
+      if (gf > gc) { s.pg++; s.pts += 3; } else if (gf === gc) { s.pe++; s.pts++; } else s.pp++;
+    };
+    // Estadísticas reales de los partidos ya jugados (igual que computeClasif).
+    const base = ids.map(vacio);
+    const msBase = divId ? partidos.filter(m => m.division_id === divId) : partidos;
+    // Copias mutables: los partidos pendientes se rellenan en cada simulación
+    // (ordenarConDesempate las lee para el enfrentamiento directo).
+    const msSim = msBase.map(m => ({ ...m }));
+    const pendientes = [];
+    msSim.forEach(m => {
+      const iL = idx[m.local_id], iV = idx[m.visitante_id];
+      if (iL === undefined || iV === undefined) return;
+      if (m.pts_local !== null && m.pts_visitante !== null) {
+        const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+        const conFantasy = m.fantasy_local != null && m.fantasy_visitante != null;
+        const fl = conFantasy ? Number(m.fantasy_local) : null, fv = conFantasy ? Number(m.fantasy_visitante) : null;
+        sumar(base[iL], gl, gv, fl, fv); sumar(base[iV], gv, gl, fv, fl);
+      } else {
+        const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
+        const { ptsLocal } = getVueltaInfo(m.jornada, federacion?.h2h_jornadas_base, ptsV1, ptsV2, veDiv);
+        pendientes.push({ m, iL, iV, bonus: Number(ptsLocal) || 0 });
+      }
+    });
+    const n = ids.length;
+    const eqs = ids.map(id => nivelDe[id] || { nivel: niveles.mediaLiga, margen: Math.sqrt(niveles.tau2), sd: Math.sqrt(niveles.s2) });
+    const conteo = ids.map(() => new Array(n).fill(0));
+    const sumaPts = new Float64Array(n);
+    const criterios = parseCriteriosH2H();
+    const nivelSim = new Float64Array(n);
+    // Puntos fantasy enteros (el baremo va por tramos de enteros).
+    const puntos = i => Math.max(0, Math.round(nivelSim[i] + eqs[i].sd * normal()));
+    for (let s = 0; s < PREDICCION_SIMULACIONES; s++) {
+      for (let i = 0; i < n; i++) nivelSim[i] = eqs[i].nivel + eqs[i].margen * normal(); // nivel real en esta temporada simulada
+      const rows = ids.map((id, i) => ({ id, ...base[i] }));
+      pendientes.forEach(({ m, iL, iV, bonus }) => {
+        const fl = puntos(iL), fv = puntos(iV);
+        const gl = ptsToGoles(fl + bonus, baremo), gv = ptsToGoles(fv, baremo);
+        m.pts_local = gl; m.pts_visitante = gv; m.fantasy_local = fl; m.fantasy_visitante = fv;
+        sumar(rows[iL], gl, gv, fl, fv); sumar(rows[iV], gv, gl, fv, fl);
+      });
+      ordenarConDesempate(rows, msSim, criterios).forEach((r, puesto) => {
+        conteo[idx[r.id]][puesto]++; sumaPts[idx[r.id]] += r.pts;
+      });
+    }
+    return {
+      division_id: divId,
+      pendientes: pendientes.length,
+      equipos: ids.map((id, i) => ({
+        id, nombre: equips[i].nombre,
+        pts: base[i].pts, pj: base[i].pj,
+        pts_esperados: redondear1(sumaPts[i] / PREDICCION_SIMULACIONES),
+        media: redondear1(eqs[i].nivel), margen: redondear1(eqs[i].margen), sd: redondear1(eqs[i].sd),
+        esperado: puestoEsperado(conteo[i]),
+        conteo: conteo[i],
+      })),
+    };
+  };
+
+  const recalcularPrediccionH2H = async () => {
+    setCalculandoPredH2H(true); setMsgPredH2H('');
+    // Nivel de cada equipo con todos sus puntos de la Liga Fantástica (1 lectura).
+    const { data: clasH2H, error } = await obtenerTodasLasFilas(() => sb.from('clasificacion')
+      .select('participante_id, jornada, puntos_jornada')
+      .in('participante_id', participantes.map(p => p.id))
+      .order('participante_id').order('jornada'));
+    if (error) { setCalculandoPredH2H(false); setMsgPredH2H('Error al leer los puntos: ' + error.message); return; }
+    const niveles = estimarNivelesFantasy(clasH2H || [], participantes);
+    if (!niveles) { setCalculandoPredH2H(false); setMsgPredH2H('Aún no hay puntos fantasy para estimar el nivel de los equipos.'); return; }
+    // Ceder un instante para que se pinte "Calculando…" antes del cálculo (síncrono).
+    await new Promise(r => setTimeout(r, 30));
+    const normal = crearNormal();
+    const jugados = partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null);
+    const nueva = {
+      calculada_at: new Date().toISOString(), modelo: 2,
+      simulaciones: PREDICCION_SIMULACIONES, vida_media: PREDICCION_VIDA_MEDIA,
+      total_partidos: partidos.length, jugados: jugados.length,
+      ultima_jornada_h2h: jugados.length ? Math.max(...jugados.map(m => m.jornada)) : 0,
+      ultima_jornada_fantasy: niveles.ultima,
+      divisiones: (hasDivs ? divIds : [null]).map(d => simularPrediccionH2H(niveles, d, normal)),
+    };
+    const err = await guardarPrediccion(federacion.id, 'prediccion_h2h', nueva);
+    setCalculandoPredH2H(false);
+    if (err) { setMsgPredH2H('Error al guardar la predicción: ' + err); return; }
+    setPredH2H({ prediccion: nueva }); setMsgPredH2H('Predicción actualizada.');
+    setTimeout(() => setMsgPredH2H(''), 3000);
+  };
+
   return (
     <div>
       <div className="tabs">
         <button className={`tab ${tab==='clasificacion'?'active':''}`} onClick={() => setTab('clasificacion')}>Clasificación H2H</button>
         <button className={`tab ${tab==='calendario'?'active':''}`}    onClick={() => setTab('calendario')}>Calendario</button>
         <button className={`tab ${tab==='estadisticas'?'active':''}`}  onClick={() => setTab('estadisticas')}>Estadísticas</button>
+        <button className={`tab ${tab==='prediccion'?'active':''}`}    onClick={() => setTab('prediccion')}>🔮 Predicción</button>
         {isAdmin && <button onClick={() => {
           // ── Hoja Calendario ──
           const calHeader = ['Jornada', 'División', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante', 'Pts Fantasy Local', 'Pts Fantasy Visitante'];
@@ -13895,6 +14109,105 @@ function LigaH2H({ federacion, participantes, isAdmin }) {
                 })()
             )
       )}
+
+      {tab === 'prediccion' && (() => {
+        const p = predH2H?.prediccion;
+        const puedeCalcular = isAdmin; // solo el admin (no moderadores); la BD también lo impide
+        const jugadosAhora = partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null).length;
+        const nombreDe = e => nomMap[e.id]?.nombre || e.nombre;
+        const pendientesTot = p ? p.divisiones.reduce((s, d) => s + d.pendientes, 0) : 0;
+        const num = x => Number(x).toLocaleString('es-ES');
+        const detalle = e => (
+          <>
+            Puntos: <strong>{e.pts}</strong> en {e.pj} partidos · Puntos esperados al final: <strong>{num(e.pts_esperados)}</strong>
+            {' '}· Nivel estimado: <strong>{num(e.media)} ± {num(e.margen)}</strong> pts fantasy/jornada
+            {' '}· Desv. típica por jornada: <strong>{num(e.sd)}</strong>
+          </>
+        );
+        return (
+          <>
+            <div className="card">
+              <div style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap', marginBottom:'.5rem'}}>
+                <h2 style={{margin:0}}>Predicción de la clasificación final</h2>
+                {puedeCalcular && (
+                  <button onClick={recalcularPrediccionH2H} disabled={calculandoPredH2H || partidos.length === 0}
+                          style={{marginLeft:'auto', background:'var(--verde)', color:'#fff', border:'none',
+                                  padding:'.45rem 1rem', borderRadius:9, fontSize:'.85rem', fontWeight:700,
+                                  cursor: calculandoPredH2H ? 'wait' : 'pointer', opacity: calculandoPredH2H ? .7 : 1}}>
+                    {calculandoPredH2H ? 'Calculando…' : '🔄 Recalcular predicción'}
+                  </button>
+                )}
+              </div>
+              {msgPredH2H && <p style={{fontSize:'.82rem', fontWeight:600, color: msgPredH2H.startsWith('Error') ? '#dc3545' : 'var(--verde)'}}>{msgPredH2H}</p>}
+              {predH2H === undefined ? (
+                <div className="empty">Cargando…</div>
+              ) : predH2H.error ? (
+                <div className="empty">No se pudo cargar la predicción.</div>
+              ) : !p ? (
+                <div className="empty">
+                  Aún no se ha calculado ninguna predicción.
+                  {puedeCalcular ? ' Pulsa "Recalcular predicción" para generarla.' : ' La calcula el admin.'}
+                </div>
+              ) : (
+                <>
+                  <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.4rem'}}>
+                    Calculada el {new Date(p.calculada_at).toLocaleString('es-ES', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})}
+                    {' '}con resultados hasta la J{p.ultima_jornada_h2h} de la Liga FILFA y puntos fantasy hasta la J{p.ultima_jornada_fantasy}
+                    {pendientesTot > 0 ? `; quedan ${pendientesTot} partidos por jugar` : '; no quedan partidos por jugar'}.
+                    {' '}{p.simulaciones.toLocaleString('es-ES')} temporadas simuladas.
+                  </p>
+                  {(jugadosAhora !== p.jugados || partidos.length !== p.total_partidos) && (
+                    <p style={{fontSize:'.78rem', color:'#b8860b', fontWeight:600, marginBottom:'.4rem'}}>
+                      ⚠ Hay resultados o partidos nuevos desde que se calculó: esta predicción está desactualizada
+                      {puedeCalcular ? '. Pulsa "Recalcular predicción".' : ' hasta que el admin la recalcule.'}
+                    </p>
+                  )}
+                  {p.ultima_jornada_h2h < 5 && (
+                    <p style={{fontSize:'.78rem', color:'#b8860b', marginBottom:'.4rem'}}>
+                      Con menos de 5 jornadas jugadas la predicción es poco fiable: las probabilidades estarán muy repartidas.
+                    </p>
+                  )}
+                  <p style={{fontSize:'.7rem', color:'var(--texto2)'}}>
+                    Se simula cada partido pendiente del calendario: los puntos fantasy de cada equipo según su nivel estimado
+                    (con sus puntos de la Liga Fantástica; las jornadas recientes pesan más y, como parte de cada media es suerte,
+                    se acerca a la media de la liga y se simula con un margen de incertidumbre), más el bonus de local de esa vuelta,
+                    pasados a goles con el baremo de la liga. La clasificación final usa los criterios de desempate configurados.
+                    Pulsa un equipo para ver su probabilidad en cada puesto. Estimación estadística, no una certeza: no tiene en
+                    cuenta fichajes, lesiones, alineaciones ni comodines futuros.
+                  </p>
+                </>
+              )}
+            </div>
+            {p && p.divisiones.map(d => {
+              const filas = d.equipos.filter(e => nomMap[e.id]).sort((a, b) => a.esperado - b.esperado);
+              if (!filas.length) return null;
+              const reglas = d.division_id
+                ? (federacion?.clasif_colores?.['h2h_div_' + d.division_id] || federacion?.clasif_colores?.h2h)
+                : federacion?.clasif_colores?.h2h;
+              const zonas = zonasDeColores(reglas, d.equipos.length);
+              const nombreDiv = d.division_id ? divisiones.find(x => x.id === d.division_id)?.nombre : null;
+              return (
+                <React.Fragment key={d.division_id || 'todas'}>
+                  <div className="card">
+                    {nombreDiv && <h2 style={{marginBottom:'.6rem'}}>{nombreDiv}</h2>}
+                    <TablaPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
+                                     miParticipanteId={miParticipanteId} zonas={zonas} detalle={detalle} />
+                    {zonas.length > 0 && (
+                      <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+                        Zonas de la clasificación según los colores configurados por el admin: {zonas.map(etiquetaZona).join(', ')}.
+                        Las columnas con muestra de color dan la probabilidad de terminar en cada zona.
+                      </p>
+                    )}
+                  </div>
+                  <MapaCalorPrediccion equipos={filas} simulaciones={p.simulaciones} nombreDe={nombreDe}
+                                       miParticipanteId={miParticipanteId} zonas={zonas}
+                                       titulo={nombreDiv ? `${nombreDiv} — probabilidad por puesto` : 'Probabilidad por puesto'} />
+                </React.Fragment>
+              );
+            })}
+          </>
+        );
+      })()}
 
       {tab === 'clasificacion' && (
         <>
@@ -16012,6 +16325,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
         ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar.'],
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
+        ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
       ]
     },
@@ -16060,6 +16374,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Logros', 'Los logros se activan o desactivan en Admin → Liga FILFA (requiere tener la Liga FILFA activada). Se recalculan solos al calcular una jornada H2H y al guardar resultados de Liga FILFA; en ese mismo momento se actualiza el progreso que ven los equipos. Con el botón "🏆 Recalcular logros" se puede forzar el recálculo, por ejemplo tras corregir puntos de una jornada. Si el recálculo no puede leer todos los datos, se cancela sin guardar nada y se muestra el error. Al reiniciar la temporada, los logros conseguidos se conservan y el progreso se borra.'],
         ['Jugadores destacados', 'Las estadísticas de jugadores destacados (Equipos y Liga Fantástica → Estadísticas) y la clasificación de jugadores (Competiciones → 🏅 Jugadores) se recalculan solas al cerrar, reabrir o editar una jornada en Admin → Pts Jugadores. El botón "📊 Recalcular estadísticas" de esa misma pantalla permite forzarlo. Solo cuentan las jornadas cerradas, así que conviene cerrar cada jornada cuando sus puntos sean definitivos. Al reiniciar la temporada se borran.'],
         ['Predicción de la Liga Fantástica', 'El botón "🔄 Recalcular predicción" de Liga Fantástica → 🔮 Predicción solo lo ve el admin (los moderadores no pueden recalcularla). Simula en tu navegador el resto de la temporada con los puntos existentes y guarda el resultado para que lo vea toda la liga. No se recalcula sola: conviene pulsarlo tras introducir los puntos de cada jornada (si no, los usuarios verán un aviso de que está desactualizada). Al reiniciar la temporada se borra.'],
+        ['Predicción de la Liga FILFA', 'Igual que la de la Liga Fantástica: el botón "🔄 Recalcular predicción" de Liga FILFA → 🔮 Predicción solo lo ve el admin. Lee una vez los puntos fantasy de la liga, simula en tu navegador los partidos pendientes del calendario y guarda el resultado para toda la liga. Conviene pulsarlo tras calcular los resultados de cada jornada o tras añadir una vuelta extra (si no, los usuarios verán un aviso de que está desactualizada). Las zonas que aparecen salen de los colores de clasificación de la Liga FILFA (Admin → Mi Federación → Colores de clasificación), por división si los tienes configurados así. Al reiniciar la temporada se borra.'],
       ]
     },
     {

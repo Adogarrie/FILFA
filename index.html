@@ -5143,6 +5143,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
     actualizarEstadisticas(); // jornada nueva en el histórico de jugadores destacados
     // Predicción (solo el admin) y crónica de la jornada en el Tablón, en segundo plano.
     trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin: !isModerador });
+    // Quiniela de la jornada: se resuelve ya si todos sus partidos tienen resultado.
+    resolverQuinielaJornada(federacion, jornada);
   };
 
   const reabrirJornada = async () => {
@@ -6503,7 +6505,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
     admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
-    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆', cronica: '📰',
+    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆', cronica: '📰', quiniela: '🎯',
   };
 
   const fmtFecha = ts => {
@@ -6650,6 +6652,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
                                                     : a.tipo === 'mensaje_club'    ? 'rgba(13,110,253,.06)'
                                                     : a.tipo === 'logro'           ? 'rgba(245,166,35,.08)'
                                                     : a.tipo === 'cronica'         ? 'rgba(63,128,41,.05)'
+                                                    : a.tipo === 'quiniela'        ? 'rgba(13,110,253,.05)'
                                                     : 'var(--gris)',
                                           border: a.tipo === 'mensaje_admin'   ? '1.5px solid var(--verde)'
                                                 : a.tipo === 'reinicio'        ? '1.5px solid #dc3545'
@@ -6657,12 +6660,13 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
                                                 : a.tipo === 'mensaje_club'    ? '1.5px solid rgba(13,110,253,.4)'
                                                 : a.tipo === 'logro'           ? '1.5px solid rgba(245,166,35,.5)'
                                                 : a.tipo === 'cronica'         ? '1.5px solid rgba(63,128,41,.35)'
+                                                : a.tipo === 'quiniela'        ? '1.5px solid rgba(13,110,253,.3)'
                                                 : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
                     <div style={{display:'flex', gap:'.75rem', alignItems:'flex-start'}}>
                       <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
                       <div style={{flex:1}}>
-                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario' || a.tipo === 'cronica')
+                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario' || a.tipo === 'cronica' || a.tipo === 'quiniela')
                           ? <div className="md-content"
                                  dangerouslySetInnerHTML={renderMd(a.texto)} />
                           : <div style={{fontWeight: a.tipo === 'reinicio' ? 600 : 500,
@@ -8827,6 +8831,9 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
     // conserva): se borra para no mostrar el de la anterior hasta el próximo cálculo.
     const { error: errProg } = await sb.from('logros_progreso').delete().eq('federacion_id', federacion.id);
     if (errProg) console.error('[Reinicio] Error al borrar el progreso de logros:', errProg.message);
+    // Quinielas (con sus pronósticos y resultados, en cascada): son de la temporada.
+    const { error: errQui } = await sb.from('quinielas').delete().eq('federacion_id', federacion.id);
+    if (errQui) console.error('[Reinicio] Error al borrar las quinielas:', errQui.message);
     // Igual con los jugadores destacados: son de la temporada que termina.
     const { error: errEst } = await sb.from('estadisticas_jugadores').delete().eq('federacion_id', federacion.id);
     if (errEst) console.error('[Reinicio] Error al borrar las estadísticas de jugadores:', errEst.message);
@@ -11683,6 +11690,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     setPartidos(p=>p.map(m=>{const u=updates.find(x=>x.id===m.id);return u?{...m,...u}:m;}));
     const grupoNom = grupos.find(g => g.id === gid)?.nombre || `Grupo ${gid}`;
     publicar(fedId, 'admin', `Resultados calculados — ${compAct?.nombre || 'Competición'}, ${grupoNom}, Ronda ${ronda}.`, actorNombre);
+    resolverQuinielaJornada(federacion, jornada);
     flash(`Ronda ${ronda} calculada`);
     setBusy(false);
   };
@@ -11706,6 +11714,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const nomV = nomMap[m.participante_visitante_id] || 'Visitante';
     const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomL} vs ${nomV}`;
     publicar(fedId, 'admin', `Resultado calculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}.`, actorNombre);
+    resolverQuinielaJornada(federacion, m.jornada_fantasy);
     flash(`Calculado: ${gL} — ${gV}`);
     setBusy(false);
   };
@@ -11960,6 +11969,242 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   );
 }
 
+// ── ADMIN — QUINIELA ──────────────────────────────────────────
+function AdminQuiniela({ federacion, participantes, onFederacionUpdate, actorNombre }) {
+  const fedId = federacion?.id;
+  const [habilitada, setHabilitada] = useState(!!federacion?.quiniela_habilitada);
+  const [premioM, setPremioM]       = useState(String((federacion?.quiniela_premio ?? 1000000) / 1_000_000));
+  const [costeM, setCosteM]         = useState(String((federacion?.quiniela_coste ?? 0) / 1_000_000));
+  const [msgCfg, setMsgCfg]         = useState('');
+  const [delegados, setDelegados]   = useState([]);
+  const [selDel, setSelDel]         = useState('');
+  const [jornada, setJornada]       = useState(federacion?.jornada_actual || 1);
+  const [datos, setDatos]           = useState(undefined);
+  const [nPron, setNPron]           = useState({});   // quiniela_partido_id → nº de pronósticos
+  const [msgJ, setMsgJ]             = useState('');
+  const [abiertas, setAbiertas]     = useState([]);
+  const [msgRes, setMsgRes]         = useState('');
+
+  const nombre = id => participantes.find(p => p.id === id)?.nombre || '?';
+  const flash = (set, t) => { set(t); setTimeout(() => set(''), 3500); };
+
+  const cargarDelegados = async () => {
+    const { data } = await sb.from('quiniela_delegados').select('id, participante_id').eq('federacion_id', fedId);
+    setDelegados(data || []);
+  };
+  const cargarAbiertas = async () => {
+    const { data } = await sb.from('quinielas').select('id, jornada').eq('federacion_id', fedId)
+      .eq('estado', 'abierta').order('jornada');
+    setAbiertas(data || []);
+  };
+  useEffect(() => { if (sb && fedId) { cargarDelegados(); cargarAbiertas(); } }, [fedId]);
+
+  const cargarJornada = async () => {
+    if (!sb || !fedId || !federacion?.quiniela_habilitada) { setDatos(null); return; }
+    setDatos(undefined);
+    const { data, error } = await cargarQuiniela(fedId, jornada);
+    if (error) { setDatos(null); flash(setMsgJ, errorQuiniela(error)); return; }
+    setDatos(data || null);
+    if (data) {
+      const { data: prs } = await sb.from('quiniela_pronosticos').select('quiniela_partido_id').eq('quiniela_id', data.quiniela.id);
+      const n = {};
+      (prs || []).forEach(p => { n[p.quiniela_partido_id] = (n[p.quiniela_partido_id] || 0) + 1; });
+      setNPron(n);
+      cargarAbiertas();
+    }
+  };
+  useEffect(() => { cargarJornada(); }, [fedId, jornada, federacion?.quiniela_habilitada]);
+
+  const guardarConfig = async () => {
+    const premio = Math.round(parseFloat(String(premioM).replace(',', '.')) * 1_000_000);
+    const coste  = Math.round(parseFloat(String(costeM).replace(',', '.')) * 1_000_000);
+    if (!(premio >= 0) || !(coste >= 0)) { flash(setMsgCfg, 'Error: el premio y el coste deben ser 0 o más'); return; }
+    const { data, error } = await sb.from('federaciones')
+      .update({ quiniela_habilitada: habilitada, quiniela_premio: premio, quiniela_coste: coste })
+      .eq('id', fedId).select().single();
+    if (error) { flash(setMsgCfg, 'Error: ' + error.message); return; }
+    if (habilitada !== !!federacion?.quiniela_habilitada) {
+      publicar(fedId, 'admin', habilitada ? '🎯 ¡La quiniela de la jornada ya está disponible en Competiciones!' : 'La quiniela de la jornada se ha desactivado.', actorNombre);
+    }
+    onFederacionUpdate(data);
+    flash(setMsgCfg, 'Guardado correctamente');
+  };
+
+  const añadirDelegado = async () => {
+    if (!selDel) return;
+    const { error } = await sb.from('quiniela_delegados').insert({ federacion_id: fedId, participante_id: selDel });
+    if (error) { alert('Error: ' + error.message); return; }
+    publicar(fedId, 'moderador', `${nombre(selDel)} ha sido nombrado delegado de quinielas.`, actorNombre);
+    setSelDel('');
+    cargarDelegados();
+  };
+  const quitarDelegado = async d => {
+    await sb.from('quiniela_delegados').delete().eq('id', d.id);
+    publicar(fedId, 'moderador', `${nombre(d.participante_id)} ha dejado de ser delegado de quinielas.`, actorNombre);
+    cargarDelegados();
+  };
+
+  const ajustarPartido = async (m, cambio) => {
+    if (cambio.tipo && nPron[m.id] &&
+        !window.confirm(`${nPron[m.id]} equipo(s) ya han pronosticado este partido. Al cambiar el tipo se borrarán sus pronósticos de este partido. ¿Continuar?`)) return;
+    const { error } = await sb.from('quiniela_partidos').update(cambio).eq('id', m.id);
+    if (error) { flash(setMsgJ, errorQuiniela(error)); return; }
+    cargarJornada();
+  };
+
+  const resolver = async j => {
+    setMsgRes('');
+    const { data, error } = await sb.rpc('resolver_quiniela', { p_federacion_id: fedId, p_jornada: j });
+    if (error) { flash(setMsgRes, errorQuiniela(error)); return; }
+    const textos = {
+      resuelta:        `J${j} resuelta y publicada en el Tablón.`,
+      ya_resuelta:     `J${j} ya estaba resuelta.`,
+      jornada_abierta: `J${j}: la jornada aún no está cerrada y archivada.`,
+      pendiente:       `J${j}: faltan ${data?.faltan} resultado(s) por calcular.`,
+      sin_quiniela:    `J${j} no tiene quiniela.`,
+    };
+    flash(setMsgRes, textos[data?.estado] || JSON.stringify(data));
+    cargarAbiertas();
+    if (j === jornada) cargarJornada();
+  };
+
+  const delPids = new Set(delegados.map(d => d.participante_id));
+  const candidatos = participantes.filter(p => p.user_id && !delPids.has(p.id));
+  const q = datos?.quiniela;
+  const est = estadoQuiniela(q);
+  const inp = { width:110, padding:'.35rem .5rem', textAlign:'right', border:'1.5px solid var(--borde)', borderRadius:8, fontSize:'.9rem' };
+
+  return (
+    <div>
+      <div className="card">
+        <h2>Quiniela de la jornada</h2>
+        <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+          Cada jornada se crea sola una quiniela con los partidos de Liga FILFA y de torneos asignados a esa jornada.
+          Los equipos la envían hasta el cierre de alineaciones y se resuelve al cerrar y archivar la jornada
+          (o al calcular el último resultado que falte): el que más acierta se lleva el premio, repartido si hay empate.
+        </p>
+        <label style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.8rem', fontWeight:600}}>
+          <input type="checkbox" checked={habilitada} onChange={e => setHabilitada(e.target.checked)} />
+          Quiniela activada
+        </label>
+        <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+          <div>
+            <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.25rem'}}>Premio por jornada (M)</label>
+            <input type="number" min="0" step="0.1" value={premioM} onChange={e => setPremioM(e.target.value)} style={inp} />
+          </div>
+          <div>
+            <label style={{fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.25rem'}}>Coste por participar (M)</label>
+            <input type="number" min="0" step="0.1" value={costeM} onChange={e => setCosteM(e.target.value)} style={inp} />
+          </div>
+          <button className="btn-ok" onClick={guardarConfig}>Guardar</button>
+          {msgCfg && <span style={{fontSize:'.88rem', fontWeight:600, color: msgCfg.startsWith('Error') ? '#dc3545' : 'var(--verde)'}}>{msgCfg}</span>}
+        </div>
+        <p style={{fontSize:'.75rem', color:'var(--texto2)', marginTop:'.5rem'}}>
+          Ambos pueden ser 0. El coste solo se descuenta a los equipos que envían la quiniela, al resolverla.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Delegados de quinielas</h2>
+        <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'1rem'}}>
+          Ven los pronósticos de todos los equipos desde el primer momento, quién ha enviado la quiniela y los resultados.
+        </p>
+        {delegados.length === 0
+          ? <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'1rem'}}>Sin delegados asignados.</p>
+          : <table style={{marginBottom:'1rem'}}>
+              <tbody>
+                {delegados.map(d => (
+                  <tr key={d.id}>
+                    <td style={{fontWeight:600}}>{nombre(d.participante_id)}</td>
+                    <td style={{textAlign:'right'}}>
+                      <button onClick={() => quitarDelegado(d)}
+                              style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer', fontSize:'.82rem'}}>Quitar</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>}
+        <div style={{display:'flex', gap:'.5rem', alignItems:'center', flexWrap:'wrap'}}>
+          <select value={selDel} onChange={e => setSelDel(e.target.value)}
+                  style={{flex:1, minWidth:180, padding:'.4rem .7rem', border:'1.5px solid var(--borde)', borderRadius:8, fontSize:'.9rem'}}>
+            <option value="">Seleccionar equipo…</option>
+            {candidatos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          <button className="btn-ok" onClick={añadirDelegado} disabled={!selDel}>Añadir delegado</button>
+        </div>
+      </div>
+
+      {federacion?.quiniela_habilitada && <>
+        <div className="card">
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'.5rem', flexWrap:'wrap', marginBottom:'.5rem'}}>
+            <h2 style={{margin:0}}>Partidos de la quiniela</h2>
+            <select value={jornada} onChange={e => setJornada(Number(e.target.value))}
+                    style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+              {Array.from({ length: 38 }, (_, i) => i + 1).map(j => <option key={j} value={j}>Jornada {j}</option>)}
+            </select>
+          </div>
+          {datos === undefined ? <Spinner />
+            : !q ? <div className="empty">No hay quiniela para la J{jornada}: asigna partidos de Liga FILFA (jornada fantasy) o de torneos a esta jornada.</div>
+            : <>
+              <div style={{fontSize:'.85rem', fontWeight:600, color: est.color, marginBottom:'.6rem'}}>{est.texto}</div>
+              <div style={{overflowX:'auto'}}>
+                <table className="tabla-jugadores">
+                  <thead>
+                    <tr><th>Partido</th><th>Tipo</th><th style={{textAlign:'center'}}>Incluido</th><th style={{textAlign:'right'}}>Pron.</th></tr>
+                  </thead>
+                  <tbody>
+                    {datos.partidos.map(m => (
+                      <tr key={m.id} style={{opacity: m.excluido ? .5 : 1}}>
+                        <td>
+                          <div style={{fontSize:'.7rem', color:'var(--texto2)'}}>{m.competicion}{m.nombre ? ` · ${m.nombre}` : ''}</div>
+                          <div style={{fontWeight:600}}>{nombre(m.local_id)} – {nombre(m.visitante_id)}
+                            {tieneResultado(m) && <span style={{color:'var(--texto2)'}}> ({m.goles_local}-{m.goles_visitante})</span>}</div>
+                        </td>
+                        <td>
+                          <select value={m.tipo} disabled={q.cerrada || m.excluido} onChange={e => ajustarPartido(m, { tipo: e.target.value })}
+                                  style={{padding:'.25rem .4rem', borderRadius:6, border:'1.5px solid var(--borde)', fontSize:'.82rem'}}>
+                            <option value="1x2">1 · X · 2</option>
+                            <option value="exacto">Resultado exacto</option>
+                          </select>
+                        </td>
+                        <td style={{textAlign:'center'}}>
+                          <input type="checkbox" checked={!m.excluido} disabled={q.cerrada}
+                                 onChange={e => ajustarPartido(m, { excluido: !e.target.checked })} />
+                        </td>
+                        <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{nPron[m.id] || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p style={{fontSize:'.75rem', color:'var(--texto2)', marginTop:'.5rem'}}>
+                Los partidos se añaden y quitan solos según la jornada asignada, hasta el cierre. Al cambiar el tipo de un
+                partido se borran los pronósticos que ya tuviera. Un partido excluido no cuenta ni se muestra.
+              </p>
+            </>}
+          {msgJ && <div style={{marginTop:'.5rem', color:'#dc3545', fontWeight:600, fontSize:'.88rem'}}>{msgJ}</div>}
+        </div>
+
+        <div className="card">
+          <h2>Pendientes de resolver</h2>
+          {abiertas.length === 0
+            ? <p style={{fontSize:'.85rem', color:'var(--texto2)'}}>No hay quinielas abiertas.</p>
+            : <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem'}}>
+                {abiertas.map(a => (
+                  <button key={a.id} className="btn-fichar" onClick={() => resolver(a.jornada)}>Resolver J{a.jornada}</button>
+                ))}
+              </div>}
+          <p style={{fontSize:'.75rem', color:'var(--texto2)', marginTop:'.5rem'}}>
+            Se resuelven solas; el botón solo hace falta si se calculó algún resultado a mano. Solo se resuelve una vez
+            la jornada está cerrada y archivada y todos sus partidos tienen resultado.
+          </p>
+          {msgRes && <div style={{marginTop:'.5rem', fontWeight:600, fontSize:'.88rem'}}>{msgRes}</div>}
+        </div>
+      </>}
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador, actorNombre }) {
   const TABS_DEF_ALL = [
     ['federacion',   'Mi Federación'],
@@ -11971,6 +12216,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['jugadores',    'Jugadores'],
     ['h2h',          'Liga FILFA'],
     ['torneos',      'Torneos'],
+    ['quiniela',     'Quiniela'],
   ];
   // Moderadores: solo pueden introducir puntos y calcular resultados
   const TABS_MODERADOR = ['ptsjug', 'h2h'];
@@ -12006,6 +12252,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'jugadores'   && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
       {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
       {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
+      {subtab === 'quiniela'    && <AdminQuiniela federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
     </div>
   );
 }
@@ -12859,6 +13106,451 @@ function ClasificacionJugadores({ federacion, participantes }) {
   );
 }
 
+// ── QUINIELA ───────────────────────────────────────────────────
+// Una por jornada de la Liga Fantástica, con los partidos de Liga FILFA y
+// de torneos asignados a ella (ver supabase_quiniela.sql). La crea y
+// sincroniza preparar_quiniela; la resuelve resolver_quiniela al cerrar y
+// archivar la jornada o al calcular el último resultado que faltaba.
+const QUINIELA_ERRORES = {
+  quiniela_cerrada:  'El plazo de la quiniela ya ha terminado.',
+  partido_no_valido: 'Algún partido ya no forma parte de la quiniela. Recarga la página.',
+  falta_signo:       'Elige 1, X o 2 en todos los partidos que quieras enviar.',
+  faltan_goles:      'Rellena los goles de local y visitante en los partidos de resultado exacto.',
+  no_autorizado:     'No tienes permiso para esta acción.',
+};
+const errorQuiniela = e => {
+  const k = Object.keys(QUINIELA_ERRORES).find(k => (e?.message || '').includes(k));
+  return k ? QUINIELA_ERRORES[k] : 'Error: ' + (e?.message || e);
+};
+const signoQuiniela = (gl, gv) => gl > gv ? '1' : gl === gv ? 'X' : '2';
+const tieneResultado = p => p.goles_local != null && p.goles_visitante != null;
+// true/false si el partido ya tiene resultado; null si no.
+const aciertaQuiniela = (p, pr) => {
+  if (!tieneResultado(p) || !pr) return null;
+  return p.tipo === 'exacto'
+    ? pr.goles_local === p.goles_local && pr.goles_visitante === p.goles_visitante
+    : pr.signo === signoQuiniela(p.goles_local, p.goles_visitante);
+};
+const textoPronostico = (p, pr) => !pr ? '—' : p.tipo === 'exacto' ? `${pr.goles_local}-${pr.goles_visitante}` : pr.signo;
+// Orden de las columnas por competición: divisiones primero, torneos después.
+const ORDEN_COMP_QUINIELA = ['Primera', 'Segunda', 'Tercera', 'Liga FILFA'];
+const ordenarCompeticiones = arr => [...arr].sort((a, b) => {
+  const ia = ORDEN_COMP_QUINIELA.indexOf(a), ib = ORDEN_COMP_QUINIELA.indexOf(b);
+  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b, 'es');
+});
+
+function cargarQuiniela(fedId, jornada) {
+  return sb.rpc('preparar_quiniela', { p_federacion_id: fedId, p_jornada: jornada });
+}
+
+// Tras cerrar una jornada o calcular resultados (en segundo plano: un fallo
+// aquí no afecta a lo demás). Si la quiniela de la jornada está lista, la
+// resuelve; si faltan resultados, se resolverá al calcular el último.
+async function resolverQuinielaJornada(federacion, jornada) {
+  if (!sb || !federacion?.quiniela_habilitada || !jornada) return null;
+  const { data, error } = await sb.rpc('resolver_quiniela', { p_federacion_id: federacion.id, p_jornada: jornada });
+  if (error) { console.error('[Quiniela] Error al resolver:', error.message); return null; }
+  if (data?.estado === 'pendiente') console.info(`[Quiniela] J${jornada}: faltan ${data.faltan} resultados`);
+  return data;
+}
+
+// Estado del plazo de una quiniela cargada.
+function estadoQuiniela(q) {
+  if (!q) return { texto: '', color: 'var(--texto2)' };
+  if (q.estado === 'resuelta') return { texto: '✅ Resuelta', color: 'var(--verde)' };
+  if (q.cerrada) return { texto: '🔒 Plazo cerrado · pendiente de resultados', color: '#b45309' };
+  return {
+    texto: q.cierre
+      ? `🟢 Abierta hasta el ${new Date(q.cierre).toLocaleString('es-ES', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}`
+      : '🟢 Abierta hasta que se cierre la jornada',
+    color: 'var(--verde)',
+  };
+}
+
+// Selector 1·X·2 o casillas de goles de un partido.
+function SelectorPronostico({ partido, valor, onChange, soloLectura }) {
+  const btn = activo => ({
+    minWidth:34, padding:'.3rem .45rem', borderRadius:6, fontWeight:700, fontSize:'.85rem',
+    border:'1.5px solid ' + (activo ? 'var(--verde)' : 'var(--borde)'),
+    background: activo ? 'var(--verde)' : '#fff', color: activo ? '#fff' : 'var(--texto)',
+    cursor: soloLectura ? 'default' : 'pointer',
+  });
+  if (partido.tipo === 'exacto') {
+    const inp = { width:42, padding:'.3rem .2rem', textAlign:'center', borderRadius:6,
+                  border:'1.5px solid var(--borde)', fontSize:'.9rem', fontWeight:700 };
+    const cambiar = (campo, v) => {
+      const n = v === '' ? null : Math.max(0, Math.min(30, parseInt(v, 10) || 0));
+      onChange({ ...(valor || {}), [campo]: n });
+    };
+    return (
+      <div style={{display:'flex', alignItems:'center', gap:'.25rem'}}>
+        <input type="number" min="0" max="30" inputMode="numeric" disabled={soloLectura} style={inp}
+               value={valor?.goles_local ?? ''} onChange={e => cambiar('goles_local', e.target.value)} />
+        <span style={{fontWeight:700}}>-</span>
+        <input type="number" min="0" max="30" inputMode="numeric" disabled={soloLectura} style={inp}
+               value={valor?.goles_visitante ?? ''} onChange={e => cambiar('goles_visitante', e.target.value)} />
+      </div>
+    );
+  }
+  return (
+    <div style={{display:'flex', gap:'.25rem'}}>
+      {['1', 'X', '2'].map(s => (
+        <button key={s} type="button" disabled={soloLectura} style={btn(valor?.signo === s)}
+                onClick={() => onChange(valor?.signo === s ? null : { signo: s })}>{s}</button>
+      ))}
+    </div>
+  );
+}
+
+// Tabla equipos × partidos con los pronósticos de todos (delegados y, tras
+// el plazo, todos los miembros).
+function MatrizPronosticos({ partidos, pronosticos, participantes, miParticipanteId }) {
+  const nombre = id => participantes.find(p => p.id === id)?.nombre || '?';
+  const porEquipo = {};
+  pronosticos.forEach(pr => { (porEquipo[pr.participante_id] = porEquipo[pr.participante_id] || {})[pr.quiniela_partido_id] = pr; });
+  const conResultado = partidos.some(tieneResultado);
+  const filas = participantes.map(p => {
+    const prs = porEquipo[p.id] || {};
+    const aciertos = partidos.filter(m => aciertaQuiniela(m, prs[m.id]) === true).length;
+    return { p, prs, aciertos, enviados: Object.keys(prs).length };
+  }).sort((a, b) => b.aciertos - a.aciertos || b.enviados - a.enviados || a.p.nombre.localeCompare(b.p.nombre, 'es'));
+  const celda = { textAlign:'center', padding:'.3rem .35rem', whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums' };
+  const columnaFija = { position:'sticky', left:0, zIndex:1, background:'#fff', boxShadow:'1px 0 0 var(--borde)' };
+  return (
+    <div>
+      <ol style={{fontSize:'.78rem', color:'var(--texto2)', margin:'0 0 .5rem', paddingLeft:'1.4rem'}}>
+        {partidos.map(m => (
+          <li key={m.id}>
+            {nombre(m.local_id)} – {nombre(m.visitante_id)}
+            {tieneResultado(m) && <strong style={{color:'var(--texto)'}}> ({m.goles_local}-{m.goles_visitante})</strong>}
+            {m.tipo === 'exacto' && <span> · exacto</span>}
+          </li>
+        ))}
+      </ol>
+      <div style={{overflowX:'auto'}}>
+        <table style={{fontSize:'.82rem', borderCollapse:'collapse'}}>
+          <thead>
+            <tr>
+              <th style={{...columnaFija, textAlign:'left'}}>Equipo</th>
+              {partidos.map((m, i) => <th key={m.id} style={celda} title={`${nombre(m.local_id)} – ${nombre(m.visitante_id)}`}>{i + 1}</th>)}
+              {conResultado && <th style={celda} title="Aciertos">✔</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map(({ p, prs, aciertos }) => (
+              <tr key={p.id} style={{background: p.id === miParticipanteId ? 'rgba(63,128,41,.10)' : undefined}}>
+                <td style={{...columnaFija, fontWeight:600, maxWidth:150, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                            background: p.id === miParticipanteId ? '#ecf3e9' : '#fff'}}>{p.nombre}</td>
+                {partidos.map(m => {
+                  const ac = aciertaQuiniela(m, prs[m.id]);
+                  return (
+                    <td key={m.id} style={{...celda, fontWeight:700,
+                                           background: ac === true ? 'rgba(63,128,41,.18)' : ac === false ? 'rgba(220,53,69,.08)' : undefined,
+                                           color: prs[m.id] ? 'var(--texto)' : 'var(--texto2)'}}>
+                      {textoPronostico(m, prs[m.id])}
+                    </td>
+                  );
+                })}
+                {conResultado && <td style={{...celda, fontWeight:800}}>{aciertos}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Clasificación acumulada de quinielas. Desempate: aciertos de resultado
+// exacto y, después, quinielas ganadas.
+function ClasificacionQuiniela({ resultados, participantes, miParticipanteId }) {
+  const comps = ordenarCompeticiones([...new Set(resultados.flatMap(r => Object.keys(r.por_competicion || {})))]);
+  const tabla = participantes.map(p => {
+    const rs = resultados.filter(r => r.participante_id === p.id);
+    const porComp = {};
+    rs.forEach(r => Object.entries(r.por_competicion || {}).forEach(([c, n]) => { porComp[c] = (porComp[c] || 0) + n; }));
+    return {
+      p, porComp, jugadas: rs.length,
+      aciertos: rs.reduce((s, r) => s + r.aciertos, 0),
+      exactos:  rs.reduce((s, r) => s + r.exactos, 0),
+      ganadas:  rs.filter(r => r.ganador).length,
+      dinero:   rs.reduce((s, r) => s + Number(r.premio) - Number(r.coste), 0),
+    };
+  }).sort((a, b) => b.aciertos - a.aciertos || b.exactos - a.exactos || b.ganadas - a.ganadas
+                    || a.p.nombre.localeCompare(b.p.nombre, 'es'));
+  const num = { textAlign:'right', fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap' };
+  const hayDinero = tabla.some(f => f.dinero !== 0);
+  let rk = 0;
+  return (
+    <div className="card">
+      <h2 style={{marginBottom:'.6rem'}}>Clasificación de quinielas</h2>
+      {resultados.length === 0
+        ? <div className="empty">Aún no se ha resuelto ninguna quiniela.</div>
+        : <>
+          <div style={{overflowX:'auto'}}>
+            <table className="tabla-jugadores">
+              <thead>
+                <tr>
+                  <th style={{textAlign:'right'}}>#</th>
+                  <th>Equipo</th>
+                  {comps.map(c => <th key={c} style={num}>{c}</th>)}
+                  <th style={num} title="Aciertos totales">Total</th>
+                  <th style={num} title="Aciertos de resultado exacto (primer desempate)">Exactos</th>
+                  <th style={num} title="Quinielas ganadas (segundo desempate)">Ganadas</th>
+                  {hayDinero && <th className="solo-escritorio" style={num} title="Premios menos costes">Dinero</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {tabla.map((f, i) => {
+                  const ant = tabla[i - 1];
+                  if (!ant || ant.aciertos !== f.aciertos || ant.exactos !== f.exactos || ant.ganadas !== f.ganadas) rk = i + 1;
+                  const propio = f.p.id === miParticipanteId;
+                  return (
+                    <tr key={f.p.id} style={{background: propio ? 'rgba(63,128,41,.10)' : undefined}}>
+                      <td style={{...num, color:'var(--texto2)'}}>{rk}</td>
+                      <td style={{fontWeight: propio ? 800 : 600}}>{f.p.nombre}</td>
+                      {comps.map(c => <td key={c} style={num}>{f.porComp[c] || 0}</td>)}
+                      <td style={{...num, fontWeight:800}}>{f.aciertos}</td>
+                      <td style={num}>{f.exactos}</td>
+                      <td style={num}>{f.ganadas ? `🏆 ${f.ganadas}` : 0}</td>
+                      {hayDinero && <td className="solo-escritorio" style={{...num, color: f.dinero < 0 ? '#dc3545' : undefined}}>{f.dinero ? fmt(f.dinero) : '—'}</td>}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p style={{fontSize:'.7rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+            Cada acierto vale 1, sea 1·X·2 o resultado exacto. Empates: primero los aciertos de resultado exacto y después las quinielas ganadas.
+          </p>
+        </>}
+    </div>
+  );
+}
+
+function QuinielaVista({ federacion, participantes, miParticipanteId, isAdmin }) {
+  const fedId = federacion?.id;
+  const jornadaActual = federacion?.jornada_actual || 1;
+  const [tab, setTab]                 = useState('jornada');
+  const [lista, setLista]             = useState([]);     // quinielas existentes {id, jornada, estado}
+  const [delegados, setDelegados]     = useState([]);
+  const [jornada, setJornada]         = useState(jornadaActual);
+  const [datos, setDatos]             = useState(undefined); // undefined = cargando; null = no hay
+  const [pronosticos, setPronosticos] = useState([]);
+  const [borrador, setBorrador]       = useState({});     // quiniela_partido_id → { signo } | { goles_local, goles_visitante }
+  const [guardando, setGuardando]     = useState(false);
+  const [msg, setMsg]                 = useState('');
+  const [resultados, setResultados]   = useState(null);
+
+  const esDelegado = isAdmin || delegados.some(d => d.participante_id === miParticipanteId);
+  const nombre = id => participantes.find(p => p.id === id)?.nombre || '?';
+
+  useEffect(() => {
+    if (!sb || !fedId || !federacion?.quiniela_habilitada) return;
+    Promise.all([
+      sb.from('quinielas').select('id, jornada, estado').eq('federacion_id', fedId).order('jornada', { ascending: false }),
+      sb.from('quiniela_delegados').select('participante_id').eq('federacion_id', fedId),
+    ]).then(([{ data: q }, { data: d }]) => { setLista(q || []); setDelegados(d || []); });
+  }, [fedId, federacion?.quiniela_habilitada]);
+
+  const cargar = async () => {
+    if (!sb || !fedId || !federacion?.quiniela_habilitada) return;
+    setDatos(undefined); setMsg('');
+    const { data, error } = await cargarQuiniela(fedId, jornada);
+    if (error) { setDatos(null); setMsg(errorQuiniela(error)); return; }
+    if (!data) { setDatos(null); setPronosticos([]); setBorrador({}); return; }
+    const { data: prs } = await sb.from('quiniela_pronosticos')
+      .select('quiniela_partido_id, participante_id, signo, goles_local, goles_visitante')
+      .eq('quiniela_id', data.quiniela.id);
+    setDatos(data);
+    setPronosticos(prs || []);
+    const mios = {};
+    (prs || []).filter(p => p.participante_id === miParticipanteId)
+      .forEach(p => { mios[p.quiniela_partido_id] = { signo: p.signo, goles_local: p.goles_local, goles_visitante: p.goles_visitante }; });
+    setBorrador(mios);
+    setLista(l => l.some(x => x.id === data.quiniela.id) ? l
+      : [...l, { id: data.quiniela.id, jornada: data.quiniela.jornada, estado: data.quiniela.estado }].sort((a, b) => b.jornada - a.jornada));
+  };
+  useEffect(() => { cargar(); }, [fedId, jornada, federacion?.quiniela_habilitada]);
+
+  useEffect(() => {
+    if (tab !== 'clasificacion' || resultados || !sb || !fedId) return;
+    sb.from('quiniela_resultados').select('participante_id, jornada, aciertos, exactos, por_competicion, ganador, premio, coste')
+      .eq('federacion_id', fedId).then(({ data }) => setResultados(data || []));
+  }, [tab, fedId]);
+
+  if (!federacion?.quiniela_habilitada) {
+    return <div className="card"><h2>Quiniela</h2><div className="empty">La quiniela no está activada en esta liga.</div></div>;
+  }
+
+  const q = datos?.quiniela;
+  const partidos = (datos?.partidos || []).filter(p => !p.excluido);
+  const abierta = q && !q.cerrada;
+  const puedeEnviar = abierta && !!miParticipanteId;
+  const mios = Object.fromEntries(pronosticos.filter(p => p.participante_id === miParticipanteId).map(p => [p.quiniela_partido_id, p]));
+  const completo = v => v && (v.signo || (v.goles_local != null && v.goles_visitante != null));
+  const cambios = partidos.some(m => {
+    const a = mios[m.id], b = borrador[m.id];
+    return !!completo(b) !== !!a || (a && completo(b) && textoPronostico(m, a) !== textoPronostico(m, b));
+  });
+  const enviados = partidos.filter(m => mios[m.id]).length;
+  const premio = q?.estado === 'resuelta' ? Number(q.premio || 0) : Number(federacion.quiniela_premio || 0);
+  const coste  = q?.estado === 'resuelta' ? Number(q.coste || 0)  : Number(federacion.quiniela_coste || 0);
+  const est = estadoQuiniela(q);
+  const jornadas = [...new Set([jornadaActual, ...lista.map(x => x.jornada)])].sort((a, b) => b - a);
+  const competiciones = [...new Set(partidos.map(m => m.competicion))];
+
+  const guardar = async () => {
+    setGuardando(true); setMsg('');
+    const filas = partidos.filter(m => completo(borrador[m.id])).map(m => ({
+      quiniela_partido_id: m.id, participante_id: miParticipanteId, quiniela_id: q.id,
+      signo: m.tipo === '1x2' ? borrador[m.id].signo : null,
+      goles_local:     m.tipo === 'exacto' ? borrador[m.id].goles_local : null,
+      goles_visitante: m.tipo === 'exacto' ? borrador[m.id].goles_visitante : null,
+    }));
+    const quitar = partidos.filter(m => mios[m.id] && !completo(borrador[m.id])).map(m => m.id);
+    let error = null;
+    if (filas.length) ({ error } = await sb.from('quiniela_pronosticos').upsert(filas, { onConflict: 'quiniela_partido_id,participante_id' }));
+    if (!error && quitar.length) ({ error } = await sb.from('quiniela_pronosticos').delete()
+      .eq('participante_id', miParticipanteId).in('quiniela_partido_id', quitar));
+    setGuardando(false);
+    if (error) { setMsg(errorQuiniela(error)); return; }
+    const { data: prs } = await sb.from('quiniela_pronosticos')
+      .select('quiniela_partido_id, participante_id, signo, goles_local, goles_visitante').eq('quiniela_id', q.id);
+    setPronosticos(prs || []);
+    setMsg(filas.length === partidos.length ? '✅ Quiniela enviada' : `Guardados ${filas.length} de ${partidos.length} partidos`);
+    setTimeout(() => setMsg(''), 4000);
+  };
+
+  const misAciertos = partidos.filter(m => aciertaQuiniela(m, mios[m.id]) === true).length;
+  const conResultado = partidos.filter(tieneResultado).length;
+
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:'1rem'}}>
+        <button className={`tab ${tab==='jornada'?'active':''}`} onClick={() => setTab('jornada')}>Jornada</button>
+        <button className={`tab ${tab==='clasificacion'?'active':''}`} onClick={() => setTab('clasificacion')}>Clasificación</button>
+        {esDelegado && <button className={`tab ${tab==='control'?'active':''}`} onClick={() => setTab('control')}>🗂️ Delegado</button>}
+      </div>
+
+      {tab === 'clasificacion' && (resultados === null ? <Spinner />
+        : <ClasificacionQuiniela resultados={resultados} participantes={participantes} miParticipanteId={miParticipanteId} />)}
+
+      {tab !== 'clasificacion' && (
+        <div className="card">
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'.5rem', flexWrap:'wrap', marginBottom:'.4rem'}}>
+            <h2 style={{margin:0}}>🎯 Quiniela J{jornada}</h2>
+            <select value={jornada} onChange={e => setJornada(Number(e.target.value))}
+                    style={{padding:'.35rem .6rem', borderRadius:6, border:'1.5px solid var(--borde)'}}>
+              {jornadas.map(j => <option key={j} value={j}>Jornada {j}{j === jornadaActual ? ' (actual)' : ''}</option>)}
+            </select>
+          </div>
+          {datos === undefined ? <Spinner />
+            : !q ? <div className="empty">{msg || 'No hay quiniela para esta jornada: todavía no tiene partidos de Liga FILFA ni de torneos asignados.'}</div>
+            : <>
+              <div style={{fontSize:'.85rem', fontWeight:600, color: est.color}}>{est.texto}</div>
+              <div style={{fontSize:'.8rem', color:'var(--texto2)', margin:'.2rem 0 .8rem'}}>
+                {premio > 0 ? <>Premio: <strong>{fmt(premio)}</strong> para quien más acierte (se reparte si hay empate).</> : 'Sin premio en dinero: solo cuenta para la clasificación.'}
+                {coste > 0 && <> Coste por participar: <strong>{fmt(coste)}</strong> (se descuenta al resolverla si la has enviado).</>}
+              </div>
+
+              {tab === 'jornada' && <>
+                {competiciones.map(c => (
+                  <div key={c} style={{marginBottom:'.8rem'}}>
+                    <div style={{fontSize:'.75rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em', color:'var(--texto2)', marginBottom:'.3rem'}}>{c}</div>
+                    {partidos.filter(m => m.competicion === c).map(m => {
+                      const ac = aciertaQuiniela(m, mios[m.id]);
+                      return (
+                        <div key={m.id} style={{display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:'.5rem',
+                                                padding:'.45rem 0', borderBottom:'1px solid var(--borde)'}}>
+                          <div style={{textAlign:'right', fontWeight:600, fontSize:'.88rem', overflowWrap:'anywhere',
+                                       color: m.local_id === miParticipanteId ? 'var(--verde)' : undefined}}>{nombre(m.local_id)}</div>
+                          <div style={{display:'flex', flexDirection:'column', alignItems:'center', gap:'.2rem'}}>
+                            {puedeEnviar
+                              ? <SelectorPronostico partido={m} valor={borrador[m.id]}
+                                                    onChange={v => setBorrador(b => ({ ...b, [m.id]: v }))} />
+                              : <div style={{fontWeight:800, fontSize:'.95rem', minWidth:60, textAlign:'center',
+                                             color: ac === true ? 'var(--verde)' : ac === false ? '#dc3545' : 'var(--texto)'}}>
+                                  {miParticipanteId ? textoPronostico(m, mios[m.id]) : '·'}
+                                  {ac === true ? ' ✅' : ac === false ? ' ❌' : ''}
+                                </div>}
+                            <div style={{fontSize:'.7rem', color:'var(--texto2)', whiteSpace:'nowrap'}}>
+                              {m.tipo === 'exacto' ? 'Resultado exacto' : '1 · X · 2'}
+                              {tieneResultado(m) && <> · <strong style={{color:'var(--texto)'}}>{m.goles_local}-{m.goles_visitante}</strong></>}
+                            </div>
+                          </div>
+                          <div style={{fontWeight:600, fontSize:'.88rem', overflowWrap:'anywhere',
+                                       color: m.visitante_id === miParticipanteId ? 'var(--verde)' : undefined}}>{nombre(m.visitante_id)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+
+                {puedeEnviar && (
+                  <div style={{display:'flex', alignItems:'center', gap:'.75rem', flexWrap:'wrap', marginTop:'.5rem'}}>
+                    <button className="btn-ok" onClick={guardar} disabled={guardando || !cambios}>
+                      {guardando ? 'Guardando…' : enviados ? 'Guardar cambios' : 'Enviar quiniela'}
+                    </button>
+                    <span style={{fontSize:'.82rem', color: enviados === partidos.length ? 'var(--verde)' : 'var(--texto2)'}}>
+                      {enviados === partidos.length ? '✅ Enviada' : enviados ? `Enviados ${enviados} de ${partidos.length}` : 'Sin enviar'}
+                      {cambios && ' · hay cambios sin guardar'}
+                    </span>
+                  </div>
+                )}
+                {!miParticipanteId && abierta && <div style={{fontSize:'.8rem', color:'var(--texto2)'}}>Solo los equipos pueden enviar la quiniela.</div>}
+                {miParticipanteId && !abierta && conResultado > 0 && (
+                  <div style={{fontSize:'.9rem', fontWeight:700, marginTop:'.3rem'}}>
+                    Has acertado {misAciertos} de {partidos.length}{conResultado < partidos.length ? ` (${conResultado} con resultado)` : ''}.
+                  </div>
+                )}
+                {msg && <div style={{marginTop:'.5rem', fontSize:'.85rem', fontWeight:600,
+                                      color: msg.startsWith('✅') ? 'var(--verde)' : msg.startsWith('Guardados') ? 'var(--texto2)' : '#dc3545'}}>{msg}</div>}
+
+                {!abierta && pronosticos.length > 0 && (
+                  <div style={{marginTop:'1.2rem'}}>
+                    <h3 style={{fontSize:'.95rem', marginBottom:'.4rem'}}>Pronósticos de todos</h3>
+                    <MatrizPronosticos partidos={partidos} pronosticos={pronosticos}
+                                       participantes={participantes.filter(p => pronosticos.some(pr => pr.participante_id === p.id))}
+                                       miParticipanteId={miParticipanteId} />
+                  </div>
+                )}
+                {abierta && <p style={{fontSize:'.72rem', color:'var(--texto2)', marginTop:'.8rem'}}>
+                  Hasta el cierre solo ves tus pronósticos (y los delegados de quinielas, los de todos). Después se hacen públicos.
+                </p>}
+              </>}
+
+              {tab === 'control' && esDelegado && (() => {
+                const estado = participantes.map(p => {
+                  const n = partidos.filter(m => pronosticos.some(pr => pr.participante_id === p.id && pr.quiniela_partido_id === m.id)).length;
+                  return { p, n };
+                }).sort((a, b) => b.n - a.n || a.p.nombre.localeCompare(b.p.nombre, 'es'));
+                const enviadas = estado.filter(e => e.n === partidos.length).length;
+                return <>
+                  <h3 style={{fontSize:'.95rem', marginBottom:'.4rem'}}>Envíos ({enviadas} de {participantes.length} completas)</h3>
+                  <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem', marginBottom:'1rem'}}>
+                    {estado.map(({ p, n }) => (
+                      <span key={p.id} style={{fontSize:'.8rem', padding:'.2rem .55rem', borderRadius:12,
+                                               background: n === partidos.length ? 'rgba(63,128,41,.15)' : n ? 'rgba(245,166,35,.18)' : 'rgba(220,53,69,.10)'}}>
+                        {n === partidos.length ? '✅' : n ? '⚠️' : '❌'} {p.nombre}{n && n < partidos.length ? ` (${n}/${partidos.length})` : ''}
+                      </span>
+                    ))}
+                  </div>
+                  <h3 style={{fontSize:'.95rem', marginBottom:'.4rem'}}>Pronósticos y resultados</h3>
+                  {pronosticos.length
+                    ? <MatrizPronosticos partidos={partidos} pronosticos={pronosticos}
+                                         participantes={participantes.filter(p => pronosticos.some(pr => pr.participante_id === p.id))}
+                                         miParticipanteId={miParticipanteId} />
+                    : <div className="empty">Nadie ha enviado todavía la quiniela.</div>}
+                </>;
+              })()}
+            </>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Competiciones({ federacion, participantes, isAdmin, miParticipanteId }) {
   const [tab, setTab] = useState('calendario');
   return (
@@ -12872,6 +13564,10 @@ function Competiciones({ federacion, participantes, isAdmin, miParticipanteId })
                 onClick={() => setTab('torneos')}>Torneos</button>
         <button className={`tab ${tab==='jugadores'?'active':''}`}
                 onClick={() => setTab('jugadores')}>🏅 Jugadores</button>
+        {federacion?.quiniela_habilitada && (
+          <button className={`tab ${tab==='quiniela'?'active':''}`}
+                  onClick={() => setTab('quiniela')}>🎯 Quiniela</button>
+        )}
         {MOSTRAR_PESTANA_LOGROS && federacion?.logros_habilitado && (
           <button className={`tab ${tab==='logros'?'active':''}`}
                   onClick={() => setTab('logros')}>🏆 Logros</button>
@@ -12893,6 +13589,10 @@ function Competiciones({ federacion, participantes, isAdmin, miParticipanteId })
       )}
       {tab === 'jugadores' && (
         <ClasificacionJugadores federacion={federacion} participantes={participantes} />
+      )}
+      {tab === 'quiniela' && (
+        <QuinielaVista federacion={federacion} participantes={participantes} isAdmin={isAdmin}
+                       miParticipanteId={miParticipanteId} />
       )}
     </div>
   );
@@ -16093,6 +16793,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       federacion, participantes, jornada: j_h2h, vueltasExtra, baremo, divisiones, esAdmin: !isModerador,
       partidos: partidos.map(m => nuevosRes[m.id] ? { ...m, ...nuevosRes[m.id] } : m),
     });
+    // Quinielas de las jornadas fantasy implicadas (si ya estaban archivadas y completas).
+    uniqueJfs.forEach(jf => resolverQuinielaJornada(federacion, jf));
   };
 
   const moverCrit = (idx, dir) => {
@@ -17103,6 +17805,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
+        ['🎯 Quiniela', 'Si el admin la activa, en Competiciones → 🎯 Quiniela tienes cada jornada una quiniela con los partidos de la Liga FILFA y de los torneos que se juegan con esa jornada de la Liga Fantástica. En cada partido eliges 1, X o 2 (o el resultado exacto en goles, si el admin lo marca así) y pulsas "Enviar quiniela". Puedes cambiarla hasta el cierre de alineaciones (o, si no hay cierre, hasta que se cierre la jornada). Hasta entonces nadie más ve tus pronósticos, salvo el admin y los delegados de quinielas; después se hacen públicos.'],
+        ['Quiniela — premio y clasificación', 'Al cerrar y archivar la jornada (o al calcular el último resultado que faltara) se cuentan los aciertos y se publica el resumen en el Tablón 🎯. El equipo con más aciertos se lleva el premio que haya fijado el admin (se reparte a partes iguales si hay empate); si hay coste por participar, se descuenta a los equipos que la enviaron. Cada acierto vale 1, sea 1·X·2 o resultado exacto. En la pestaña Clasificación se suman los aciertos de todas las jornadas, desglosados por competición; en caso de empate cuentan primero los aciertos de resultado exacto y después las quinielas ganadas.'],
       ]
     },
     {
@@ -17150,6 +17854,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Logros', 'Los logros se activan o desactivan en Admin → Liga FILFA (requiere tener la Liga FILFA activada). Se recalculan solos al calcular una jornada H2H y al guardar resultados de Liga FILFA; en ese mismo momento se actualiza el progreso que ven los equipos. Con el botón "🏆 Recalcular logros" se puede forzar el recálculo, por ejemplo tras corregir puntos de una jornada. Si el recálculo no puede leer todos los datos, se cancela sin guardar nada y se muestra el error. Al reiniciar la temporada, los logros conseguidos se conservan y el progreso se borra.'],
         ['Jugadores destacados', 'Las estadísticas de jugadores destacados (Equipos y Liga Fantástica → Estadísticas) y la clasificación de jugadores (Competiciones → 🏅 Jugadores) se recalculan solas al cerrar, reabrir o editar una jornada en Admin → Pts Jugadores. El botón "📊 Recalcular estadísticas" de esa misma pantalla permite forzarlo. Solo cuentan las jornadas cerradas, así que conviene cerrar cada jornada cuando sus puntos sean definitivos. Al reiniciar la temporada se borran.'],
         ['Predicción de la Liga Fantástica', 'El botón "🔄 Recalcular predicción" de Liga Fantástica → 🔮 Predicción solo lo ve el admin (los moderadores no pueden recalcularla). Simula en tu navegador el resto de la temporada con los puntos existentes y guarda el resultado para que lo vea toda la liga. Se recalcula sola cuando el admin cierra una jornada (🔒 Cerrar y archivar); si la cierra un moderador no, y conviene pulsar el botón después (si no, los usuarios verán un aviso de que está desactualizada). Al reiniciar la temporada se borra.'],
+        ['Quiniela', 'En Admin → Quiniela se activa la quiniela y se fijan el premio por jornada y el coste por participar (ambos pueden ser 0). La quiniela de cada jornada se crea sola con los partidos asignados a esa jornada; ahí puedes cambiar cada partido a resultado exacto o excluirlo (hasta el cierre; al cambiar el tipo se borran los pronósticos de ese partido) y nombrar delegados de quinielas, que ven desde el principio los pronósticos de todos y quién la ha enviado. Se resuelve sola al cerrar y archivar la jornada o al calcular el último resultado (Liga FILFA o torneo); si algún resultado se puso a mano, usa "Resolver" en Pendientes de resolver.'],
         ['Predicción de la Liga FILFA', 'Igual que la de la Liga Fantástica: el botón "🔄 Recalcular predicción" de Liga FILFA → 🔮 Predicción solo lo ve el admin. Lee una vez los puntos fantasy de la liga, simula en tu navegador los partidos pendientes del calendario y guarda el resultado para toda la liga. Se recalcula sola cuando el admin calcula una jornada H2H desde la Liga Fantástica; si la calcula un moderador, si metes resultados a mano o si añades una vuelta extra, conviene pulsar el botón (si no, los usuarios verán un aviso de que está desactualizada). Las zonas que aparecen salen de los colores de clasificación de la Liga FILFA (Admin → Mi Federación → Colores de clasificación), por división si los tienes configurados así. Al reiniciar la temporada se borra.'],
       ]
     },

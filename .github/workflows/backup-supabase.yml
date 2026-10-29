@@ -1,0 +1,107 @@
+# Copia de seguridad semanal de la base de datos de Supabase.
+# El plan gratuito no incluye copias descargables, así que se hace con pg_dump
+# y se guarda cifrada como artifact de GitHub (90 días). Ver BACKUP.md.
+#
+# Secrets necesarios (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL    Cadena del pooler en modo sesión (puerto 5432):
+#                      postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+#   BACKUP_PASSPHRASE  Contraseña con la que se cifra la copia.
+
+name: Copia de seguridad Supabase
+
+on:
+  schedule:
+    - cron: '0 8 * * 2'    # Martes a las 09:00 UTC (10:00 en invierno y 11:00 en verano, hora de España)
+  workflow_dispatch:       # Botón "Run workflow" para lanzarla a mano
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-supabase
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Comprobar secrets
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::error::Faltan los secrets SUPABASE_DB_URL y/o BACKUP_PASSPHRASE"
+            exit 1
+          fi
+
+      # pg_dump tiene que ser de la misma versión que el servidor o superior;
+      # la 17 vale tanto para proyectos con Postgres 15 como 17.
+      - name: Instalar pg_dump 17
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Volcar la base de datos
+        run: |
+          set -euo pipefail
+          FECHA=$(date -u +%Y-%m-%d)
+          DIR="filfa-backup-$FECHA"
+          mkdir "$DIR"
+          echo "FECHA=$FECHA" >> "$GITHUB_ENV"
+          pg_dump --version
+
+          # 1. Esquema public completo: tablas, datos, funciones, triggers,
+          #    políticas RLS y permisos. Formato custom (comprimido) para poder
+          #    restaurar todo o solo algunas tablas con pg_restore.
+          pg_dump --dbname="$SUPABASE_DB_URL" --schema=public --no-owner \
+            --format=custom --file="$DIR/public.dump"
+
+          # 2. Usuarios de Supabase Auth (solo datos): los ids de auth.users
+          #    son los que referencian las tablas de public.
+          pg_dump --dbname="$SUPABASE_DB_URL" --data-only \
+            --table=auth.users --table=auth.identities \
+            --format=custom --file="$DIR/auth.dump"
+
+          # 3. Esquema de public en SQL legible, para consultar sin restaurar.
+          pg_dump --dbname="$SUPABASE_DB_URL" --schema=public --no-owner \
+            --schema-only --file="$DIR/esquema_public.sql"
+
+          # Comprobación: los volcados se pueden leer y contienen las tablas.
+          TABLAS=$(pg_restore --list "$DIR/public.dump" | grep -c ' TABLE DATA public ' || true)
+          echo "Tablas con datos en public.dump: $TABLAS"
+          if [ "$TABLAS" -lt 10 ]; then
+            echo "::error::El volcado parece incompleto ($TABLAS tablas)"
+            exit 1
+          fi
+          pg_restore --list "$DIR/auth.dump" > /dev/null
+          ls -lh "$DIR"
+
+          tar -czf "$DIR.tar.gz" "$DIR"
+          rm -rf "$DIR"
+
+      # Cifrado simétrico: el volcado incluye datos de usuarios y los artifacts
+      # de un repo público los puede descargar cualquiera con cuenta de GitHub.
+      - name: Cifrar
+        run: |
+          set -euo pipefail
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 --symmetric --cipher-algo AES256 \
+            --output "filfa-backup-$FECHA.tar.gz.gpg" "filfa-backup-$FECHA.tar.gz"
+          rm "filfa-backup-$FECHA.tar.gz"
+          ls -lh "filfa-backup-$FECHA.tar.gz.gpg"
+
+      - name: Guardar como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: filfa-backup-${{ env.FECHA }}
+          path: filfa-backup-${{ env.FECHA }}.tar.gz.gpg
+          retention-days: 90
+          compression-level: 0   # Ya va comprimido y cifrado
+          if-no-files-found: error

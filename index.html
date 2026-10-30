@@ -5757,6 +5757,8 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
         </div>
       )}
 
+      {equipo && <PalmaresEquipo federacion={federacion} participantes={participantes} equipoId={equipoId} />}
+
       {equipo && federacion?.logros_habilitado && (
         <div className="card">
           <h2 style={{marginBottom:'.5rem'}}>🏆 Logros {logrosEquipo.length > 0 ? `(${logrosEquipo.length})` : ''}</h2>
@@ -6505,7 +6507,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
     fichaje: '⚽', venta: '💸', sorteo: '🎲', alineacion: '📋',
     puntos: '📊', moderador: '🛡️', penalizacion: '🚫', oferta: '💰',
     admin: '⚙️', mensaje_admin: '📣', reinicio: '🔄', mensaje_usuario: '💬', mensaje_club: '🏟️',
-    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆', cronica: '📰', quiniela: '🎯',
+    nuevo_miembro: '🎉', perfil: '✏️', cesion: '🤝', logro: '🏆', cronica: '📰', quiniela: '🎯', palmares: '🏛️',
   };
 
   const fmtFecha = ts => {
@@ -6653,6 +6655,7 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
                                                     : a.tipo === 'logro'           ? 'rgba(245,166,35,.08)'
                                                     : a.tipo === 'cronica'         ? 'rgba(63,128,41,.05)'
                                                     : a.tipo === 'quiniela'        ? 'rgba(13,110,253,.05)'
+                                                    : a.tipo === 'palmares'        ? 'rgba(245,166,35,.08)'
                                                     : 'var(--gris)',
                                           border: a.tipo === 'mensaje_admin'   ? '1.5px solid var(--verde)'
                                                 : a.tipo === 'reinicio'        ? '1.5px solid #dc3545'
@@ -6661,12 +6664,13 @@ function Tablon({ federacionId, isAdmin, isModerador, miNombre, miParticipanteId
                                                 : a.tipo === 'logro'           ? '1.5px solid rgba(245,166,35,.5)'
                                                 : a.tipo === 'cronica'         ? '1.5px solid rgba(63,128,41,.35)'
                                                 : a.tipo === 'quiniela'        ? '1.5px solid rgba(13,110,253,.3)'
+                                                : a.tipo === 'palmares'        ? '1.5px solid rgba(245,166,35,.5)'
                                                 : 'none',
                                           borderRadius:10, fontSize:'.88rem'}}>
                     <div style={{display:'flex', gap:'.75rem', alignItems:'flex-start'}}>
                       <span style={{fontSize:'1.15rem', flexShrink:0, lineHeight:1.3}}>{ICONOS[a.tipo] || '📌'}</span>
                       <div style={{flex:1}}>
-                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario' || a.tipo === 'cronica' || a.tipo === 'quiniela')
+                        {(a.tipo === 'mensaje_admin' || a.tipo === 'mensaje_club' || a.tipo === 'mensaje_usuario' || a.tipo === 'cronica' || a.tipo === 'quiniela' || a.tipo === 'palmares')
                           ? <div className="md-content"
                                  dangerouslySetInnerHTML={renderMd(a.texto)} />
                           : <div style={{fontWeight: a.tipo === 'reinicio' ? 600 : 500,
@@ -8735,6 +8739,12 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
   const [resetModal,        setResetModal]        = useState(false);
   const [resetConfirmNombre, setResetConfirmNombre] = useState('');
   const [reseteando,        setReseteando]        = useState(false);
+  // Palmarés de la temporada que se cierra (EditorCierrePalmares).
+  const [cierrePal, setCierrePal] = useState(null);
+  const abrirReinicio = () => {
+    setCierrePal({ guardar: true, temporada: sugerirTemporada(), borrador: undefined, error: null });
+    setResetModal(true);
+  };
 
   // Comodines
   const [comodinCapitan,   setComodinCapitan]    = useState(federacion?.comodin_capitan_habilitado ?? false);
@@ -8823,10 +8833,22 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
 
   const reiniciarFederacion = async () => {
     if (resetConfirmNombre !== federacion?.nombre || reseteando) return;
+    const datosPal = datosCierrePalmares(cierrePal);
+    if (cierrePal?.guardar) {
+      if (!datosPal) { alert('Espera a que termine de calcularse el palmarés.'); return; }
+      if (!datosPal.temporada) { alert(PALMARES_ERRORES.palmares_sin_temporada); return; }
+    }
     setReseteando(true);
-    const { error } = await sb.rpc('reiniciar_federacion', { p_federacion_id: federacion.id });
+    // Con palmarés: se guarda y se reinicia en la misma transacción (si algo falla, no cambia nada).
+    const { error } = datosPal
+      ? await sb.rpc('cerrar_temporada', { p_federacion_id: federacion.id, p_datos: datosPal })
+      : await sb.rpc('reiniciar_federacion', { p_federacion_id: federacion.id });
     setReseteando(false);
-    if (error) { alert('Error: ' + error.message); return; }
+    if (error) { alert(datosPal ? errorPalmares(error) : 'Error: ' + error.message); return; }
+    if (datosPal) {
+      limpiarCachePalmares(federacion.id);
+      await publicar(federacion.id, 'palmares', textoPalmaresTemporada(datosPal.temporada, datosPal.competiciones));
+    }
     // El progreso de logros es de la temporada (el palmarés en `logros` se
     // conserva): se borra para no mostrar el de la anterior hasta el próximo cálculo.
     const { error: errProg } = await sb.from('logros_progreso').delete().eq('federacion_id', federacion.id);
@@ -9345,7 +9367,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             Conserva los equipos y resetea presupuestos a {fmt(federacion?.presupuesto_inicial ?? 0)}.
           </div>
         </div>
-        <button onClick={() => setResetModal(true)}
+        <button onClick={abrirReinicio}
                 style={{padding:'.45rem 1.1rem', borderRadius:8,
                         border:'2px solid #dc3545', background:'none',
                         color:'#dc3545', fontWeight:700, cursor:'pointer',
@@ -9361,7 +9383,7 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
       <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.55)',
                    display:'flex', alignItems:'center', justifyContent:'center',
                    zIndex:1000, padding:'1rem'}}>
-        <div className="card" style={{maxWidth:480, width:'100%', border:'2px solid #dc3545'}}>
+        <div className="card" style={{maxWidth:640, width:'100%', border:'2px solid #dc3545', maxHeight:'92vh', overflowY:'auto'}}>
           <h2 style={{color:'#dc3545', marginBottom:'.75rem'}}>Reiniciar temporada</h2>
           <p style={{fontSize:'.85rem', color:'var(--texto2)', marginBottom:'.75rem'}}>
             Esta acción es <strong>irreversible</strong>. Se eliminarán permanentemente:
@@ -9377,10 +9399,14 @@ function AdminFederacion({ federacion, onFederacionUpdate, participantes = [], o
             <li>Cierres de jornada</li>
           </ul>
           <p style={{fontSize:'.84rem', marginBottom:'1rem'}}>
-            Los equipos se conservan con presupuesto reseteado a{' '}
+            El palmarés y los logros conseguidos se conservan. Los equipos se conservan con presupuesto reseteado a{' '}
             <strong>{fmt(federacion?.presupuesto_inicial ?? 0)}</strong>{' '}
             y la jornada vuelve a 1.
           </p>
+          {cierrePal && (
+            <EditorCierrePalmares federacion={federacion} participantes={participantes}
+                                  valor={cierrePal} onChange={setCierrePal} />
+          )}
           <p style={{fontSize:'.84rem', fontWeight:700, marginBottom:'.35rem'}}>
             Escribe el nombre exacto de la federación para confirmar:
           </p>
@@ -12205,6 +12231,525 @@ function AdminQuiniela({ federacion, participantes, onFederacionUpdate, actorNom
   );
 }
 
+// ── ADMIN — PALMARÉS ──────────────────────────────────────────
+const inpPalmares = { padding:'.3rem .45rem', border:'1.5px solid var(--borde)', borderRadius:6, fontSize:'.82rem',
+                      background:'var(--fondo)', color:'var(--texto)', boxSizing:'border-box' };
+const sugerirTemporada = () => { const y = new Date().getFullYear(); return `${y - 1}/${String(y).slice(2)}`; };
+
+// Selector de puesto: número en ligas; ronda alcanzada en torneos.
+function SelectorPuestoPalmares({ tipo, valor, onChange, max = 40 }) {
+  return tipo === 'torneo'
+    ? <select value={valor} onChange={e => onChange(Number(e.target.value))} style={{...inpPalmares, width:122}}>
+        {PALMARES_RONDAS.map(([n, t]) => <option key={n} value={n}>{t}</option>)}
+      </select>
+    : <input type="number" min="1" max={Math.max(max, valor)} value={valor}
+             onChange={e => onChange(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{...inpPalmares, width:58}} />;
+}
+
+// Revisión del palmarés calculado al cerrar la temporada (dentro del modal de
+// reinicio de AdminFederacion). `valor` = { guardar, temporada, borrador, error }.
+function EditorCierrePalmares({ federacion, participantes, valor, onChange }) {
+  useEffect(() => {
+    let vivo = true;
+    calcularPalmaresTemporada(federacion, participantes)
+      .then(b => { if (vivo) onChange(v => ({ ...v, borrador: b })); })
+      .catch(e => { if (vivo) onChange(v => ({ ...v, guardar: false, error: errorPalmares(e) })); });
+    return () => { vivo = false; };
+  }, []);
+
+  const setComp = (i, cambio) => onChange(v => ({ ...v, borrador: { ...v.borrador,
+    competiciones: v.borrador.competiciones.map((c, k) => k === i ? { ...c, ...cambio } : c) } }));
+  const setEntrada = (i, j, cambio) => setComp(i, {
+    entradas: valor.borrador.competiciones[i].entradas.map((e, k) => k === j ? { ...e, ...cambio } : e) });
+  const quitarRecord = i => onChange(v => ({ ...v, borrador: { ...v.borrador, records: v.borrador.records.filter((_, k) => k !== i) } }));
+
+  return (
+    <div style={{border:'1.5px solid var(--borde)', borderRadius:10, padding:'.75rem', marginBottom:'1rem'}}>
+      <label style={{display:'flex', alignItems:'center', gap:'.5rem', fontWeight:700, fontSize:'.9rem', marginBottom:'.5rem'}}>
+        <input type="checkbox" checked={valor.guardar} disabled={!!valor.error}
+               onChange={e => onChange(v => ({ ...v, guardar: e.target.checked }))} />
+        🏛️ Guardar la temporada en el palmarés
+      </label>
+      {valor.error && <p style={{fontSize:'.82rem', color:'#dc3545'}}>No se pudo calcular el palmarés: {valor.error}</p>}
+      {valor.guardar && !valor.error && <>
+        <div style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.6rem', flexWrap:'wrap'}}>
+          <span style={{fontSize:'.84rem'}}>Nombre de la temporada:</span>
+          <input value={valor.temporada} maxLength={40} onChange={e => onChange(v => ({ ...v, temporada: e.target.value }))}
+                 style={{...inpPalmares, width:120}} />
+        </div>
+        {valor.borrador === undefined ? <Spinner /> : <>
+          {valor.borrador.competiciones.length === 0 &&
+            <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>No hay resultados de esta temporada que guardar.</p>}
+          {valor.borrador.competiciones.map((c, i) => (
+            <details key={i} style={{marginBottom:'.4rem', opacity: c.incluir ? 1 : .55}}>
+              <summary style={{cursor:'pointer', fontSize:'.85rem', fontWeight:600}}>
+                <input type="checkbox" checked={c.incluir} onClick={e => e.stopPropagation()}
+                       onChange={e => setComp(i, { incluir: e.target.checked })} style={{marginRight:'.4rem'}} />
+                {PALMARES_ICONO[c.tipo]} {c.nombre} · {c.entradas.length} equipos
+                {c.entradas.filter(e => e.puesto === 1).length > 0 &&
+                  <span style={{fontWeight:400, color:'var(--texto2)'}}> · 🥇 {c.entradas.filter(e => e.puesto === 1).map(e => e.equipo).join(' y ')}</span>}
+                {c.aviso && <span style={{color:'#b7791f'}}> ⚠️</span>}
+              </summary>
+              {c.aviso && <p style={{fontSize:'.78rem', color:'#b7791f', margin:'.3rem 0'}}>{c.aviso}</p>}
+              <div style={{marginTop:'.35rem'}}>
+                {c.entradas.map((e, j) => (
+                  <div key={j} style={{display:'flex', alignItems:'center', gap:'.4rem', fontSize:'.8rem', padding:'.12rem 0', flexWrap:'wrap'}}>
+                    <SelectorPuestoPalmares tipo={c.tipo} valor={e.puesto} max={c.entradas.length}
+                                            onChange={p => setEntrada(i, j, { puesto: p })} />
+                    <span style={{flex:1, minWidth:110}}>{e.equipo}
+                      {e.puntos_comp != null && <span style={{color:'var(--texto2)'}}> · {fmtNumPalmares(e.puntos_comp)}</span>}</span>
+                    {c.tipo === 'liga' && (
+                      <select value={e.movimiento || ''} onChange={ev => setEntrada(i, j, { movimiento: ev.target.value || null })}
+                              style={{...inpPalmares, width:112}}>
+                        <option value="">—</option>
+                        <option value="ascenso">⬆️ Asciende</option>
+                        <option value="descenso">⬇️ Desciende</option>
+                      </select>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          ))}
+          {valor.borrador.records.length > 0 && (
+            <details style={{marginTop:'.3rem'}}>
+              <summary style={{cursor:'pointer', fontSize:'.85rem', fontWeight:600}}>📈 Récords ({valor.borrador.records.length})</summary>
+              {valor.borrador.records.map((r, i) => (
+                <div key={i} style={{display:'flex', gap:'.4rem', fontSize:'.8rem', padding:'.12rem 0', alignItems:'center'}}>
+                  <span style={{flex:1}}>{PALMARES_RECORDS[r.tipo].titulo}: <strong>{fmtNumPalmares(r.valor)}</strong> · {r.equipo}{r.detalle ? ` · ${r.detalle}` : ''}</span>
+                  <button onClick={() => quitarRecord(i)} title="Quitar"
+                          style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer'}}>✕</button>
+                </div>
+              ))}
+            </details>
+          )}
+          <p style={{fontSize:'.74rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+            Revisa los puestos, los ascensos y descensos y las rondas de los torneos. Después se puede editar todo en Admin → Palmarés.
+          </p>
+        </>}
+      </>}
+    </div>
+  );
+}
+
+// Datos para cerrar_temporada a partir de la revisión (null si no hay que guardar).
+function datosCierrePalmares(v) {
+  if (!v?.guardar || !v.borrador) return null;
+  return {
+    temporada: v.temporada.trim(),
+    competiciones: v.borrador.competiciones.filter(c => c.incluir && c.entradas.length).map(c => ({
+      tipo: c.tipo, nombre: c.nombre, orden: c.orden, participantes: c.participantes,
+      entradas: c.entradas.map(e => ({ puesto: e.puesto, participante_id: e.participante_id, equipo: e.equipo,
+                                       puntos_comp: e.puntos_comp ?? null, movimiento: e.movimiento || null, detalle: e.detalle || null })),
+    })),
+    records: v.borrador.records,
+  };
+}
+
+// Formulario de una competición nueva con su clasificación pegada como lista.
+function NuevaCompeticionPalmares({ participantes, divisiones, valor, onChange, onQuitar }) {
+  const entradas = parsearListaPalmares(valor.lista, valor.tipo, participantes);
+  const nombreFijo = valor.tipo === 'fantasy' || valor.tipo === 'quiniela';
+  const cambiarTipo = tipo => onChange({ ...valor, tipo,
+    nombre: tipo === 'fantasy' || tipo === 'quiniela' ? PALMARES_TIPOS[tipo] : tipo === 'liga' ? (divisiones[0]?.nombre || 'Liga FILFA') : '' });
+  return (
+    <div style={{border:'1px dashed var(--borde)', borderRadius:8, padding:'.6rem', marginBottom:'.6rem'}}>
+      <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', marginBottom:'.4rem', alignItems:'center'}}>
+        <select value={valor.tipo} onChange={e => cambiarTipo(e.target.value)} style={inpPalmares}>
+          {Object.entries(PALMARES_TIPOS).map(([k, t]) => <option key={k} value={k}>{PALMARES_ICONO[k]} {t}</option>)}
+        </select>
+        {!nombreFijo && <>
+          <input value={valor.nombre} maxLength={60} list={valor.tipo === 'liga' ? 'palmares-divisiones' : undefined}
+                 placeholder={valor.tipo === 'liga' ? 'División (Primera…)' : 'Nombre del torneo'}
+                 onChange={e => onChange({ ...valor, nombre: e.target.value })} style={{...inpPalmares, flex:1, minWidth:140}} />
+          <datalist id="palmares-divisiones">{divisiones.map(d => <option key={d.id} value={d.nombre} />)}</datalist>
+        </>}
+        <input type="number" min="0" placeholder="Nº equipos" value={valor.participantes}
+               onChange={e => onChange({ ...valor, participantes: e.target.value })} style={{...inpPalmares, width:92}} />
+        {onQuitar && <button onClick={onQuitar} style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer'}}>✕</button>}
+      </div>
+      <textarea value={valor.lista} rows={4} onChange={e => onChange({ ...valor, lista: e.target.value })}
+                placeholder={valor.tipo === 'torneo'
+                  ? 'Un equipo por línea, del campeón hacia abajo. Opcional tras ";" la ronda:\nReal Sofá; Campeón\nCD Siesta; Subcampeón\nRayo Cansino; Semifinales'
+                  : 'Un equipo por línea, en orden. Opcional tras ";" sus puntos:\nReal Sofá; 54\nCD Siesta; 49'}
+                style={{...inpPalmares, width:'100%', fontFamily:'inherit'}} />
+      {entradas.length > 0 && (
+        <div style={{fontSize:'.76rem', color:'var(--texto2)', marginTop:'.3rem'}}>
+          {entradas.map((e, i) => (
+            <span key={i} style={{marginRight:'.6rem', whiteSpace:'nowrap'}}>
+              {etiquetaPuesto(valor, e.puesto)} {e.equipo}{e.participante_id ? ' ✓' : ''}{e.puntos_comp != null ? ` (${fmtNumPalmares(e.puntos_comp)})` : ''}
+            </span>
+          ))}
+          <div style={{marginTop:'.15rem'}}>✓ = enlazado a un equipo actual; el resto se guarda con su nombre.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+const compVaciaPalmares = () => ({ tipo: 'torneo', nombre: '', participantes: '', lista: '' });
+const compNuevaADatos = (c, participantes, i) => ({
+  tipo: c.tipo, nombre: c.nombre.trim(), orden: i + 1,
+  participantes: c.participantes === '' ? null : Number(c.participantes),
+  entradas: parsearListaPalmares(c.lista, c.tipo, participantes),
+});
+
+// Fila editable de una entrada ya guardada.
+function EntradaPalmaresAdmin({ e, comp, participantes, onCambio }) {
+  const [f, setF] = useState(e);
+  useEffect(() => setF(e), [e]);
+  const sucio = ['puesto', 'participante_id', 'equipo', 'puntos_comp', 'movimiento', 'puntos_manual', 'detalle'].some(k => (f[k] ?? null) !== (e[k] ?? null));
+  const numONull = v => v === '' || v == null ? null : Number(v);
+  const guardar = async () => {
+    if (!f.equipo?.trim()) { alert('El equipo necesita un nombre'); return; }
+    const { error } = await sb.from('palmares').update({
+      puesto: f.puesto, participante_id: f.participante_id || null, equipo: f.equipo.trim(),
+      puntos_comp: numONull(f.puntos_comp), movimiento: f.movimiento || null,
+      puntos_manual: numONull(f.puntos_manual), detalle: f.detalle?.trim() || null,
+    }).eq('id', e.id);
+    if (error) { alert(errorPalmares(error)); return; }
+    onCambio();
+  };
+  const borrar = async () => {
+    if (!window.confirm(`¿Quitar a ${e.equipo} de ${comp.nombre}?`)) return;
+    const { error } = await sb.from('palmares').delete().eq('id', e.id);
+    if (error) { alert(errorPalmares(error)); return; }
+    onCambio();
+  };
+  return (
+    <div style={{display:'flex', gap:'.35rem', alignItems:'center', flexWrap:'wrap', padding:'.25rem 0', borderTop:'1px solid var(--gris)'}}>
+      <SelectorPuestoPalmares tipo={comp.tipo} valor={f.puesto} onChange={p => setF({ ...f, puesto: p })} />
+      <input value={f.equipo} maxLength={60} onChange={ev => setF({ ...f, equipo: ev.target.value })}
+             style={{...inpPalmares, flex:1, minWidth:120}} title="Nombre con el que aparece en el palmarés" />
+      <select value={f.participante_id || ''} title="Equipo actual de la liga"
+              onChange={ev => { const p = participantes.find(x => x.id === ev.target.value); setF({ ...f, participante_id: p?.id || null, equipo: p?.nombre || f.equipo }); }}
+              style={{...inpPalmares, width:130}}>
+        <option value="">(nombre libre)</option>
+        {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+      </select>
+      <input type="number" step="any" placeholder="Pts comp." value={f.puntos_comp ?? ''} title="Puntos o aciertos en la competición (informativo)"
+             onChange={ev => setF({ ...f, puntos_comp: ev.target.value })} style={{...inpPalmares, width:76}} />
+      {comp.tipo === 'liga' && (
+        <select value={f.movimiento || ''} onChange={ev => setF({ ...f, movimiento: ev.target.value || null })} style={{...inpPalmares, width:56}}>
+          <option value="">—</option><option value="ascenso">⬆️</option><option value="descenso">⬇️</option>
+        </select>
+      )}
+      <input type="number" step="any" placeholder="Pts ✎" value={f.puntos_manual ?? ''}
+             title="Puntos para la clasificación histórica solo de esta entrada (vacío = los de la tabla)"
+             onChange={ev => setF({ ...f, puntos_manual: ev.target.value })} style={{...inpPalmares, width:64}} />
+      <input placeholder="Nota" maxLength={120} value={f.detalle ?? ''} onChange={ev => setF({ ...f, detalle: ev.target.value })}
+             style={{...inpPalmares, width:110}} />
+      {sucio && <button className="btn-ok" style={{padding:'.25rem .6rem', fontSize:'.78rem'}} onClick={guardar}>Guardar</button>}
+      <button onClick={borrar} title="Quitar" style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer'}}>✕</button>
+    </div>
+  );
+}
+
+// Tabla de puntos editable (puesto → puntos).
+function TablaPuntosPalmares({ comp, tabla, nPuestos, onChange }) {
+  const puestos = comp.tipo === 'torneo' ? PALMARES_RONDAS.map(([n]) => n)
+    : Array.from({ length: Math.max(nPuestos, ...Object.keys(tabla).map(Number), 3) }, (_, i) => i + 1);
+  return (
+    <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem .6rem'}}>
+      {puestos.map(p => (
+        <label key={p} style={{display:'flex', alignItems:'center', gap:'.25rem', fontSize:'.78rem'}}>
+          <span style={{color:'var(--texto2)', minWidth: comp.tipo === 'torneo' ? 0 : 22}}>{etiquetaPuesto(comp, p)}</span>
+          <input type="number" step="any" value={tabla[p] ?? ''} placeholder="0"
+                 onChange={e => { const t = { ...tabla }; if (e.target.value === '') delete t[p]; else t[p] = Number(e.target.value); onChange(t); }}
+                 style={{...inpPalmares, width:56}} />
+        </label>
+      ))}
+      {comp.tipo !== 'torneo' && (
+        <button onClick={() => onChange({ ...tabla, [puestos.length + 1]: 0 })}
+                style={{background:'none', border:'none', color:'var(--verde)', cursor:'pointer', fontSize:'.78rem', fontWeight:600}}>+ puesto</button>
+      )}
+    </div>
+  );
+}
+
+function AdminPalmares({ federacion, participantes, onFederacionUpdate, actorNombre }) {
+  const fedId = federacion?.id;
+  const [datos, setDatos]           = useState(undefined);
+  const [divisiones, setDivisiones] = useState([]);
+  const [torneosApp, setTorneosApp] = useState([]);
+  const [abierta, setAbierta]       = useState(null);
+  const [nueva, setNueva]           = useState({ nombre: '', comps: [compVaciaPalmares()] });
+  const [msgNueva, setMsgNueva]     = useState('');
+  const [compExtra, setCompExtra]   = useState(null);   // { temporada_id, ...comp nueva }
+  const [recordNuevo, setRecordNuevo] = useState(null); // { temporada_id, tipo, valor, equipo, detalle }
+  const [puntos, setPuntos]         = useState(federacion?.palmares_puntos || {});
+  const [msgPuntos, setMsgPuntos]   = useState('');
+  const [tablaTemp, setTablaTemp]   = useState({});     // competicion_id → tabla en edición
+  const [compAbiertas, setCompAbiertas] = useState(new Set());
+  const toggleComp = id => setCompAbiertas(a => { const n = new Set(a); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const flash = (set, t) => { set(t); setTimeout(() => set(''), 3500); };
+  const recargar = async () => {
+    limpiarCachePalmares(fedId);
+    setDatos(await cargarPalmares(fedId, true));
+  };
+  useEffect(() => {
+    if (!sb || !fedId) return;
+    recargar();
+    sb.from('divisiones').select('id, nombre').order('id').then(({ data }) => setDivisiones(data || []));
+    sb.from('competiciones').select('id, nombre').eq('federacion_id', fedId).order('created_at').then(({ data }) => setTorneosApp(data || []));
+  }, [fedId]);
+  useEffect(() => { setPuntos(federacion?.palmares_puntos || {}); }, [federacion?.palmares_puntos]);
+
+  const guardarNueva = async () => {
+    const comps = nueva.comps.filter(c => c.lista.trim());
+    if (!nueva.nombre.trim()) { flash(setMsgNueva, 'Error: escribe el nombre de la temporada'); return; }
+    if (comps.some(c => !c.nombre.trim())) { flash(setMsgNueva, 'Error: falta el nombre de alguna competición'); return; }
+    const { error } = await sb.rpc('guardar_palmares_temporada', { p_federacion_id: fedId, p_datos: {
+      temporada: nueva.nombre.trim(), competiciones: comps.map((c, i) => compNuevaADatos(c, participantes, i)), records: [] } });
+    if (error) { flash(setMsgNueva, errorPalmares(error)); return; }
+    publicar(fedId, 'admin', `🏛️ Temporada ${nueva.nombre.trim()} añadida al palmarés.`, actorNombre);
+    setNueva({ nombre: '', comps: [compVaciaPalmares()] });
+    flash(setMsgNueva, 'Temporada añadida');
+    recargar();
+  };
+
+  const renombrarTemporada = async t => {
+    const nombre = window.prompt('Nuevo nombre de la temporada', t.nombre);
+    if (!nombre?.trim() || nombre.trim() === t.nombre) return;
+    const { error } = await sb.from('palmares_temporadas').update({ nombre: nombre.trim() }).eq('id', t.id);
+    if (error) { alert(error.code === '23505' ? PALMARES_ERRORES.palmares_temporada_existe : errorPalmares(error)); return; }
+    recargar();
+  };
+  const borrarTemporada = async t => {
+    if (!window.confirm(`¿Borrar la temporada ${t.nombre} del palmarés, con todas sus clasificaciones y récords? No se puede deshacer.`)) return;
+    const { error } = await sb.from('palmares_temporadas').delete().eq('id', t.id);
+    if (error) { alert(errorPalmares(error)); return; }
+    recargar();
+  };
+  const borrarCompeticion = async c => {
+    if (!window.confirm(`¿Borrar ${c.nombre} de esta temporada?`)) return;
+    const { error } = await sb.from('palmares_competiciones').delete().eq('id', c.id);
+    if (error) { alert(errorPalmares(error)); return; }
+    recargar();
+  };
+  const guardarCompExtra = async () => {
+    const { temporada_id, ...c } = compExtra;
+    if (!c.nombre.trim()) { alert('Falta el nombre de la competición'); return; }
+    const d = compNuevaADatos(c, participantes, 0);
+    const orden = Math.max(0, ...datos.competiciones.filter(x => x.temporada_id === temporada_id).map(x => x.orden)) + 1;
+    const { data: nuevaC, error } = await sb.from('palmares_competiciones').insert({
+      temporada_id, federacion_id: fedId, tipo: d.tipo, nombre: d.nombre, orden, participantes: d.participantes,
+    }).select('id').single();
+    if (error) { alert(error.code === '23505' ? 'Esa competición ya está en esta temporada.' : errorPalmares(error)); return; }
+    if (d.entradas.length) {
+      const { error: e2 } = await sb.from('palmares').insert(d.entradas.map(e => ({ ...e, competicion_id: nuevaC.id, federacion_id: fedId })));
+      if (e2) alert(errorPalmares(e2));
+    }
+    setCompExtra(null);
+    recargar();
+  };
+  const añadirEntrada = async c => {
+    const n = datos.entradas.filter(e => e.competicion_id === c.id).length;
+    const { error } = await sb.from('palmares').insert({ competicion_id: c.id, federacion_id: fedId,
+      puesto: c.tipo === 'torneo' ? 8 : n + 1, equipo: 'Nuevo equipo' });
+    if (error) { alert(errorPalmares(error)); return; }
+    recargar();
+  };
+  const guardarTablaTemporada = async (c, tabla) => {
+    const { error } = await sb.from('palmares_competiciones').update({ puntos: tabla }).eq('id', c.id);
+    if (error) { alert(errorPalmares(error)); return; }
+    setTablaTemp(t => { const x = { ...t }; delete x[c.id]; return x; });
+    recargar();
+  };
+  const guardarRecord = async () => {
+    const r = recordNuevo;
+    if (!r.equipo.trim() || r.valor === '') { alert('Indica el valor y el equipo'); return; }
+    const p = participantes.find(x => normPalmares(x.nombre) === normPalmares(r.equipo));
+    const { error } = await sb.from('palmares_records').insert({ temporada_id: r.temporada_id, federacion_id: fedId, tipo: r.tipo,
+      valor: Number(r.valor), participante_id: p?.id || null, equipo: r.equipo.trim(), detalle: r.detalle.trim() || null });
+    if (error) { alert(errorPalmares(error)); return; }
+    setRecordNuevo(null);
+    recargar();
+  };
+  const borrarRecord = async r => {
+    const { error } = await sb.from('palmares_records').delete().eq('id', r.id);
+    if (error) { alert(errorPalmares(error)); return; }
+    recargar();
+  };
+  const guardarPuntos = async () => {
+    const limpio = Object.fromEntries(Object.entries(puntos).filter(([, t]) => Object.keys(t).length));
+    const { data, error } = await sb.from('federaciones').update({ palmares_puntos: limpio }).eq('id', fedId).select().single();
+    if (error) { flash(setMsgPuntos, errorPalmares(error)); return; }
+    onFederacionUpdate(data);
+    flash(setMsgPuntos, 'Puntos guardados: la clasificación histórica ya los usa');
+  };
+
+  if (datos === undefined) return <Spinner />;
+  if (datos.error) return <div className="card"><div className="empty">{errorPalmares(datos.error)}</div></div>;
+
+  // Competiciones a las que se pueden asignar puntos: las del palmarés y las de la temporada actual.
+  const compsPuntos = [...new Map([
+    { tipo: 'fantasy', nombre: PALMARES_TIPOS.fantasy },
+    ...divisiones.filter(d => participantes.some(p => p.division_id === d.id)).map(d => ({ tipo: 'liga', nombre: d.nombre })),
+    ...torneosApp.map(t => ({ tipo: 'torneo', nombre: t.nombre })),
+    ...(federacion?.quiniela_habilitada ? [{ tipo: 'quiniela', nombre: PALMARES_TIPOS.quiniela }] : []),
+    ...datos.competiciones,
+  ].map(c => [clavePalmares(c), c])).values()];
+  const nPuestosDe = c => Math.max(0, ...datos.competiciones.filter(x => clavePalmares(x) === clavePalmares(c))
+    .map(x => datos.entradas.filter(e => e.competicion_id === x.id).length),
+    c.tipo === 'liga' ? participantes.filter(p => divisiones.find(d => d.nombre === c.nombre)?.id === p.division_id).length : 0,
+    c.tipo === 'fantasy' ? participantes.length : 0);
+  const h3 = { fontSize:'.9rem', fontWeight:700, margin:'.2rem 0 .4rem' };
+
+  return (
+    <div>
+      <div className="card">
+        <h2>Palmarés</h2>
+        <p style={{fontSize:'.84rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
+          El palmarés de cada temporada se guarda al reiniciarla (Admin → Mi Federación → Reiniciar temporada). Aquí puedes
+          añadir temporadas anteriores, aunque no se jugaran en la app, corregir cualquier entrada y fijar los puntos de la
+          clasificación histórica. El palmarés no se borra al reiniciar.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Puntos de la clasificación histórica</h2>
+        <p style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
+          Puntos de cada puesto (o ronda, en torneos) por competición. Se aplican a todas las temporadas con esa competición,
+          salvo las que tengan una tabla propia o una entrada con puntos fijados a mano. Vacío = 0.
+        </p>
+        {compsPuntos.map(c => (
+          <div key={clavePalmares(c)} style={{marginBottom:'.7rem'}}>
+            <div style={h3}>{PALMARES_ICONO[c.tipo]} {c.nombre}
+              {c.nombre !== PALMARES_TIPOS[c.tipo] && <span style={{fontWeight:400, fontSize:'.74rem', color:'var(--texto2)'}}> · {PALMARES_TIPOS[c.tipo]}</span>}</div>
+            <TablaPuntosPalmares comp={c} tabla={puntos[clavePalmares(c)] || {}} nPuestos={nPuestosDe(c)}
+                                 onChange={t => setPuntos(x => ({ ...x, [clavePalmares(c)]: t }))} />
+          </div>
+        ))}
+        <div style={{display:'flex', gap:'.75rem', alignItems:'center', flexWrap:'wrap'}}>
+          <button className="btn-ok" onClick={guardarPuntos}>Guardar puntos</button>
+          {msgPuntos && <span style={{fontSize:'.86rem', fontWeight:600, color: msgPuntos.startsWith('Error') || msgPuntos.startsWith('Falta') ? '#dc3545' : 'var(--verde)'}}>{msgPuntos}</span>}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Añadir una temporada anterior</h2>
+        <div style={{display:'flex', alignItems:'center', gap:'.5rem', margin:'.4rem 0 .7rem', flexWrap:'wrap'}}>
+          <span style={{fontSize:'.85rem'}}>Temporada:</span>
+          <input value={nueva.nombre} maxLength={40} placeholder="2019/20" onChange={e => setNueva({ ...nueva, nombre: e.target.value })}
+                 style={{...inpPalmares, width:120}} />
+        </div>
+        {nueva.comps.map((c, i) => (
+          <NuevaCompeticionPalmares key={i} participantes={participantes} divisiones={divisiones} valor={c}
+            onChange={v => setNueva(n => ({ ...n, comps: n.comps.map((x, k) => k === i ? v : x) }))}
+            onQuitar={nueva.comps.length > 1 ? () => setNueva(n => ({ ...n, comps: n.comps.filter((_, k) => k !== i) })) : null} />
+        ))}
+        <div style={{display:'flex', gap:'.6rem', alignItems:'center', flexWrap:'wrap'}}>
+          <button className="btn-cancel" onClick={() => setNueva(n => ({ ...n, comps: [...n.comps, compVaciaPalmares()] }))}>+ Competición</button>
+          <button className="btn-ok" onClick={guardarNueva}>Guardar temporada</button>
+          {msgNueva && <span style={{fontSize:'.86rem', fontWeight:600, color: msgNueva === 'Temporada añadida' ? 'var(--verde)' : '#dc3545'}}>{msgNueva}</span>}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Temporadas ({datos.temporadas.length})</h2>
+        {datos.temporadas.length === 0 && <p style={{fontSize:'.85rem', color:'var(--texto2)'}}>Todavía no hay ninguna.</p>}
+        {datos.temporadas.map(t => {
+          const comps = datos.competiciones.filter(c => c.temporada_id === t.id).sort((a, b) => a.orden - b.orden);
+          const rs = datos.records.filter(r => r.temporada_id === t.id);
+          return (
+            <div key={t.id} style={{borderTop:'1px solid var(--gris)', padding:'.45rem 0'}}>
+              <div style={{display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
+                <button onClick={() => setAbierta(abierta === t.id ? null : t.id)}
+                        style={{background:'none', border:'none', cursor:'pointer', fontWeight:700, fontSize:'.92rem', padding:0, color:'var(--texto)'}}>
+                  {abierta === t.id ? '▾' : '▸'} {t.nombre}
+                </button>
+                <span style={{fontSize:'.76rem', color:'var(--texto2)'}}>{comps.length} {comps.length === 1 ? 'competición' : 'competiciones'} · {t.origen === 'app' ? 'jugada en la app' : 'a mano'}</span>
+                <span style={{marginLeft:'auto', display:'flex', gap:'.6rem'}}>
+                  <button onClick={() => renombrarTemporada(t)} style={{background:'none', border:'none', color:'var(--verde)', cursor:'pointer', fontSize:'.8rem'}}>Renombrar</button>
+                  <button onClick={() => borrarTemporada(t)} style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer', fontSize:'.8rem'}}>Borrar</button>
+                </span>
+              </div>
+              {abierta === t.id && (
+                <div style={{marginTop:'.5rem'}}>
+                  {comps.map(c => {
+                    const es = datos.entradas.filter(e => e.competicion_id === c.id).sort((a, b) => a.puesto - b.puesto || a.id - b.id);
+                    const tablaEd = tablaTemp[c.id];
+                    return (
+                      <div key={c.id} style={{marginBottom:'.8rem'}}>
+                        <div style={{...h3, display:'flex', gap:'.5rem', flexWrap:'wrap', alignItems:'baseline'}}>
+                          <button onClick={() => toggleComp(c.id)} aria-expanded={compAbiertas.has(c.id)}
+                                  style={{background:'none', border:'none', cursor:'pointer', padding:0, fontWeight:700, fontSize:'.9rem', color:'var(--texto)', fontFamily:'inherit', textAlign:'left'}}>
+                            <span style={{color:'var(--texto2)', fontSize:'.8em'}}>{compAbiertas.has(c.id) ? '▾' : '▸'}</span> {PALMARES_ICONO[c.tipo]} {c.nombre}
+                          </button>
+                          <span style={{fontWeight:400, fontSize:'.74rem', color:'var(--texto2)'}}>
+                            {PALMARES_TIPOS[c.tipo]} · {es.length} equipos{c.puntos ? ' · tabla de puntos propia' : ''}
+                            {!compAbiertas.has(c.id) && es.some(e => e.puesto === 1) ? ` · 🥇 ${es.filter(e => e.puesto === 1).map(e => e.equipo).join(' y ')}` : ''}
+                          </span>
+                          <span style={{marginLeft:'auto', display:'flex', gap:'.6rem'}}>
+                            <button onClick={() => { setCompAbiertas(a => new Set(a).add(c.id)); setTablaTemp(x => ({ ...x, [c.id]: tablaEd ? undefined : (c.puntos || { ...(federacion?.palmares_puntos?.[clavePalmares(c)] || {}) }) })); }}
+                                    style={{background:'none', border:'none', color:'var(--verde)', cursor:'pointer', fontSize:'.78rem'}}>
+                              Puntos de esta temporada
+                            </button>
+                            <button onClick={() => borrarCompeticion(c)} style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer', fontSize:'.78rem'}}>Borrar</button>
+                          </span>
+                        </div>
+                        {compAbiertas.has(c.id) && <>
+                        {tablaEd && (
+                          <div style={{background:'var(--fondo-sub)', borderRadius:8, padding:'.5rem', marginBottom:'.4rem'}}>
+                            <TablaPuntosPalmares comp={c} tabla={tablaEd} nPuestos={es.length}
+                                                 onChange={tb => setTablaTemp(x => ({ ...x, [c.id]: tb }))} />
+                            <div style={{display:'flex', gap:'.5rem', marginTop:'.4rem', flexWrap:'wrap'}}>
+                              <button className="btn-ok" style={{padding:'.25rem .7rem', fontSize:'.8rem'}} onClick={() => guardarTablaTemporada(c, tablaEd)}>Guardar tabla de esta temporada</button>
+                              {c.puntos && <button className="btn-cancel" style={{padding:'.25rem .7rem', fontSize:'.8rem'}} onClick={() => guardarTablaTemporada(c, null)}>Usar la tabla general</button>}
+                            </div>
+                          </div>
+                        )}
+                        {es.map(e => <EntradaPalmaresAdmin key={e.id} e={e} comp={c} participantes={participantes} onCambio={recargar} />)}
+                        <button onClick={() => añadirEntrada(c)}
+                                style={{background:'none', border:'none', color:'var(--verde)', cursor:'pointer', fontSize:'.8rem', fontWeight:600, padding:'.25rem 0'}}>+ Equipo</button>
+                        </>}
+                      </div>
+                    );
+                  })}
+                  {compExtra?.temporada_id === t.id
+                    ? <>
+                        <NuevaCompeticionPalmares participantes={participantes} divisiones={divisiones} valor={compExtra}
+                                                  onChange={v => setCompExtra({ ...v, temporada_id: t.id })} onQuitar={() => setCompExtra(null)} />
+                        <button className="btn-ok" style={{marginBottom:'.6rem'}} onClick={guardarCompExtra}>Añadir competición</button>
+                      </>
+                    : <button className="btn-cancel" style={{marginBottom:'.6rem'}}
+                              onClick={() => setCompExtra({ ...compVaciaPalmares(), temporada_id: t.id })}>+ Competición</button>}
+
+                  <div style={h3}>📈 Récords</div>
+                  {rs.map(r => (
+                    <div key={r.id} style={{display:'flex', gap:'.4rem', fontSize:'.8rem', padding:'.15rem 0', alignItems:'center'}}>
+                      <span style={{flex:1}}>{PALMARES_RECORDS[r.tipo]?.titulo}: <strong>{fmtNumPalmares(r.valor)}</strong> · {r.equipo}{r.detalle ? ` · ${r.detalle}` : ''}</span>
+                      <button onClick={() => borrarRecord(r)} style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer'}}>✕</button>
+                    </div>
+                  ))}
+                  {recordNuevo?.temporada_id === t.id
+                    ? <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center', marginTop:'.3rem'}}>
+                        <select value={recordNuevo.tipo} onChange={e => setRecordNuevo({ ...recordNuevo, tipo: e.target.value })} style={inpPalmares}>
+                          {Object.entries(PALMARES_RECORDS).map(([k, d]) => <option key={k} value={k}>{d.titulo}</option>)}
+                        </select>
+                        <input type="number" step="any" placeholder="Valor" value={recordNuevo.valor}
+                               onChange={e => setRecordNuevo({ ...recordNuevo, valor: e.target.value })} style={{...inpPalmares, width:70}} />
+                        <input placeholder="Equipo" maxLength={130} value={recordNuevo.equipo} list="palmares-equipos"
+                               onChange={e => setRecordNuevo({ ...recordNuevo, equipo: e.target.value })} style={{...inpPalmares, width:140}} />
+                        <datalist id="palmares-equipos">{participantes.map(p => <option key={p.id} value={p.nombre} />)}</datalist>
+                        <input placeholder="Detalle (J12, 5-0…)" maxLength={120} value={recordNuevo.detalle}
+                               onChange={e => setRecordNuevo({ ...recordNuevo, detalle: e.target.value })} style={{...inpPalmares, width:130}} />
+                        <button className="btn-ok" style={{padding:'.25rem .7rem', fontSize:'.8rem'}} onClick={guardarRecord}>Añadir</button>
+                        <button onClick={() => setRecordNuevo(null)} style={{background:'none', border:'none', color:'#dc3545', cursor:'pointer'}}>✕</button>
+                      </div>
+                    : <button onClick={() => setRecordNuevo({ temporada_id: t.id, tipo: 'mejor_jornada', valor: '', equipo: '', detalle: '' })}
+                              style={{background:'none', border:'none', color:'var(--verde)', cursor:'pointer', fontSize:'.8rem', fontWeight:600, padding:'.25rem 0'}}>+ Récord</button>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipantesChange, isModerador, actorNombre }) {
   const TABS_DEF_ALL = [
     ['federacion',   'Mi Federación'],
@@ -12217,6 +12762,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
     ['h2h',          'Liga FILFA'],
     ['torneos',      'Torneos'],
     ['quiniela',     'Quiniela'],
+    ['palmares',     'Palmarés'],
   ];
   // Moderadores: solo pueden introducir puntos y calcular resultados
   const TABS_MODERADOR = ['ptsjug', 'h2h'];
@@ -12253,6 +12799,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
       {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
       {subtab === 'quiniela'    && <AdminQuiniela federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
+      {subtab === 'palmares'    && <AdminPalmares federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
     </div>
   );
 }
@@ -13168,6 +13715,55 @@ function estadoQuiniela(q) {
 }
 
 // Selector 1·X·2 o casillas de goles de un partido.
+// ── Textos de la quiniela para copiar (WhatsApp) ───────────────
+const ABREV_DIVISION = { primera: '1ª', segunda: '2ª', tercera: '3ª', cuarta: '4ª', quinta: '5ª' };
+const unirConY = arr => arr.length <= 1 ? (arr[0] || '') : `${arr.slice(0, -1).join(', ')} y ${arr[arr.length - 1]}`;
+
+// "*QUINIELA LaLiga J10: 1ª y 2ª J10*": jornada fantasy y, por división, la
+// jornada de la Liga FILFA que se juega con ella; los torneos, por su nombre.
+async function cabeceraQuiniela(fedId, jornada, partidos) {
+  const { data: cfg } = await sb.from('h2h_jornada_config').select('jornada_h2h, division_id')
+    .eq('federacion_id', fedId).eq('jornada_fantasy', jornada);
+  const divs = [...new Map(partidos.filter(m => m.origen === 'h2h').map(m => [m.competicion, m.orden])).entries()]
+    .map(([c, div]) => ({ c: ABREV_DIVISION[c.trim().toLowerCase()] || c,
+                          j: (cfg || []).find(x => (x.division_id ?? 0) === div)?.jornada_h2h }));
+  const jTxt = j => j ? ` J${j}` : '';
+  const ligas = !divs.length ? []
+    : divs.every(d => d.j === divs[0].j) ? [unirConY(divs.map(d => d.c)) + jTxt(divs[0].j)]
+    : [unirConY(divs.map(d => d.c + jTxt(d.j)))];
+  const torneos = [...new Set(partidos.filter(m => m.origen === 'torneo').map(m => m.competicion))];
+  return `*QUINIELA LaLiga J${jornada}: ${[...ligas, ...torneos].join(' · ')}*`;
+}
+
+// "jueves 30 de octubre a las 20h00" (hora local del navegador).
+function fechaLargaQuiniela(iso) {
+  const d = new Date(iso);
+  const dia = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }).replace(',', '');
+  return `${dia} a las ${d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }).replace(':', 'h')}`;
+}
+
+function textoPlantillaQuiniela({ cabecera, partidos, nombre, premio, cierre }) {
+  const n = partidos.length;
+  const lineas = partidos.map((m, i) => `${i + 1}. ${nombre(m.local_id)} - ${nombre(m.visitante_id)}` +
+    (m.tipo === 'exacto' ? `${i === n - 1 ? `, pleno al ${n}` : ''}, resultado exacto ej. 2-1` : ''));
+  return [cabecera, ...lineas, '',
+    ...(premio > 0 ? [`*Bote: ${fmt(premio)}*`, ''] : []),
+    cierre ? `_La fecha límite para el envío de alineaciones y quiniela es el ${fechaLargaQuiniela(cierre)}_`
+           : '_La fecha límite para el envío de la quiniela es el cierre de alineaciones_',
+  ].join('\n');
+}
+
+// Una quiniela por equipo que ha enviado algo, separadas por "---".
+function textoQuinielasEnviadas({ cabecera, partidos, pronosticos, participantes, nombre }) {
+  return participantes.filter(p => pronosticos.some(pr => pr.participante_id === p.id))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    .map(p => [`*Quiniela de ${p.nombre}*`, '', cabecera, ...partidos.map((m, i) => {
+      const pr = pronosticos.find(x => x.participante_id === p.id && x.quiniela_partido_id === m.id);
+      return `${i + 1}. ${nombre(m.local_id)} - ${nombre(m.visitante_id)} ${textoPronostico(m, pr)}`;
+    })].join('\n'))
+    .join('\n\n---\n\n');
+}
+
 function SelectorPronostico({ partido, valor, onChange, soloLectura }) {
   const btn = activo => ({
     minWidth:34, padding:'.3rem .45rem', borderRadius:6, fontWeight:700, fontSize:'.85rem',
@@ -13341,6 +13937,7 @@ function QuinielaVista({ federacion, participantes, miParticipanteId, isAdmin })
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
   const [resultados, setResultados]   = useState(null);
+  const [msgCopia, setMsgCopia]       = useState('');
 
   const esDelegado = isAdmin || delegados.some(d => d.participante_id === miParticipanteId);
   const nombre = id => participantes.find(p => p.id === id)?.nombre || '?';
@@ -13420,6 +14017,20 @@ function QuinielaVista({ federacion, participantes, miParticipanteId, isAdmin })
     setPronosticos(prs || []);
     setMsg(filas.length === partidos.length ? '✅ Quiniela enviada' : `Guardados ${filas.length} de ${partidos.length} partidos`);
     setTimeout(() => setMsg(''), 4000);
+  };
+
+  const copiar = async tipo => {
+    try {
+      const cabecera = await cabeceraQuiniela(fedId, jornada, partidos);
+      const texto = tipo === 'plantilla'
+        ? textoPlantillaQuiniela({ cabecera, partidos, nombre, premio, cierre: q.cierre })
+        : textoQuinielasEnviadas({ cabecera, partidos, pronosticos, participantes, nombre });
+      await navigator.clipboard.writeText(texto);
+      setMsgCopia(tipo === 'plantilla' ? '✅ Quiniela copiada' : '✅ Quinielas enviadas copiadas');
+    } catch (e) {
+      setMsgCopia('No se pudo copiar: ' + (e?.message || e));
+    }
+    setTimeout(() => setMsgCopia(''), 3500);
   };
 
   const misAciertos = partidos.filter(m => aciertaQuiniela(m, mios[m.id]) === true).length;
@@ -13526,7 +14137,16 @@ function QuinielaVista({ federacion, participantes, miParticipanteId, isAdmin })
                   return { p, n };
                 }).sort((a, b) => b.n - a.n || a.p.nombre.localeCompare(b.p.nombre, 'es'));
                 const enviadas = estado.filter(e => e.n === partidos.length).length;
+                const conEnvio = estado.filter(e => e.n > 0).length;
                 return <>
+                  <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', alignItems:'center', marginBottom:'1rem'}}>
+                    <button className="btn-fichar" onClick={() => copiar('plantilla')}
+                            title="Partidos de la quiniela, premio y fecha límite, para pegar en el grupo">📋 Copiar quiniela</button>
+                    <button className="btn-fichar" onClick={() => copiar('enviadas')} disabled={!conEnvio}
+                            title="Los pronósticos de cada equipo que la ha enviado, uno tras otro">📋 Copiar quinielas enviadas ({conEnvio})</button>
+                    {msgCopia && <span style={{fontSize:'.84rem', fontWeight:600,
+                                               color: msgCopia.startsWith('✅') ? 'var(--verde)' : '#dc3545'}}>{msgCopia}</span>}
+                  </div>
                   <h3 style={{fontSize:'.95rem', marginBottom:'.4rem'}}>Envíos ({enviadas} de {participantes.length} completas)</h3>
                   <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem', marginBottom:'1rem'}}>
                     {estado.map(({ p, n }) => (
@@ -13545,6 +14165,652 @@ function QuinielaVista({ federacion, participantes, miParticipanteId, isAdmin })
                 </>;
               })()}
             </>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PALMARÉS ──────────────────────────────────────────────────
+// Historial permanente de la federación (supabase_palmares.sql): una fila
+// por equipo y competición de cada temporada, con su puesto (o, en torneos,
+// la ronda alcanzada), más los récords de cada temporada. Lo guarda el admin
+// al cerrar la temporada (calcularPalmaresTemporada + cerrar_temporada) o a
+// mano (AdminPalmares). La clasificación histórica se calcula aquí con las
+// tablas de puntos que fija el admin; no se guarda en la base de datos.
+const PALMARES_TIPOS = { fantasy: 'Liga Fantástica', liga: 'Liga FILFA', torneo: 'Torneo', quiniela: 'Quiniela', otra: 'Otra competición' };
+const PALMARES_ICONO = { fantasy: '⭐', liga: '⚽', torneo: '🏆', quiniela: '🎯', otra: '🎖️' };
+// En los torneos el puesto es la ronda alcanzada.
+const PALMARES_RONDAS = [[1, 'Campeón'], [2, 'Subcampeón'], [3, 'Semifinales'], [4, 'Cuartos'], [5, 'Octavos'],
+                         [6, 'Dieciseisavos'], [7, 'Fase de grupos'], [8, 'Participante']];
+const PALMARES_RONDA = Object.fromEntries(PALMARES_RONDAS);
+const PALMARES_RECORDS = {
+  mejor_jornada:         { titulo: 'Mejor jornada fantasy',            unidad: 'pts' },
+  mas_puntos_temporada:  { titulo: 'Más puntos fantasy en una temporada', unidad: 'pts' },
+  mayor_goleada:         { titulo: 'Mayor goleada (Liga FILFA)',       unidad: 'dif.' },
+  mas_goles_partido:     { titulo: 'Más goles en un partido (Liga FILFA)', unidad: 'goles' },
+  mas_aciertos_quiniela: { titulo: 'Más aciertos en una quiniela',     unidad: 'aciertos' },
+};
+const PALMARES_ERRORES = {
+  palmares_temporada_existe: 'Ya hay una temporada con ese nombre en el palmarés.',
+  palmares_sin_temporada:    'Escribe el nombre de la temporada.',
+  palmares_equipo_ajeno:     'Uno de los equipos no pertenece a esta federación.',
+  no_autorizado:             'Solo el admin puede modificar el palmarés.',
+};
+const errorPalmares = e => {
+  const m = e?.message || String(e);
+  if (/palmares_|cerrar_temporada|guardar_palmares/.test(m) && /does not exist|Could not find|schema cache/i.test(m))
+    return 'Falta ejecutar supabase_palmares.sql en Supabase.';
+  const k = Object.keys(PALMARES_ERRORES).find(k => m.includes(k));
+  return k ? PALMARES_ERRORES[k] : 'Error: ' + m;
+};
+
+const normPalmares = s => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+// Clave de la tabla de puntos general de una competición (federaciones.palmares_puntos).
+const clavePalmares = c => (c.tipo === 'fantasy' || c.tipo === 'quiniela') ? c.tipo : `${c.tipo}:${normPalmares(c.nombre)}`;
+const etiquetaPuesto = (c, puesto) => c.tipo === 'torneo' ? (PALMARES_RONDA[puesto] || `Ronda ${puesto}`) : `${puesto}º`;
+const tablaPuntosDe = (c, federacion) => c.puntos || federacion?.palmares_puntos?.[clavePalmares(c)] || {};
+const puntosEntrada = (e, c, federacion) =>
+  e.puntos_manual != null ? Number(e.puntos_manual) : Number(tablaPuntosDe(c, federacion)[e.puesto] || 0);
+const ordenTemporadas = (a, b) => b.nombre.localeCompare(a.nombre, 'es', { numeric: true });
+const medallaPuesto = p => ({ 1: '🥇', 2: '🥈', 3: '🥉' })[p] || '';
+const fmtNumPalmares = x => Number(x).toLocaleString('es-ES', { maximumFractionDigits: 1 });
+
+// Ronda propuesta según el orden de una lista pegada (campeón, subcampeón, semis…).
+const rondaPorOrden = n => n === 1 ? 1 : n === 2 ? 2 : n <= 4 ? 3 : n <= 8 ? 4 : n <= 16 ? 5 : 8;
+const RONDAS_ALIAS = { campeon: 1, ganador: 1, subcampeon: 2, finalista: 2, final: 2, semifinal: 3, semifinales: 3, semis: 3,
+                       cuartos: 4, octavos: 5, dieciseisavos: 6, grupos: 7, 'fase de grupos': 7, participante: 8 };
+function rondaDeTexto(t) {
+  if (!t) return null;
+  const n = parseInt(t, 10);
+  if (n >= 1 && n <= 8) return n;
+  const k = normPalmares(t);
+  if (RONDAS_ALIAS[k]) return RONDAS_ALIAS[k];
+  const alias = k.length >= 4 && Object.keys(RONDAS_ALIAS).find(a => a.startsWith(k));
+  return alias ? RONDAS_ALIAS[alias] : null;
+}
+
+// Lista pegada (un equipo por línea, en orden; tras ";" los puntos en ligas
+// o la ronda en torneos) → entradas. Enlaza los nombres de equipos actuales.
+function parsearListaPalmares(texto, tipo, participantes) {
+  const porNombre = Object.fromEntries(participantes.map(p => [normPalmares(p.nombre), p]));
+  return String(texto || '').split('\n').map(l => l.trim()).filter(Boolean).map((l, i) => {
+    const [nombre, extra] = l.split(';').map(s => s.trim());
+    const p = porNombre[normPalmares(nombre)];
+    const e = { puesto: i + 1, participante_id: p?.id || null, equipo: (p?.nombre || nombre).slice(0, 60), puntos_comp: null };
+    if (tipo === 'torneo') e.puesto = rondaDeTexto(extra) ?? rondaPorOrden(i + 1);
+    else if (extra) { const x = Number(extra.replace(',', '.')); if (!isNaN(x)) e.puntos_comp = x; }
+    return e;
+  }).filter(e => e.equipo);
+}
+
+// Lectura del palmarés completo (4 consultas pequeñas), en caché unos minutos.
+const _palmaresCache = {};
+const PALMARES_CACHE_MS = 10 * 60 * 1000;
+function cargarPalmares(fedId, forzar = false) {
+  const c = _palmaresCache[fedId];
+  if (!forzar && c && Date.now() - c.t < PALMARES_CACHE_MS) return c.promesa;
+  const promesa = Promise.all([
+    sb.from('palmares_temporadas').select('id, nombre, origen').eq('federacion_id', fedId),
+    sb.from('palmares_competiciones').select('id, temporada_id, tipo, nombre, orden, participantes, puntos').eq('federacion_id', fedId),
+    obtenerTodasLasFilas(() => sb.from('palmares')
+      .select('id, competicion_id, puesto, participante_id, equipo, puntos_comp, movimiento, puntos_manual, detalle')
+      .eq('federacion_id', fedId).order('id')),
+    sb.from('palmares_records').select('id, temporada_id, tipo, valor, participante_id, equipo, detalle').eq('federacion_id', fedId),
+  ]).then(([t, c, e, r]) => {
+    const error = t.error || c.error || e.error || r.error;
+    if (error) { delete _palmaresCache[fedId]; return { error }; }
+    return { temporadas: [...t.data].sort(ordenTemporadas), competiciones: c.data, entradas: e.data, records: r.data };
+  });
+  _palmaresCache[fedId] = { t: Date.now(), promesa };
+  return promesa;
+}
+const limpiarCachePalmares = fedId => { delete _palmaresCache[fedId]; };
+
+function usePalmares(fedId) {
+  const [datos, setDatos] = useState(undefined);
+  useEffect(() => {
+    if (!sb || !fedId) return;
+    let vivo = true;
+    setDatos(undefined);
+    cargarPalmares(fedId).then(d => { if (vivo) setDatos(d); });
+    return () => { vivo = false; };
+  }, [fedId]);
+  return datos;
+}
+
+// Equipo de una entrada: el participante enlazado si sigue existiendo, si no
+// uno actual con el mismo nombre, y si no el nombre libre.
+function claveEquipoPalmares(e, actuales, porNombre) {
+  if (e.participante_id && actuales[e.participante_id]) return e.participante_id;
+  return porNombre[normPalmares(e.equipo)] || 'n:' + normPalmares(e.equipo);
+}
+
+// Clasificación histórica: puntos de todas las temporadas por equipo.
+function resumenPalmares(datos, federacion, participantes) {
+  const comps = Object.fromEntries(datos.competiciones.map(c => [c.id, c]));
+  const temps = Object.fromEntries(datos.temporadas.map(t => [t.id, t]));
+  const actuales = Object.fromEntries(participantes.map(p => [p.id, p]));
+  const porNombre = Object.fromEntries(participantes.map(p => [normPalmares(p.nombre), p.id]));
+  const equipos = {};
+  datos.entradas.forEach(e => {
+    const c = comps[e.competicion_id];
+    if (!c || !temps[c.temporada_id]) return;
+    const k = claveEquipoPalmares(e, actuales, porNombre);
+    const eq = equipos[k] = equipos[k] || { clave: k, participante_id: actuales[k] ? k : null, nombre: actuales[k]?.nombre || e.equipo,
+                                puntos: 0, titulos: 0, temporadas: new Set(), entradas: [] };
+    const pts = puntosEntrada(e, c, federacion);
+    eq.puntos += pts;
+    if (e.puesto === 1) eq.titulos++;
+    eq.temporadas.add(c.temporada_id);
+    eq.entradas.push({ ...e, comp: c, temporada: temps[c.temporada_id], pts });
+  });
+  const ordenT = Object.fromEntries(datos.temporadas.map((t, i) => [t.id, i]));
+  return Object.values(equipos).map(eq => ({
+    ...eq, nTemporadas: eq.temporadas.size,
+    entradas: eq.entradas.sort((a, b) => ordenT[a.comp.temporada_id] - ordenT[b.comp.temporada_id] || a.comp.orden - b.comp.orden),
+  })).sort((a, b) => b.puntos - a.puntos || b.titulos - a.titulos || a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+// ── Cálculo automático al cerrar la temporada ──────────────────
+const ganadorPartidoTorneo = m =>
+  m.goles_local == null || m.goles_visitante == null || m.goles_local === m.goles_visitante ? null
+    : m.goles_local > m.goles_visitante ? m.participante_local_id : m.participante_visitante_id;
+
+// Ronda alcanzada por cada equipo de un torneo: la de la fase más avanzada que
+// jugó. En la fase final (una final suelta o un único grupo) se decide campeón
+// y subcampeón; en el resto, por el nº de partidos de la fase (2 → semis, 4 →
+// cuartos…). `dudoso` = no se pudo deducir con seguridad (el admin lo revisa).
+function rondasTorneo(fases, grupos, gMiembros, partidos) {
+  const res = {};
+  let dudoso = false;
+  const asignar = (pid, puesto) => { if (pid && res[pid] == null) res[pid] = puesto; };
+  const conEquipos = [...fases].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0)).map(f => {
+    const eq = new Set();
+    grupos.filter(g => g.fase_id === f.id).forEach(g => (gMiembros[g.id] || []).forEach(pid => eq.add(pid)));
+    partidos.filter(m => m.fase_id === f.id).forEach(m => {
+      if (m.participante_local_id) eq.add(m.participante_local_id);
+      if (m.participante_visitante_id) eq.add(m.participante_visitante_id);
+    });
+    return { f, eq, ms: partidos.filter(m => m.fase_id === f.id) };
+  }).filter(x => x.eq.size);
+  conEquipos.reverse().forEach(({ f, eq, ms }, i) => {
+    if (i === 0) {
+      if (f.tipo === 'sueltos' && ms.length === 1) {
+        const m = ms[0], g = ganadorPartidoTorneo(m);
+        if (g) { asignar(g, 1); asignar(g === m.participante_local_id ? m.participante_visitante_id : m.participante_local_id, 2); }
+        else   { dudoso = true; asignar(m.participante_local_id, 2); asignar(m.participante_visitante_id, 2); }
+        return;
+      }
+      const gs = grupos.filter(g => g.fase_id === f.id);
+      if (f.tipo === 'grupos' && gs.length === 1) {
+        if (ms.some(m => m.goles_local == null || m.goles_visitante == null)) dudoso = true;
+        calcularStandingsGrupo(ms, gMiembros[gs[0].id] || []).forEach((row, k) => asignar(row.pid, k === 0 ? 1 : k === 1 ? 2 : 7));
+        return;
+      }
+      dudoso = true;
+    }
+    if (f.tipo === 'grupos') { eq.forEach(pid => asignar(pid, 7)); return; }
+    const n = ms.length;
+    eq.forEach(pid => asignar(pid, n <= 1 ? 2 : n <= 2 ? 3 : n <= 4 ? 4 : n <= 8 ? 5 : n <= 16 ? 6 : 8));
+  });
+  return { res, dudoso };
+}
+
+// Clasificación de una división de la Liga FILFA (mismas reglas que LigaH2H.computeClasif).
+function clasificacionLigaPalmares(equipos, ms, criterios) {
+  const stats = {};
+  equipos.forEach(p => { stats[p.id] = { id: p.id, pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, pts: 0, pf: 0, pc: 0 }; });
+  ms.forEach(m => {
+    if (m.pts_local === null || m.pts_visitante === null) return;
+    const L = stats[m.local_id], V = stats[m.visitante_id];
+    if (!L || !V) return;
+    const gl = Number(m.pts_local), gv = Number(m.pts_visitante);
+    L.pj++; V.pj++;
+    L.gf += gl; L.gc += gv; V.gf += gv; V.gc += gl;
+    if (m.fantasy_local != null && m.fantasy_visitante != null) {
+      L.pf += Number(m.fantasy_local); L.pc += Number(m.fantasy_visitante);
+      V.pf += Number(m.fantasy_visitante); V.pc += Number(m.fantasy_local);
+    }
+    if (gl > gv)        { L.pg++; L.pts += 3; V.pp++; }
+    else if (gl === gv) { L.pe++; L.pts++;    V.pe++; V.pts++; }
+    else                { V.pg++; V.pts += 3; L.pp++; }
+  });
+  return ordenarConDesempate(Object.values(stats), ms, criterios);
+}
+
+// Borrador del palmarés de la temporada en curso: { competiciones, records }.
+// Lo revisa el admin antes de guardarlo (EditorCierrePalmares).
+async function calcularPalmaresTemporada(federacion, participantes) {
+  const fedId = federacion.id;
+  const partIds = participantes.map(p => p.id);
+  const nom = id => participantes.find(p => p.id === id)?.nombre || '?';
+  const entrada = (puesto, pid, extra = {}) => ({ puesto, participante_id: pid, equipo: nom(pid).slice(0, 60), ...extra });
+  const vacio = { data: [], error: null };
+  const [clas, h2h, divs, comps, quin] = await Promise.all([
+    partIds.length ? obtenerTodasLasFilas(() => sb.from('clasificacion').select('participante_id, jornada, puntos_jornada')
+      .in('participante_id', partIds).order('participante_id').order('jornada')) : vacio,
+    federacion.h2h_habilitado ? obtenerTodasLasFilas(() => sb.from('h2h_partidos')
+      .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
+      .eq('federacion_id', fedId).order('id')) : vacio,
+    sb.from('divisiones').select('id, nombre').order('id'),
+    sb.from('competiciones').select('id, nombre').eq('federacion_id', fedId).order('created_at'),
+    federacion.quiniela_habilitada ? obtenerTodasLasFilas(() => sb.from('quiniela_resultados')
+      .select('participante_id, jornada, aciertos, exactos, ganador')
+      .eq('federacion_id', fedId).order('jornada').order('participante_id')) : vacio,
+  ]);
+  const error = [clas, h2h, divs, comps, quin].find(r => r.error)?.error;
+  if (error) throw error;
+
+  const competiciones = [];
+  const records = [];
+  const empatados = (filas, valorDe) => {
+    if (!filas.length) return [];
+    const max = Math.max(...filas.map(valorDe));
+    return max > 0 ? filas.filter(f => valorDe(f) === max).slice(0, 5) : [];
+  };
+
+  // Liga Fantástica
+  const clasRows = clas.data.filter(r => partIds.includes(r.participante_id));
+  const tot = Object.fromEntries(partIds.map(id => [id, 0]));
+  clasRows.forEach(r => { tot[r.participante_id] += Number(r.puntos_jornada); });
+  if (clasRows.length) {
+    const orden = Object.entries(tot).sort((a, b) => b[1] - a[1] || nom(a[0]).localeCompare(nom(b[0]), 'es'));
+    competiciones.push({ tipo: 'fantasy', nombre: 'Liga Fantástica', participantes: orden.length,
+      entradas: orden.map(([pid, pts], i) => entrada(i + 1, pid, { puntos_comp: pts })) });
+    empatados(clasRows, r => Number(r.puntos_jornada)).forEach(r => records.push({ tipo: 'mejor_jornada',
+      valor: Number(r.puntos_jornada), participante_id: r.participante_id, equipo: nom(r.participante_id), detalle: `J${r.jornada}` }));
+    empatados(orden, ([, pts]) => pts).forEach(([pid, pts]) => records.push({ tipo: 'mas_puntos_temporada',
+      valor: pts, participante_id: pid, equipo: nom(pid), detalle: null }));
+  }
+
+  // Liga FILFA, por división
+  const jugados = h2h.data.filter(m => m.pts_local !== null && m.pts_visitante !== null
+                                       && partIds.includes(m.local_id) && partIds.includes(m.visitante_id));
+  if (jugados.length) {
+    const criterios = criteriosDesempateH2H(federacion);
+    const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))].sort((a, b) => a - b);
+    (divIds.length ? divIds : [null]).forEach(divId => {
+      const equipos = divId ? participantes.filter(p => p.division_id === divId) : participantes;
+      const ms = divId ? h2h.data.filter(m => m.division_id === divId) : h2h.data;
+      if (!ms.some(m => m.pts_local !== null && m.pts_visitante !== null)) return;
+      const filas = clasificacionLigaPalmares(equipos, ms, criterios);
+      competiciones.push({ tipo: 'liga', nombre: divId ? (divs.data.find(d => d.id === divId)?.nombre || `División ${divId}`) : 'Liga FILFA',
+        participantes: filas.length,
+        entradas: filas.map((s, i) => entrada(i + 1, s.id, { puntos_comp: s.pts,
+          detalle: `${s.pg}G ${s.pe}E ${s.pp}P · ${fmtNumPalmares(s.gf)}:${fmtNumPalmares(s.gc)}` })) });
+    });
+    const gl = m => Number(m.pts_local), gv = m => Number(m.pts_visitante);
+    empatados(jugados, m => Math.abs(gl(m) - gv(m))).forEach(m => {
+      const gana = gl(m) > gv(m) ? m.local_id : m.visitante_id;
+      records.push({ tipo: 'mayor_goleada', valor: Math.abs(gl(m) - gv(m)), participante_id: gana, equipo: nom(gana),
+        detalle: `${nom(m.local_id)} ${fmtNumPalmares(gl(m))}-${fmtNumPalmares(gv(m))} ${nom(m.visitante_id)} · J${m.jornada}`.slice(0, 120) });
+    });
+    empatados(jugados, m => gl(m) + gv(m)).forEach(m => records.push({ tipo: 'mas_goles_partido', valor: gl(m) + gv(m),
+      participante_id: null, equipo: `${nom(m.local_id)} – ${nom(m.visitante_id)}`.slice(0, 130),
+      detalle: `${fmtNumPalmares(gl(m))}-${fmtNumPalmares(gv(m))} · J${m.jornada}` }));
+  }
+
+  // Torneos
+  const compIds = comps.data.map(c => c.id);
+  if (compIds.length) {
+    const { data: fs, error: eF } = await sb.from('fases_competicion').select('id, competicion_id, nombre, tipo, orden').in('competicion_id', compIds);
+    if (eF) throw eF;
+    const faseIds = (fs || []).map(f => f.id);
+    let gs = [], gm = {}, ps = [];
+    if (faseIds.length) {
+      const [rG, rP] = await Promise.all([
+        sb.from('grupos_competicion').select('id, fase_id').in('fase_id', faseIds),
+        obtenerTodasLasFilas(() => sb.from('partidos_competicion')
+          .select('id, fase_id, participante_local_id, participante_visitante_id, goles_local, goles_visitante').in('fase_id', faseIds).order('id')),
+      ]);
+      if (rG.error || rP.error) throw rG.error || rP.error;
+      gs = rG.data || []; ps = rP.data || [];
+      if (gs.length) {
+        const { data: gps, error: eG } = await sb.from('grupos_participantes').select('grupo_id, participante_id').in('grupo_id', gs.map(g => g.id));
+        if (eG) throw eG;
+        (gps || []).forEach(r => { (gm[r.grupo_id] = gm[r.grupo_id] || []).push(r.participante_id); });
+      }
+    }
+    comps.data.forEach(co => {
+      const fasesC = (fs || []).filter(f => f.competicion_id === co.id);
+      const { res, dudoso } = rondasTorneo(fasesC, gs, gm, ps);
+      const pids = Object.keys(res).filter(pid => partIds.includes(pid));
+      if (!pids.length) return;
+      competiciones.push({ tipo: 'torneo', nombre: co.nombre.slice(0, 60), participantes: pids.length,
+        aviso: dudoso ? 'No se pudo deducir del todo quién llegó a cada ronda: revísalo.' : null,
+        entradas: pids.sort((a, b) => res[a] - res[b] || nom(a).localeCompare(nom(b), 'es')).map(pid => entrada(res[pid], pid)) });
+    });
+  }
+
+  // Quiniela
+  const qRows = quin.data.filter(r => partIds.includes(r.participante_id));
+  if (qRows.length) {
+    const agg = {};
+    qRows.forEach(r => {
+      const a = agg[r.participante_id] = agg[r.participante_id] || { aciertos: 0, exactos: 0, ganadas: 0 };
+      a.aciertos += r.aciertos; a.exactos += r.exactos; if (r.ganador) a.ganadas++;
+    });
+    const orden = Object.entries(agg).sort(([pa, a], [pb, b]) => b.aciertos - a.aciertos || b.exactos - a.exactos
+                                            || b.ganadas - a.ganadas || nom(pa).localeCompare(nom(pb), 'es'));
+    competiciones.push({ tipo: 'quiniela', nombre: 'Quiniela', participantes: orden.length,
+      entradas: orden.map(([pid, a], i) => entrada(i + 1, pid, { puntos_comp: a.aciertos,
+        detalle: `${a.exactos} exactos · ${a.ganadas} ganadas` })) });
+    empatados(qRows, r => r.aciertos).forEach(r => records.push({ tipo: 'mas_aciertos_quiniela', valor: r.aciertos,
+      participante_id: r.participante_id, equipo: nom(r.participante_id), detalle: `J${r.jornada}` }));
+  }
+
+  return { competiciones: competiciones.map((c, i) => ({ ...c, orden: i + 1, incluir: true })), records };
+}
+
+// Mensaje del Tablón con los campeones de una temporada recién guardada.
+function textoPalmaresTemporada(temporada, competiciones) {
+  const lineas = competiciones.map(c => {
+    const campeones = c.entradas.filter(e => e.puesto === 1).map(e => `**${mdEsc(e.equipo)}**`);
+    return campeones.length ? `- ${PALMARES_ICONO[c.tipo]} ${mdEsc(c.nombre)}: ${campeones.join(' y ')}` : null;
+  }).filter(Boolean);
+  return `🏛️ **Palmarés de la temporada ${mdEsc(temporada)}**\n\n${lineas.join('\n')}\n\n` +
+         'El historial completo está en Competiciones → 🏛️ Palmarés.';
+}
+
+// ── Vista de usuario ───────────────────────────────────────────
+function FilaPalmares({ e, comp, miParticipanteId }) {
+  const mia = e.participante_id && e.participante_id === miParticipanteId;
+  return (
+    <div style={{display:'flex', alignItems:'baseline', gap:'.5rem', padding:'.22rem 0', fontSize:'.85rem',
+                 borderTop:'1px solid var(--gris)', fontWeight: mia ? 700 : 400}}>
+      <span style={{minWidth: comp.tipo === 'torneo' ? 108 : 42, color:'var(--texto2)', whiteSpace:'nowrap'}}>
+        {medallaPuesto(e.puesto)} {etiquetaPuesto(comp, e.puesto)}
+      </span>
+      <span style={{flex:1, minWidth:0, overflowWrap:'anywhere', fontWeight: e.puesto === 1 ? 700 : undefined}}>
+        {e.equipo}
+        {e.movimiento === 'ascenso'  && <span title="Ascenso"> ⬆️</span>}
+        {e.movimiento === 'descenso' && <span title="Descenso"> ⬇️</span>}
+        {e.detalle && <span style={{fontSize:'.74rem', color:'var(--texto2)', fontWeight:400}}> · {e.detalle}</span>}
+      </span>
+      {e.puntos_comp != null && (
+        <span style={{fontVariantNumeric:'tabular-nums', color:'var(--texto2)', whiteSpace:'nowrap'}}>
+          {fmtNumPalmares(e.puntos_comp)} {comp.tipo === 'quiniela' ? 'ac.' : 'pts'}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Cabecera plegable (temporadas y competiciones del palmarés).
+function CabeceraPlegable({ abierta, onToggle, children, grande }) {
+  return (
+    <button onClick={onToggle} aria-expanded={abierta}
+            style={{display:'flex', alignItems:'baseline', gap:'.4rem', width:'100%', background:'none', border:'none',
+                    padding: grande ? 0 : '.35rem 0', cursor:'pointer', textAlign:'left', color:'var(--texto)',
+                    fontSize: grande ? '1.05rem' : '.9rem', fontWeight:700, fontFamily:'inherit'}}>
+      <span style={{color:'var(--texto2)', fontSize:'.8em', width:'1em', flexShrink:0}}>{abierta ? '▾' : '▸'}</span>
+      <span style={{flex:1, minWidth:0, overflowWrap:'anywhere'}}>{children}</span>
+    </button>
+  );
+}
+
+// Una competición de una temporada: plegada muestra el campeón; desplegada, la clasificación completa.
+function CompeticionPalmares({ comp, entradas, miParticipanteId }) {
+  const [abierta, setAbierta] = useState(false);
+  const orden = [...entradas].sort((a, b) => a.puesto - b.puesto || a.equipo.localeCompare(b.equipo, 'es'));
+  const campeones = orden.filter(e => e.puesto === 1).map(e => e.equipo).join(' y ');
+  const gris = {fontWeight:400, fontSize:'.75rem', color:'var(--texto2)'};
+  return (
+    <div style={{borderTop:'1px solid var(--gris)'}}>
+      <CabeceraPlegable abierta={abierta} onToggle={() => setAbierta(!abierta)}>
+        {PALMARES_ICONO[comp.tipo]} {comp.nombre}
+        {comp.tipo === 'liga' && comp.nombre !== 'Liga FILFA' && <span style={gris}> · Liga FILFA</span>}
+        {comp.participantes ? <span style={gris}> · {comp.participantes} equipos</span> : null}
+        {!abierta && campeones && <span style={{...gris, fontSize:'.8rem'}}> · 🥇 {campeones}</span>}
+      </CabeceraPlegable>
+      {abierta && (
+        <div style={{padding:'0 0 .6rem 1.4rem'}}>
+          {orden.map(e => <FilaPalmares key={e.id} e={e} comp={comp} miParticipanteId={miParticipanteId} />)}
+          {orden.length === 0 && <p style={{fontSize:'.82rem', color:'var(--texto2)'}}>Sin equipos registrados.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecordsPalmares({ records, temporadas }) {
+  const nomT = id => temporadas.find(t => t.id === id)?.nombre || '';
+  return Object.entries(PALMARES_RECORDS).map(([tipo, def]) => {
+    const rs = records.filter(r => r.tipo === tipo).sort((a, b) => Number(b.valor) - Number(a.valor));
+    if (!rs.length) return null;
+    const max = Number(rs[0].valor);
+    return (
+      <div key={tipo} style={{marginBottom:'.85rem'}}>
+        <div style={{fontWeight:700, fontSize:'.88rem', marginBottom:'.15rem'}}>{def.titulo}</div>
+        {rs.slice(0, 5).map(r => (
+          <div key={r.id} style={{display:'flex', gap:'.5rem', alignItems:'baseline', fontSize:'.84rem', padding:'.2rem 0',
+                                  borderTop:'1px solid var(--gris)', fontWeight: Number(r.valor) === max ? 700 : 400}}>
+            <span style={{minWidth:96, fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap'}}>
+              {Number(r.valor) === max ? '👑 ' : ''}{fmtNumPalmares(r.valor)}
+              <span style={{fontSize:'.72rem', color:'var(--texto2)', fontWeight:400}}> {def.unidad}</span>
+            </span>
+            <span style={{flex:1, minWidth:0, overflowWrap:'anywhere'}}>
+              {r.equipo}
+              {r.detalle && <span style={{fontSize:'.74rem', color:'var(--texto2)', fontWeight:400}}> · {r.detalle}</span>}
+            </span>
+            {temporadas.length > 0 && <span style={{fontSize:'.75rem', color:'var(--texto2)', whiteSpace:'nowrap', fontWeight:400}}>{nomT(r.temporada_id)}</span>}
+          </div>
+        ))}
+      </div>
+    );
+  });
+}
+
+function PalmaresVista({ federacion, participantes, miParticipanteId }) {
+  const datos = usePalmares(federacion?.id);
+  const [vista, setVista] = useState('temporadas');
+  const [abierto, setAbierto] = useState(null);
+  const [tempAbiertas, setTempAbiertas] = useState(null); // null = solo la más reciente
+  const resumen = useMemo(() => datos?.temporadas ? resumenPalmares(datos, federacion, participantes) : [],
+                          [datos, federacion?.palmares_puntos, participantes]);
+
+  if (datos === undefined) return <Spinner />;
+  if (datos.error) return <div className="card"><div className="empty">{errorPalmares(datos.error)}</div></div>;
+  if (!datos.temporadas.length) return (
+    <div className="card">
+      <h2>🏛️ Palmarés</h2>
+      <div className="empty">Todavía no hay temporadas en el palmarés. Se añaden al cerrar cada temporada, y el admin
+        puede añadir también temporadas anteriores.</div>
+    </div>
+  );
+
+  const abiertas = tempAbiertas || new Set(datos.temporadas.slice(0, 1).map(t => t.id));
+  const toggleTemporada = id => { const n = new Set(abiertas); n.has(id) ? n.delete(id) : n.add(id); setTempAbiertas(n); };
+  const compsDe = tid => datos.competiciones.filter(c => c.temporada_id === tid).sort((a, b) => a.orden - b.orden);
+  const entradasDe = cid => datos.entradas.filter(e => e.competicion_id === cid);
+  const subtab = (k, t) => (
+    <button className={`tab ${vista === k ? 'active' : ''}`} onClick={() => setVista(k)}>{t}</button>
+  );
+  const num = { textAlign:'right', fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap' };
+  const clavesUsadas = [...new Map(datos.competiciones.map(c => [clavePalmares(c), c])).values()];
+  const sinPuntos = resumen.every(eq => eq.puntos === 0);
+
+  return (
+    <div>
+      <div className="tabs" style={{marginBottom:'.75rem'}}>
+        {subtab('temporadas', 'Por temporada')}
+        {subtab('vitrina', 'Vitrina')}
+        {subtab('records', 'Récords')}
+        {subtab('historica', 'Clasificación histórica')}
+      </div>
+
+      {vista === 'temporadas' && datos.temporadas.length > 1 && (
+        <div style={{display:'flex', justifyContent:'flex-end', gap:'.8rem', marginBottom:'.4rem'}}>
+          {[['Desplegar todas', new Set(datos.temporadas.map(t => t.id))], ['Plegar todas', new Set()]].map(([txt, v]) => (
+            <button key={txt} onClick={() => setTempAbiertas(v)}
+                    style={{background:'none', border:'none', color:'var(--texto2)', cursor:'pointer', fontSize:'.8rem', fontWeight:600}}>{txt}</button>
+          ))}
+        </div>
+      )}
+      {vista === 'temporadas' && datos.temporadas.map(t => {
+        const rs = datos.records.filter(r => r.temporada_id === t.id);
+        const comps = compsDe(t.id);
+        const abierta = abiertas.has(t.id);
+        return (
+          <div key={t.id} className="card" style={{paddingBottom: abierta ? undefined : '.9rem'}}>
+            <CabeceraPlegable grande abierta={abierta} onToggle={() => toggleTemporada(t.id)}>
+              Temporada {t.nombre}
+              <span style={{fontSize:'.75rem', fontWeight:400, color:'var(--texto2)'}}>
+                {' '}· {comps.length} {comps.length === 1 ? 'competición' : 'competiciones'}{t.origen === 'manual' ? ' · añadida a mano' : ''}
+              </span>
+            </CabeceraPlegable>
+            {abierta && (
+              <div style={{marginTop:'.6rem'}}>
+                {comps.map(c => <CompeticionPalmares key={c.id} comp={c} entradas={entradasDe(c.id)} miParticipanteId={miParticipanteId} />)}
+                {comps.length === 0 && <p style={{fontSize:'.84rem', color:'var(--texto2)'}}>Sin competiciones registradas.</p>}
+                {rs.length > 0 && (
+                  <details style={{borderTop:'1px solid var(--gris)', paddingTop:'.35rem'}}>
+                    <summary style={{cursor:'pointer', fontWeight:700, fontSize:'.9rem'}}>📈 Récords de la temporada</summary>
+                    <div style={{marginTop:'.5rem', paddingLeft:'1.4rem'}}><RecordsPalmares records={rs} temporadas={[]} /></div>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {vista === 'vitrina' && (
+        <div className="card">
+          <h2 style={{marginBottom:'.6rem'}}>Vitrina de títulos</h2>
+          {resumen.filter(eq => eq.titulos > 0).length === 0 && <div className="empty">Aún no hay títulos registrados.</div>}
+          {[...resumen].filter(eq => eq.titulos > 0)
+            .sort((a, b) => b.titulos - a.titulos || b.puntos - a.puntos || a.nombre.localeCompare(b.nombre, 'es'))
+            .map(eq => <VitrinaTitulos key={eq.clave} eq={eq} destacado={eq.participante_id === miParticipanteId} />)}
+        </div>
+      )}
+
+      {vista === 'records' && (
+        <div className="card">
+          <h2 style={{marginBottom:'.6rem'}}>Récords históricos</h2>
+          {datos.records.length === 0
+            ? <div className="empty">No hay récords registrados.</div>
+            : <RecordsPalmares records={datos.records} temporadas={datos.temporadas} />}
+        </div>
+      )}
+
+      {vista === 'historica' && (
+        <div className="card">
+          <h2 style={{marginBottom:'.4rem'}}>Clasificación histórica</h2>
+          <p style={{fontSize:'.8rem', color:'var(--texto2)', marginBottom:'.6rem'}}>
+            Suma de los puntos de todas las temporadas del palmarés según el puesto en cada competición. Pulsa un equipo para ver su desglose.
+          </p>
+          {sinPuntos && <div className="empty" style={{marginBottom:'.6rem'}}>El admin todavía no ha asignado puntos a los puestos del palmarés.</div>}
+          <div style={{overflowX:'auto'}}>
+            <table className="tabla-jugadores">
+              <thead>
+                <tr>
+                  <th style={num}>#</th><th>Equipo</th><th style={num}>Puntos</th>
+                  <th style={num} title="Títulos (1º o campeón)">🏆</th>
+                  <th style={num} title="Temporadas en el palmarés">Temp.</th>
+                  <th className="solo-escritorio" style={num} title="Puntos por temporada">Media</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resumen.map((eq, i) => {
+                  const rk = i > 0 && resumen[i - 1].puntos === eq.puntos && resumen[i - 1].titulos === eq.titulos ? null : i + 1;
+                  return (
+                    <React.Fragment key={eq.clave}>
+                      <tr onClick={() => setAbierto(abierto === eq.clave ? null : eq.clave)}
+                          style={{cursor:'pointer', fontWeight: eq.participante_id && eq.participante_id === miParticipanteId ? 700 : undefined}}>
+                        <td style={num}>{rk ?? ''}</td>
+                        <td>{eq.nombre}{!eq.participante_id && <span style={{fontSize:'.72rem', color:'var(--texto2)'}} title="Ya no está en la liga"> †</span>}</td>
+                        <td style={{...num, fontWeight:700}}>{fmtNumPalmares(eq.puntos)}</td>
+                        <td style={num}>{eq.titulos || ''}</td>
+                        <td style={num}>{eq.nTemporadas}</td>
+                        <td className="solo-escritorio" style={num}>{fmtNumPalmares(eq.puntos / (eq.nTemporadas || 1))}</td>
+                      </tr>
+                      {abierto === eq.clave && (
+                        <tr><td colSpan={6} style={{background:'var(--fondo-sub)'}}>
+                          {eq.entradas.map(e => (
+                            <div key={e.id} style={{display:'flex', gap:'.5rem', fontSize:'.8rem', padding:'.12rem 0'}}>
+                              <span style={{color:'var(--texto2)', minWidth:58}}>{e.temporada.nombre}</span>
+                              <span style={{flex:1, minWidth:0}}>{PALMARES_ICONO[e.comp.tipo]} {e.comp.nombre} · {medallaPuesto(e.puesto)} {etiquetaPuesto(e.comp, e.puesto)}</span>
+                              <span style={{fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap'}}>{fmtNumPalmares(e.pts)} pts{e.puntos_manual != null ? ' ✎' : ''}</span>
+                            </div>
+                          ))}
+                        </td></tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <details style={{marginTop:'.75rem'}}>
+            <summary style={{cursor:'pointer', fontWeight:600, fontSize:'.86rem'}}>¿Cómo se puntúa?</summary>
+            <div style={{fontSize:'.8rem', marginTop:'.4rem'}}>
+              <p style={{color:'var(--texto2)', marginBottom:'.4rem'}}>
+                Los puntos de cada puesto los fija el admin para cada competición. Algunas temporadas pueden tener su propia
+                tabla, y el admin puede fijar los puntos de una entrada concreta (✎). † = equipo que ya no está en la liga.
+              </p>
+              {clavesUsadas.map(c => {
+                const tabla = federacion?.palmares_puntos?.[clavePalmares(c)] || {};
+                const filas = Object.entries(tabla).filter(([, v]) => Number(v)).sort((a, b) => a[0] - b[0]);
+                return (
+                  <div key={clavePalmares(c)} style={{marginBottom:'.3rem'}}>
+                    <strong>{PALMARES_ICONO[c.tipo]} {c.tipo === 'fantasy' || c.tipo === 'quiniela' ? PALMARES_TIPOS[c.tipo] : c.nombre}:</strong>{' '}
+                    {filas.length ? filas.map(([p, v]) => `${etiquetaPuesto(c, Number(p))} ${fmtNumPalmares(v)}`).join(' · ') : 'sin puntos'}
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Títulos de un equipo como chips (vitrina general y ficha del equipo).
+function VitrinaTitulos({ eq, destacado, sinNombre }) {
+  const titulos = eq.entradas.filter(e => e.puesto === 1);
+  const podios = { 2: eq.entradas.filter(e => e.puesto === 2).length, 3: eq.entradas.filter(e => e.puesto === 3 && e.comp.tipo !== 'torneo').length };
+  return (
+    <div style={{padding:'.5rem 0', borderTop:'1px solid var(--gris)'}}>
+      <div style={{fontWeight:700, fontSize:'.92rem', marginBottom:'.3rem', color: destacado ? 'var(--verde)' : undefined}}>
+        {!sinNombre && eq.nombre} <span style={{fontWeight:400, fontSize:'.8rem', color:'var(--texto2)'}}>{!sinNombre && '· '}{eq.titulos} título{eq.titulos === 1 ? '' : 's'}
+          {podios[2] ? ` · 🥈 ${podios[2]}` : ''}{podios[3] ? ` · 🥉 ${podios[3]}` : ''}</span>
+      </div>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem'}}>
+        {titulos.map(e => (
+          <span key={e.id} style={{display:'inline-flex', alignItems:'center', gap:'.3rem', padding:'.22rem .6rem', borderRadius:14,
+                                   fontSize:'.76rem', fontWeight:600, background:'rgba(245,166,35,.14)', color:'#b7791f',
+                                   border:'1px solid rgba(245,166,35,.4)'}}>
+            {PALMARES_ICONO[e.comp.tipo]} {e.comp.nombre} {e.temporada.nombre}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Tarjeta del palmarés en la ficha de un equipo (Equipos). No se muestra si no tiene historial.
+function PalmaresEquipo({ federacion, participantes, equipoId }) {
+  const datos = usePalmares(federacion?.id);
+  const resumen = useMemo(() => datos?.temporadas ? resumenPalmares(datos, federacion, participantes) : [],
+                          [datos, federacion?.palmares_puntos, participantes]);
+  const i = resumen.findIndex(eq => eq.clave === equipoId);
+  if (i < 0) return null;
+  const eq = resumen[i];
+  const mejores = eq.entradas.filter(e => e.puesto !== 1 && (e.comp.tipo === 'torneo' ? e.puesto <= 3 : e.puesto <= 3));
+  return (
+    <div className="card">
+      <h2 style={{marginBottom:'.4rem'}}>🏛️ Palmarés</h2>
+      <p style={{fontSize:'.84rem', marginBottom:'.4rem'}}>
+        <strong>{i + 1}º</strong> de {resumen.length} en la clasificación histórica · <strong>{fmtNumPalmares(eq.puntos)}</strong> pts
+        · {eq.nTemporadas} temporada{eq.nTemporadas === 1 ? '' : 's'}
+      </p>
+      {eq.titulos > 0 && <VitrinaTitulos eq={eq} sinNombre />}
+      {mejores.length > 0 && (
+        <div style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:'.4rem'}}>
+          Podios: {mejores.map(e => `${medallaPuesto(e.puesto) || '🏅'} ${e.comp.nombre} ${e.temporada.nombre}${e.comp.tipo === 'torneo' ? ` (${etiquetaPuesto(e.comp, e.puesto)})` : ''}`).join(' · ')}
         </div>
       )}
     </div>
@@ -13572,6 +14838,8 @@ function Competiciones({ federacion, participantes, isAdmin, miParticipanteId })
           <button className={`tab ${tab==='logros'?'active':''}`}
                   onClick={() => setTab('logros')}>🏆 Logros</button>
         )}
+        <button className={`tab ${tab==='palmares'?'active':''}`}
+                onClick={() => setTab('palmares')}>🏛️ Palmarés</button>
       </div>
       {tab === 'calendario' && (
         <CalendarioFantasy participantes={participantes} federacion={federacion} isAdmin={isAdmin}
@@ -13593,6 +14861,9 @@ function Competiciones({ federacion, participantes, isAdmin, miParticipanteId })
       {tab === 'quiniela' && (
         <QuinielaVista federacion={federacion} participantes={participantes} isAdmin={isAdmin}
                        miParticipanteId={miParticipanteId} />
+      )}
+      {tab === 'palmares' && (
+        <PalmaresVista federacion={federacion} participantes={participantes} miParticipanteId={miParticipanteId} />
       )}
     </div>
   );
@@ -17807,6 +19078,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
         ['🎯 Quiniela', 'Si el admin la activa, en Competiciones → 🎯 Quiniela tienes cada jornada una quiniela con los partidos de la Liga FILFA y de los torneos que se juegan con esa jornada de la Liga Fantástica. En cada partido eliges 1, X o 2 (o el resultado exacto en goles, si el admin lo marca así) y pulsas "Enviar quiniela". Puedes cambiarla hasta el cierre de alineaciones (o, si no hay cierre, hasta que se cierre la jornada). Hasta entonces nadie más ve tus pronósticos, salvo el admin y los delegados de quinielas; después se hacen públicos.'],
         ['Quiniela — premio y clasificación', 'Al cerrar y archivar la jornada (o al calcular el último resultado que faltara) se cuentan los aciertos y se publica el resumen en el Tablón 🎯. El equipo con más aciertos se lleva el premio que haya fijado el admin (se reparte a partes iguales si hay empate); si hay coste por participar, se descuenta a los equipos que la enviaron. Cada acierto vale 1, sea 1·X·2 o resultado exacto. En la pestaña Clasificación se suman los aciertos de todas las jornadas, desglosados por competición; en caso de empate cuentan primero los aciertos de resultado exacto y después las quinielas ganadas.'],
+        ['🏛️ Palmarés', 'En Competiciones → 🏛️ Palmarés está el historial de la liga, que no se borra al reiniciar la temporada. "Por temporada" muestra la clasificación final de cada competición (Liga Fantástica, cada división de la Liga FILFA con sus ascensos ⬆️ y descensos ⬇️, la quiniela) y la ronda a la que llegó cada equipo en los torneos, con los récords de la temporada. "Vitrina" reúne los títulos de cada equipo, "Récords" los mejores registros de todas las temporadas y la ficha de cada equipo (Equipos) muestra su palmarés. Puede incluir temporadas anteriores a la app añadidas por el admin.'],
+        ['Clasificación histórica', 'Suma los puntos de cada equipo en todas las temporadas del palmarés según su puesto en cada competición (o la ronda alcanzada en los torneos). Los puntos de cada puesto los fija el admin para cada competición; en "¿Cómo se puntúa?" se ven los que hay. Empatados a puntos, va delante quien tiene más títulos. † indica un equipo que ya no está en la liga.'],
       ]
     },
     {
@@ -17854,6 +19127,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Logros', 'Los logros se activan o desactivan en Admin → Liga FILFA (requiere tener la Liga FILFA activada). Se recalculan solos al calcular una jornada H2H y al guardar resultados de Liga FILFA; en ese mismo momento se actualiza el progreso que ven los equipos. Con el botón "🏆 Recalcular logros" se puede forzar el recálculo, por ejemplo tras corregir puntos de una jornada. Si el recálculo no puede leer todos los datos, se cancela sin guardar nada y se muestra el error. Al reiniciar la temporada, los logros conseguidos se conservan y el progreso se borra.'],
         ['Jugadores destacados', 'Las estadísticas de jugadores destacados (Equipos y Liga Fantástica → Estadísticas) y la clasificación de jugadores (Competiciones → 🏅 Jugadores) se recalculan solas al cerrar, reabrir o editar una jornada en Admin → Pts Jugadores. El botón "📊 Recalcular estadísticas" de esa misma pantalla permite forzarlo. Solo cuentan las jornadas cerradas, así que conviene cerrar cada jornada cuando sus puntos sean definitivos. Al reiniciar la temporada se borran.'],
         ['Predicción de la Liga Fantástica', 'El botón "🔄 Recalcular predicción" de Liga Fantástica → 🔮 Predicción solo lo ve el admin (los moderadores no pueden recalcularla). Simula en tu navegador el resto de la temporada con los puntos existentes y guarda el resultado para que lo vea toda la liga. Se recalcula sola cuando el admin cierra una jornada (🔒 Cerrar y archivar); si la cierra un moderador no, y conviene pulsar el botón después (si no, los usuarios verán un aviso de que está desactualizada). Al reiniciar la temporada se borra.'],
+        ['Palmarés', 'Al reiniciar la temporada (Admin → Mi Federación) la app calcula el palmarés de la que termina: la clasificación final de la Liga Fantástica, de cada división de la Liga FILFA (con sus desempates) y de la quiniela, la ronda que alcanzó cada equipo en cada torneo y los récords. Antes de confirmar puedes ponerle nombre a la temporada, revisar los puestos y las rondas (⚠️ = no se pudo deducir del todo), marcar ascensos y descensos y quitar competiciones. El palmarés se guarda en el mismo paso que el reinicio: si algo falla, no se reinicia nada. Se publica un resumen con los campeones en el Tablón.'],
+        ['Palmarés — a mano y puntos', 'En Admin → Palmarés puedes añadir temporadas anteriores aunque no se jugaran en la app: pega la clasificación de cada competición, un equipo por línea y en orden (tras ";" los puntos, o en torneos la ronda: Campeón, Subcampeón, Semifinales…). Los nombres que coinciden con un equipo actual se enlazan solos (✓); el resto se guarda con su nombre. También puedes editar o borrar cualquier entrada, competición, récord o temporada, y fijar los puntos de cada puesto para la clasificación histórica: una tabla por competición que vale para todas las temporadas, una tabla propia para una temporada concreta ("Puntos de esta temporada") o unos puntos fijos para una sola entrada (✎).'],
         ['Quiniela', 'En Admin → Quiniela se activa la quiniela y se fijan el premio por jornada y el coste por participar (ambos pueden ser 0). La quiniela de cada jornada se crea sola con los partidos asignados a esa jornada; ahí puedes cambiar cada partido a resultado exacto o excluirlo (hasta el cierre; al cambiar el tipo se borran los pronósticos de ese partido) y nombrar delegados de quinielas, que ven desde el principio los pronósticos de todos y quién la ha enviado. Se resuelve sola al cerrar y archivar la jornada o al calcular el último resultado (Liga FILFA o torneo); si algún resultado se puso a mano, usa "Resolver" en Pendientes de resolver.'],
         ['Predicción de la Liga FILFA', 'Igual que la de la Liga Fantástica: el botón "🔄 Recalcular predicción" de Liga FILFA → 🔮 Predicción solo lo ve el admin. Lee una vez los puntos fantasy de la liga, simula en tu navegador los partidos pendientes del calendario y guarda el resultado para toda la liga. Se recalcula sola cuando el admin calcula una jornada H2H desde la Liga Fantástica; si la calcula un moderador, si metes resultados a mano o si añades una vuelta extra, conviene pulsar el botón (si no, los usuarios verán un aviso de que está desactualizada). Las zonas que aparecen salen de los colores de clasificación de la Liga FILFA (Admin → Mi Federación → Colores de clasificación), por división si los tienes configurados así. Al reiniciar la temporada se borra.'],
       ]

@@ -5064,7 +5064,12 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
     const { data: ptsCheck } = await sb.from('puntos_jugador')
       .select('jugador_id').eq('jornada', jornada).eq('federacion_id', federacion.id).limit(1);
     if (!ptsCheck?.length) { alert('No se puede cerrar: no hay puntos introducidos para esta jornada.'); return; }
-    if (!window.confirm(`¿Cerrar y archivar J${jornada}?\nSe usarán los puntos YA GUARDADOS (lo que no hayas guardado no cuenta).\nLas alineaciones quedarán archivadas como registro histórico.\nSi hace falta, podrás corregir datos desde aquí o re-abrir la jornada.`)) return;
+    // Liga FILFA que se juega con esta jornada (para la crónica).
+    const ligaFilfa = await ligaFilfaDeJornada(federacion, jornada);
+    const avisoFilfa = ligaFilfa?.pendientes.length
+      ? `\n\n⚠️ Sin calcular en la Liga FILFA: ${unirConY(ligaFilfa.pendientes)}. La crónica de la jornada se publica al cerrar y no incluirá sus resultados; si quieres que salgan, calcúlala antes (Admin → Liga FILFA → ⚡ Calcular).`
+      : '';
+    if (!window.confirm(`¿Cerrar y archivar J${jornada}?\nSe usarán los puntos YA GUARDADOS (lo que no hayas guardado no cuenta).\nLas alineaciones quedarán archivadas como registro histórico.\nSi hace falta, podrás corregir datos desde aquí o re-abrir la jornada.${avisoFilfa}`)) return;
     setCerrando(true);
     const [{ data: alis }, { data: ptsData }, { data: clasData }, { data: jugsData }, { data: subsData },
            { data: capsData }, { data: comsData }] = await Promise.all([
@@ -5142,7 +5147,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
     }
     actualizarEstadisticas(); // jornada nueva en el histórico de jugadores destacados
     // Predicción (solo el admin) y crónica de la jornada en el Tablón, en segundo plano.
-    trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin: !isModerador });
+    trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin: !isModerador, ligaFilfa });
     // Quiniela de la jornada: se resuelve ya si todos sus partidos tienen resultado.
     resolverQuinielaJornada(federacion, jornada);
   };
@@ -15723,11 +15728,29 @@ function leerPuntosFantasy(participantes) {
     .order('participante_id').order('jornada'));
 }
 
+// Probabilidades que tenía cada partido antes de jugarse: [% local, % empate].
+// Mezcla las ya guardadas (prob_jugados) con las de los partidos pendientes.
+const probPreviasH2H = pred => Object.assign({}, pred?.prob_jugados || {},
+  ...(pred?.divisiones || []).map(d => d.prob_partidos || {}));
+
+// Las de los partidos jugados en las 3 últimas jornadas de cada división, para
+// la "sorpresa" de la crónica (se publica al cerrar la jornada fantasy, cuando
+// la predicción puede haberse recalculado ya con esos resultados).
+function probJugadosH2H(predAntes, partidos) {
+  const previas = probPreviasH2H(predAntes);
+  const jugados = partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null);
+  const ultima = {};
+  jugados.forEach(m => { const d = m.division_id ?? 0; ultima[d] = Math.max(ultima[d] || 0, m.jornada); });
+  return Object.fromEntries(jugados.filter(m => previas[m.id] && m.jornada > ultima[m.division_id ?? 0] - 3)
+    .map(m => [m.id, previas[m.id]]));
+}
+
 // Predicción completa de la Liga FILFA (la usan el botón de LigaH2H y el
 // cálculo de jornada del admin). `partidos` = calendario completo con los
-// resultados ya jugados; `clas` = puntos fantasy de la temporada. Devuelve
-// el objeto que se guarda en prediccion_h2h, o null si aún no hay puntos.
-function calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas }) {
+// resultados ya jugados; `clas` = puntos fantasy de la temporada;
+// `predAntes` = la predicción que sustituye. Devuelve el objeto que se
+// guarda en prediccion_h2h, o null si aún no hay puntos.
+function calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas, predAntes }) {
   const niveles = estimarNivelesFantasy(clas || [], participantes);
   if (!niveles) return null;
   const normal = crearNormal();
@@ -15741,24 +15764,30 @@ function calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExt
     ultima_jornada_h2h: jugados.length ? Math.max(...jugados.map(m => m.jornada)) : 0,
     ultima_jornada_fantasy: niveles.ultima,
     divisiones: (divIds.length ? divIds : [null]).map(d => simularDivisionH2H(ctx, niveles, d, normal)),
+    prob_jugados: probJugadosH2H(predAntes, partidos),
   };
 }
 
 // ── Crónica automática de la jornada (Tablón, tipo 'cronica') ──────
-// Se publica al cerrar una jornada de la Liga Fantástica y al calcular una
-// jornada de la Liga FILFA, una sola vez por jornada (al re-abrir y volver a
-// cerrar no se repite). Antes, si quien cierra es el admin, se recalcula la
-// predicción correspondiente (la BD no deja hacerlo a los moderadores).
+// Una sola crónica por jornada de la Liga Fantástica, que se publica al
+// cerrarla (al re-abrir y volver a cerrar no se repite). Incluye las jornadas
+// de la Liga FILFA que se juegan con ella (h2h_jornada_config) si ya están
+// calculadas. Antes, si quien cierra es el admin, se recalcula la predicción
+// de la Liga Fantástica (la BD no deja hacerlo a los moderadores).
 const mdEsc = t => String(t ?? '').replace(/([\\`*_[\]#|<>])/g, '\\$1');
 const fmtPtsCronica = x => Number(x).toLocaleString('es-ES', { maximumFractionDigits: 1 });
 const CRONICA_SORPRESA_MAX = 30; // % máximo que tenía el resultado para contarlo como sorpresa
 const CRONICA_RACHA_MIN    = 3;  // victorias o derrotas seguidas para mencionarlas
 const CRONICA_GOLEADA_MIN  = 3;  // diferencia de goles para destacar la goleada
 
-async function cronicaYaPublicada(federacionId, cabecera) {
-  const { data } = await sb.from('anuncios').select('id')
-    .eq('federacion_id', federacionId).eq('tipo', 'cronica').like('texto', `${cabecera}%`).limit(1);
-  return !!data?.length;
+// También reconoce el formato anterior ("Crónica de la J7 · Liga Fantástica").
+// En los patrones de PostgREST "*" es un comodín, así que la cabecera exacta
+// se comprueba aquí.
+async function cronicaYaPublicada(federacionId, jornada) {
+  const cabeceras = [`**Crónica de la J${jornada}**`, `**Crónica de la J${jornada} · Liga Fantástica**`];
+  const { data } = await sb.from('anuncios').select('texto')
+    .eq('federacion_id', federacionId).eq('tipo', 'cronica').like('texto', `%Crónica de la J${jornada}%`).limit(20);
+  return (data || []).some(a => cabeceras.some(c => (a.texto || '').startsWith(c)));
 }
 
 // Clasificación general de la Liga Fantástica tras una jornada: [[id, pts]] de mayor a menor.
@@ -15768,7 +15797,7 @@ function generalFantasy(participantes, clas, hastaJornada) {
   return Object.entries(t).sort((a, b) => b[1] - a[1]);
 }
 
-// Texto (Markdown) de la crónica de una jornada de la Liga Fantástica.
+// Líneas (Markdown) de la parte de la Liga Fantástica de la crónica.
 // `snapshots` = alineaciones archivadas al cerrar (para el mejor jugador);
 // `pred` = predicción recién recalculada (opcional, para el favorito).
 function textoCronicaFantasy({ cabecera, jornada, participantes, clas, snapshots, pred }) {
@@ -15776,7 +15805,7 @@ function textoCronicaFantasy({ cabecera, jornada, participantes, clas, snapshots
   const ptsJ = clas.filter(r => r.jornada === jornada && participantes.some(p => p.id === r.participante_id))
     .map(r => ({ id: r.participante_id, pts: Number(r.puntos_jornada) })).sort((a, b) => b.pts - a.pts);
   if (!ptsJ.length) return null;
-  const lineas = [cabecera, ''];
+  const lineas = [cabecera];
   const max = ptsJ[0].pts, min = ptsJ[ptsJ.length - 1].pts;
   const siguientes = ptsJ.filter(r => r.pts < max).slice(0, 2);
   lineas.push(`🥇 **Ganador de la jornada:** ${ptsJ.filter(r => r.pts === max).map(r => nombre(r.id)).join(' y ')} con ${fmtPtsCronica(max)} pts` +
@@ -15811,12 +15840,39 @@ function textoCronicaFantasy({ cabecera, jornada, participantes, clas, snapshots
     const fav = pred.equipos.filter(e => participantes.some(p => p.id === e.id)).sort((a, b) => b.conteo[0] - a.conteo[0])[0];
     if (fav) lineas.push(`🔮 **Favorito al título:** ${nombre(fav.id)} (${pctPrediccion(fav.conteo[0], pred.simulaciones)})`);
   }
-  return lineas.join('  \n');
+  return lineas;
+}
+
+// Jornadas de la Liga FILFA que se juegan con la jornada fantasy dada, por
+// división, con el calendario necesario para la crónica. Se lee antes de
+// cerrar para avisar de las que aún no están calculadas. null si no hay.
+async function ligaFilfaDeJornada(federacion, jornada) {
+  if (!federacion?.h2h_habilitado) return null;
+  const { data: cfg } = await sb.from('h2h_jornada_config').select('jornada_h2h, division_id')
+    .eq('federacion_id', federacion.id).eq('jornada_fantasy', jornada);
+  if (!cfg?.length) return null;
+  const [{ data: partidos, error }, { data: divisiones }] = await Promise.all([
+    obtenerTodasLasFilas(() => sb.from('h2h_partidos')
+      .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
+      .eq('federacion_id', federacion.id).lte('jornada', Math.max(...cfg.map(c => c.jornada_h2h))).order('id')),
+    sb.from('divisiones').select('id, nombre').order('id'),
+  ]);
+  if (error) { console.error('[Crónica] Error al leer la Liga FILFA:', error.message); return null; }
+  const jornadasDiv = cfg.map(c => ({ div: c.division_id ?? null, jornada: c.jornada_h2h }))
+    .filter(({ div, jornada: j }) => (partidos || []).some(m => m.jornada === j && (m.division_id ?? null) === div))
+    .sort((a, b) => (a.div ?? 0) - (b.div ?? 0));
+  if (!jornadasDiv.length) return null;
+  const nombreDiv = div => div == null ? 'Liga FILFA' : (divisiones || []).find(d => d.id === div)?.nombre || `División ${div}`;
+  const pendientes = jornadasDiv.filter(({ div, jornada: j }) => (partidos || []).some(m =>
+    m.jornada === j && (m.division_id ?? null) === div && (m.pts_local === null || m.pts_visitante === null)))
+    .map(({ div, jornada: j }) => `${nombreDiv(div)} J${j}`);
+  return { partidos: partidos || [], divisiones: divisiones || [], jornadasDiv, pendientes };
 }
 
 // Tras cerrar una jornada de la Liga Fantástica (en segundo plano: un fallo
 // aquí no afecta al cierre). Una sola lectura de los puntos de la temporada.
-async function trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin }) {
+// `ligaFilfa` = resultado de ligaFilfaDeJornada (o null).
+async function trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin, ligaFilfa }) {
   try {
     const { data: clas, error } = await leerPuntosFantasy(participantes);
     if (error) { console.error('[Crónica] Error al leer los puntos:', error.message); return; }
@@ -15826,30 +15882,41 @@ async function trasCerrarJornadaFantasy({ federacion, participantes, jornada, sn
       const err = pred && await guardarPrediccion(federacion.id, 'prediccion', pred);
       if (err) { console.error('[Predicción] No se pudo guardar:', err); pred = null; }
     }
-    const cabecera = `**Crónica de la J${jornada} · Liga Fantástica**`;
-    if (await cronicaYaPublicada(federacion.id, cabecera)) return;
-    const texto = textoCronicaFantasy({ cabecera, jornada, participantes, clas: clas || [], snapshots, pred });
-    if (texto) await publicar(federacion.id, 'cronica', texto, null);
+    if (await cronicaYaPublicada(federacion.id, jornada)) return;
+    const fantasy = textoCronicaFantasy({ cabecera: '**Liga Fantástica**', jornada, participantes, clas: clas || [], snapshots, pred }) || [];
+    let filfa = [];
+    if (ligaFilfa) {
+      // Predicción guardada de la Liga FILFA: probabilidades previas (sorpresa) y,
+      // si ya incluye estos resultados, el favorito al título.
+      const predH2H = (await cargarPrediccion(federacion.id, 'prediccion_h2h', true)).prediccion;
+      const ultimaJ = Math.max(...ligaFilfa.jornadasDiv.map(d => d.jornada));
+      filfa = textoCronicaH2H({ federacion, participantes, partidos: ligaFilfa.partidos, divisiones: ligaFilfa.divisiones,
+        jornadasDiv: ligaFilfa.jornadasDiv, probPrevias: probPreviasH2H(predH2H),
+        predNueva: (predH2H?.ultima_jornada_h2h ?? 0) >= ultimaJ ? predH2H : null }) || [];
+    }
+    if (!fantasy.length && !filfa.length) return;
+    const lineas = [`**Crónica de la J${jornada}**`, '', ...fantasy, ...filfa];
+    await publicar(federacion.id, 'cronica', lineas.join('  \n'), null);
   } catch (e) { console.error('[Crónica] Error:', e); }
 }
 
-// Texto (Markdown) de la crónica de una jornada de la Liga FILFA, por
-// división. `partidos` = calendario completo con los resultados de esta
-// jornada ya puestos; `predAntes` = predicción anterior a la jornada (para
-// la sorpresa); `predNueva` = la recién recalculada (para el favorito).
-function textoCronicaH2H({ cabecera, federacion, jornada, participantes, partidos, divisiones, predAntes, predNueva }) {
+// Líneas (Markdown) de la parte de la Liga FILFA de la crónica, por división.
+// `jornadasDiv` = [{ div, jornada }] (cada división puede ir por una jornada
+// distinta); `partidos` = calendario con los resultados ya puestos;
+// `probPrevias` = probabilidades de cada partido antes de jugarse (para la
+// sorpresa); `predNueva` = predicción con estos resultados (para el favorito).
+function textoCronicaH2H({ federacion, participantes, partidos, divisiones, jornadasDiv, probPrevias, predNueva }) {
   const nombre = id => mdEsc(participantes.find(p => p.id === id)?.nombre || '—');
   const jugado = m => m.pts_local !== null && m.pts_visitante !== null;
-  const probAntes = Object.assign({}, ...(predAntes?.divisiones || []).map(d => d.prob_partidos || {}));
+  const probAntes = probPrevias || {};
   const criterios = criteriosDesempateH2H(federacion);
-  const divs = [...new Set(partidos.filter(m => m.jornada === jornada).map(m => m.division_id ?? null))]
-    .sort((a, b) => (a ?? 0) - (b ?? 0));
-  const lineas = [cabecera];
-  divs.forEach(div => {
+  const lineas = [];
+  jornadasDiv.forEach(({ div, jornada }) => {
     const ms = partidos.filter(m => m.jornada === jornada && (m.division_id ?? null) === div && jugado(m));
     if (!ms.length) return;
     lineas.push('');
-    if (div != null) lineas.push(`**${mdEsc(divisiones.find(d => d.id === div)?.nombre || `División ${div}`)}**`);
+    lineas.push(div == null ? `**Liga FILFA · J${jornada}**`
+      : `**Liga FILFA · ${mdEsc(divisiones.find(d => d.id === div)?.nombre || `División ${div}`)} · J${jornada}**`);
     lineas.push(`⚽ ${ms.map(m => `${nombre(m.local_id)} ${m.pts_local}-${m.pts_visitante} ${nombre(m.visitante_id)}`).join(' · ')}`);
 
     const goleada = ms.map(m => ({ m, d: Math.abs(m.pts_local - m.pts_visitante) })).sort((a, b) => b.d - a.d)[0];
@@ -15920,31 +15987,21 @@ function textoCronicaH2H({ cabecera, federacion, jornada, participantes, partido
       lineas.push(`🔮 **Favorito al título:** ${nombre(fav.id)} (${pctPrediccion(fav.conteo[0], predNueva.simulaciones)})`);
     }
   });
-  return lineas.length > 1 ? lineas.join('  \n') : null;
+  return lineas.length ? lineas : null;
 }
 
-// Tras calcular una jornada de la Liga FILFA (en segundo plano). `partidos`
-// = calendario completo con los resultados recién calculados.
-async function trasCalcularJornadaH2H({ federacion, participantes, jornada, partidos, vueltasExtra, baremo, divisiones, esAdmin }) {
+// Tras calcular una jornada de la Liga FILFA (en segundo plano, solo el
+// admin): recalcula la predicción. La crónica sale al cerrar la jornada
+// fantasy. `partidos` = calendario completo con los resultados recién calculados.
+async function trasCalcularJornadaH2H({ federacion, participantes, partidos, vueltasExtra, baremo }) {
   try {
-    const cabecera = `**Crónica de la J${jornada} · Liga FILFA**`;
-    const yaPublicada = await cronicaYaPublicada(federacion.id, cabecera);
-    // Predicción anterior (para la sorpresa): se lee antes de sustituirla.
-    const predAntes = yaPublicada ? null : (await cargarPrediccion(federacion.id, 'prediccion_h2h', true)).prediccion;
-    let predNueva = null;
-    if (esAdmin) {
-      const { data: clas, error } = await leerPuntosFantasy(participantes);
-      if (error) console.error('[Predicción] Error al leer los puntos:', error.message);
-      else {
-        predNueva = calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas });
-        const err = predNueva && await guardarPrediccion(federacion.id, 'prediccion_h2h', predNueva);
-        if (err) { console.error('[Predicción] No se pudo guardar:', err); predNueva = null; }
-      }
-    }
-    if (yaPublicada) return;
-    const texto = textoCronicaH2H({ cabecera, federacion, jornada, participantes, partidos, divisiones, predAntes, predNueva });
-    if (texto) await publicar(federacion.id, 'cronica', texto, null);
-  } catch (e) { console.error('[Crónica] Error:', e); }
+    const predAntes = (await cargarPrediccion(federacion.id, 'prediccion_h2h', true)).prediccion;
+    const { data: clas, error } = await leerPuntosFantasy(participantes);
+    if (error) { console.error('[Predicción] Error al leer los puntos:', error.message); return; }
+    const pred = calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas, predAntes });
+    const err = pred && await guardarPrediccion(federacion.id, 'prediccion_h2h', pred);
+    if (err) console.error('[Predicción] No se pudo guardar:', err);
+  } catch (e) { console.error('[Predicción] Error:', e); }
 }
 
 // ── LIGA H2H (usuario) ─────────────────────────────────────────
@@ -16393,7 +16450,8 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
     if (error) { setCalculandoPredH2H(false); setMsgPredH2H('Error al leer los puntos: ' + error.message); return; }
     // Ceder un instante para que se pinte "Calculando…" antes del cálculo (síncrono).
     await new Promise(r => setTimeout(r, 30));
-    const nueva = calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas: clasH2H });
+    const nueva = calcularPrediccionH2H({ federacion, participantes, partidos, vueltasExtra, baremo, clas: clasH2H,
+                                          predAntes: predH2H?.prediccion });
     if (!nueva) { setCalculandoPredH2H(false); setMsgPredH2H('Aún no hay puntos fantasy para estimar el nivel de los equipos.'); return; }
     const err = await guardarPrediccion(federacion.id, 'prediccion_h2h', nueva);
     setCalculandoPredH2H(false);
@@ -18031,7 +18089,7 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       }
     }
 
-    const nuevosRes = {}; // id → resultado recién calculado (para la crónica y la predicción)
+    const nuevosRes = {}; // id → resultado recién calculado (para la predicción)
     await Promise.all(ms.map(m => {
       if (!divToJf[m.division_id]) return Promise.resolve();
       const veDiv = vueltasExtra.filter(ve => !ve.division_id || ve.division_id === m.division_id);
@@ -18059,9 +18117,9 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setMsg(`J${j_h2h} calculada`);
     setTimeout(() => setMsg(''), 3000);
     recalcularLogros();
-    // Predicción (solo el admin) y crónica de la jornada en el Tablón, en segundo plano.
-    trasCalcularJornadaH2H({
-      federacion, participantes, jornada: j_h2h, vueltasExtra, baremo, divisiones, esAdmin: !isModerador,
+    // Predicción en segundo plano (solo el admin; la crónica sale al cerrar la jornada fantasy).
+    if (!isModerador) trasCalcularJornadaH2H({
+      federacion, participantes, vueltasExtra, baremo,
       partidos: partidos.map(m => nuevosRes[m.id] ? { ...m, ...nuevosRes[m.id] } : m),
     });
     // Quinielas de las jornadas fantasy implicadas (si ya estaban archivadas y completas).
@@ -19072,7 +19130,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Jugadores destacados', 'En Liga Fantástica → Estadísticas y en la ficha de cada equipo (pestaña Equipos) verás, para cada equipo: el jugador que más puntos le ha aportado (sin contar el doble del capitán), el que más veces ha sido titular (sin contar porterías), el que más veces ha estado en el once ideal estando alineado con ese equipo, el que más veces ha entrado como suplente y el que más veces ha sido sustituido (ambos por sustituciones automáticas) y el más rentable (puntos aportados por millón pagado, solo jugadores de la plantilla actual). Si hay empate se muestran todos. En Estadísticas también aparece el ranking de la liga de jugadores con más apariciones en el once ideal. Solo cuentan las jornadas cerradas por el admin, y los datos se actualizan cada vez que se cierra una jornada.'],
         ['Liga FILFA — Clasificación H2H', 'Tabla de liga con todos los enfrentamientos directos: PJ, PG, PE, PP, goles y puntos. Incluye sub-vistas de clasificación local, visitante y estadísticas de posición histórica. La pestaña se abre en esta vista por defecto.'],
         ['Liga FILFA — Calendario', 'Muestra los partidos de cada jornada H2H con el resultado (o "Pendiente" si aún no se ha jugado). Usa los botones de jornada para navegar. Bajo cada partido pendiente verás sus probabilidades 1 · X · 2 (gana el local, empate, gana el visitante) según la última predicción, que tiene en cuenta el nivel de cada equipo y el bonus de local; la próxima jornada también aparece en 🔮 Predicción.'],
-        ['Crónica de la jornada', 'Al cerrar cada jornada de la Liga Fantástica y al calcular cada jornada de la Liga FILFA se publica sola en el Tablón una crónica 📰: ganador y farolillo rojo de la jornada, mejor jugador alineado, media, líder (y si hay nuevo líder), mayor subida, y en la Liga FILFA los resultados, la mayor goleada, la sorpresa de la jornada (el resultado menos probable según la predicción), las rachas y el favorito al título. Se publica una sola vez por jornada.'],
+        ['Crónica de la jornada', 'Al cerrar cada jornada de la Liga Fantástica se publica sola en el Tablón una crónica 📰 con la Liga Fantástica (ganador y farolillo rojo de la jornada, mejor jugador alineado, media, líder y si hay nuevo líder, mayor subida) y, si esa jornada tiene asociada alguna jornada de la Liga FILFA ya calculada, sus resultados por división: la mayor goleada, la sorpresa de la jornada (el resultado menos probable según la predicción), el líder, las rachas y el favorito al título. Si alguna jornada de la Liga FILFA asociada está sin calcular, la app avisa antes de cerrar. Se publica una sola vez por jornada.'],
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],

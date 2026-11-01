@@ -4814,6 +4814,383 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
 
 
 // ── ADMIN PTS JUGADORES — entrada por jugador por jornada ──────
+// ── LaLiga Fantasy: importar los puntos de la jornada ───────────
+// La Edge Function puntos-laliga (supabase/functions/puntos-laliga) hace de
+// intermediario con la API pública de LaLiga Fantasy, que no admite llamadas
+// desde el navegador. Los vínculos (equipos_laliga, jugadores_laliga, ver
+// supabase_laliga.sql) son comunes a todas las federaciones y los gestiona el
+// admin de la plataforma (tabla administradores) en Admin → 🛠️ Plataforma.
+const LF_POSICION = { 1: 'POR', 2: 'DEF', 3: 'MED', 4: 'DEL' };
+
+async function llamarLaLiga(cuerpo) {
+  const { data, error } = await sb.functions.invoke('puntos-laliga', { body: cuerpo });
+  if (error) {
+    let detalle = error.message;
+    try { detalle = (await error.context?.json())?.error || detalle; } catch (e) { /* sin cuerpo JSON */ }
+    if (/Failed to send|NOT_FOUND|404/i.test(detalle + ' ' + (error.context?.status || '')))
+      detalle = 'La función puntos-laliga no está desplegada en Supabase.';
+    throw new Error(detalle);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+async function cargarVinculosLaLiga() {
+  const [eq, ju] = await Promise.all([
+    sb.from('equipos_laliga').select('team_id, equipo'),
+    obtenerTodasLasFilas(() => sb.from('jugadores_laliga').select('jugador_id, lf_id, lf_nombre').order('jugador_id')),
+  ]);
+  const err = eq.error || ju.error;
+  if (err) throw new Error(/laliga/.test(err.message) ? 'Falta ejecutar supabase_laliga.sql en Supabase.' : err.message);
+  return { equipos: eq.data || [], jugadores: ju.data || [] };
+}
+
+// Minúsculas, sin acentos ni signos ("O. Sancet" → "o sancet").
+const normLaLiga = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Parecido (0-100) entre el nombre de la app (de Transfermarkt, completo) y el
+// de LaLiga Fantasy (corto: "O. Sancet", "De Galarreta"), ya normalizados.
+function parecidoLaLiga(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  const ta = a.split(' '), tb = b.split(' ');
+  // Cada palabra del corto está en el largo; una inicial vale por una palabra que empiece igual.
+  if (tb.some(t => t.length > 1) && tb.every(t => t.length === 1 ? ta.some(x => x.startsWith(t)) : ta.includes(t))) return 85;
+  const apellido = tb[tb.length - 1];
+  return apellido.length > 2 && ta.includes(apellido) ? 60 : 0;
+}
+
+// Equipo de la app de cada equipo de LaLiga Fantasy (la API solo da su id):
+// el que más jugadores comparte por nombre, con un mínimo de 3.
+function sugerirEquiposLaLiga(jugadoresApp, catalogo) {
+  const porEquipo = {};
+  jugadoresApp.forEach(j => { (porEquipo[j.equipo] = porEquipo[j.equipo] || []).push(normLaLiga(j.nombre)); });
+  const res = {};
+  [...new Set(catalogo.map(p => p.t))].forEach(t => {
+    const noms = catalogo.filter(p => p.t === t).map(p => normLaLiga(p.n));
+    let mejor = null;
+    Object.entries(porEquipo).forEach(([eq, lista]) => {
+      const n = noms.filter(nn => lista.some(a => parecidoLaLiga(a, nn) >= 85)).length;
+      if (n >= 3 && (!mejor || n > mejor.n)) mejor = { eq, n };
+    });
+    if (mejor) res[t] = mejor.eq;
+  });
+  return res;
+}
+
+// Vínculo sugerido para cada jugador de campo de la app sin vincular: el de
+// LaLiga Fantasy de su equipo con más parecido, solo si destaca claramente.
+function sugerirVinculosLaLiga(jugadoresApp, catalogo, teamDeEquipo, usados) {
+  const res = {};
+  jugadoresApp.forEach(j => {
+    const team = teamDeEquipo[j.equipo];
+    if (!team || j.posicion === 'POR') return;
+    const a = normLaLiga(j.nombre);
+    const cands = catalogo.filter(p => p.t === team && p.p !== 1 && !usados.has(p.id))
+      .map(p => ({ p, s: parecidoLaLiga(a, normLaLiga(p.n)) + (LF_POSICION[p.p] === j.posicion ? 5 : 0) }))
+      .filter(c => c.s >= 60).sort((x, y) => y.s - x.s);
+    if (cands.length && (cands.length === 1 || cands[0].s - cands[1].s >= 10)) res[j.id] = cands[0].p;
+  });
+  // El mismo jugador de LaLiga Fantasy sugerido para dos de la app: ninguno.
+  const veces = {};
+  Object.values(res).forEach(p => { veces[p.id] = (veces[p.id] || 0) + 1; });
+  Object.keys(res).forEach(k => { if (veces[res[k].id] > 1) delete res[k]; });
+  return res;
+}
+
+// Puntos de LaLiga Fantasy para los jugadores dados. `filas` = respuesta de
+// la acción 'puntos' ([lf_id, team_id, posición, pts], solo quien tiene
+// puntos en la jornada). Las porterías (POR) suman los porteros de su club.
+// Un vinculado de un equipo que ya ha jugado y que no aparece = 0 (no convocado).
+function puntosLaLigaParaJugadores(jugadores, filas, vinculos) {
+  const fila = Object.fromEntries(filas.map(f => [f[0], f]));
+  const jugaron = new Set(filas.map(f => f[1]));
+  const teamDe = Object.fromEntries(vinculos.equipos.map(e => [e.equipo, e.team_id]));
+  const lfDe = Object.fromEntries(vinculos.jugadores.map(v => [v.jugador_id, v.lf_id]));
+  const pts = {}, sinVincular = [], pendientes = new Set(), sinEquipo = new Set();
+  jugadores.forEach(j => {
+    const team = teamDe[j.equipo];
+    if (j.posicion !== 'POR' && fila[lfDe[j.id]]) { pts[j.id] = fila[lfDe[j.id]][3]; return; }
+    if (!team) { sinEquipo.add(j.equipo); return; }
+    if (!jugaron.has(team)) { pendientes.add(j.equipo); return; }
+    if (j.posicion === 'POR') { pts[j.id] = filas.filter(f => f[1] === team && f[2] === 1).reduce((s, f) => s + f[3], 0); return; }
+    if (!lfDe[j.id]) { sinVincular.push(j); return; }
+    pts[j.id] = 0;
+  });
+  return { pts, sinVincular, pendientes: [...pendientes].sort(), sinEquipo: [...sinEquipo].sort() };
+}
+
+// Minutos jugados (Admin → No Jugaron). Plan: quién hace falta consultar en
+// las fichas de LaLiga Fantasy (una petición por jugador). `candidatos` =
+// jugadores de campo alineados; `filas` = respuesta de la acción 'puntos'.
+// Quien no aparece en el catálogo y su equipo ya jugó = 0 minutos sin
+// preguntar. El resto se consulta (el catálogo va con horas de retraso).
+const MINUTOS_LALIGA_BLOQUE = 40; // jugadores por llamada (MAX_IDS en la función)
+function planMinutosLaLiga(candidatos, filas, vinculos) {
+  const conPuntos = new Set(filas.map(f => f[0]));
+  const jugaron = new Set(filas.map(f => f[1]));
+  const teamDe = Object.fromEntries(vinculos.equipos.map(e => [e.equipo, e.team_id]));
+  const lfDe = Object.fromEntries(vinculos.jugadores.map(v => [v.jugador_id, v.lf_id]));
+  const plan = { candidatos: [], ceros: [], pedir: new Set(), sinVincular: [] };
+  candidatos.forEach(j => {
+    const lf = lfDe[j.id], team = teamDe[j.equipo];
+    if (!lf) { plan.sinVincular.push(j); return; }
+    if (!conPuntos.has(lf) && team && jugaron.has(team)) plan.ceros.push(j.id);
+    else { plan.pedir.add(lf); plan.candidatos.push({ j, lf, team }); }
+  });
+  return { ...plan, pedir: [...plan.pedir] };
+}
+
+// Con los minutos de las fichas ({ lf_id: minutos | null }): quién jugó 0
+// minutos. Sin la jornada en su ficha: 0 si su equipo ya jugó (algún
+// compañero la tiene), si no, pendiente.
+function resolverNoJugoLaLiga(plan, minutos) {
+  const equiposJugados = new Set(plan.candidatos.filter(c => minutos[c.lf] != null && c.team).map(c => c.team));
+  const noJugaron = [...plan.ceros], jugaron = [], pendientes = new Set();
+  plan.candidatos.forEach(({ j, lf, team }) => {
+    const m = minutos[lf];
+    if (m > 0) jugaron.push(j.id);
+    else if (m === 0 || (team && equiposJugados.has(team))) noJugaron.push(j.id);
+    else pendientes.add(j.equipo);
+  });
+  return { noJugaron, jugaron, pendientes: [...pendientes].sort(), sinVincular: plan.sinVincular };
+}
+
+// Admin → 🛠️ Plataforma (solo el admin de la plataforma): vincular equipos y
+// jugadores de la app con los de LaLiga Fantasy.
+function AdminPlataforma() {
+  const [datos, setDatos]       = useState(null); // { cat, app, vinc }
+  const [cargando, setCargando] = useState(false);
+  const [error, setError]       = useState('');
+  const [msg, setMsg]           = useState('');
+  const [guardando, setGuardando] = useState(false);
+  const [equiposB, setEquiposB] = useState({}); // team_id → equipo (borrador)
+  const [vincB, setVincB]       = useState({}); // jugador_id → lf_id ('' = sin vincular) (borrador)
+  const [equipoVer, setEquipoVer] = useState('');
+
+  const cargar = async () => {
+    setCargando(true); setError(''); setMsg('');
+    try {
+      const [cat, app, vinc] = await Promise.all([
+        llamarLaLiga({ accion: 'catalogo' }).then(d => d.jugadores || []),
+        obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion')
+          .eq('activo', true).eq('baja', false).order('id')).then(r => { if (r.error) throw new Error(r.error.message); return r.data || []; }),
+        cargarVinculosLaLiga(),
+      ]);
+      setDatos({ cat, app, vinc }); setEquiposB({}); setVincB({});
+    } catch (e) { setError(e.message); }
+    setCargando(false);
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const flash = t => { setMsg(t); setTimeout(() => setMsg(''), 3500); };
+
+  // Sugerencias (costosas: comparan todos los nombres), solo al cambiar los datos.
+  const sugTeam = useMemo(() => datos ? sugerirEquiposLaLiga(datos.app, datos.cat) : {}, [datos?.app, datos?.cat]);
+  const sugJug = useMemo(() => {
+    if (!datos) return {};
+    const lfG = new Set(datos.vinc.jugadores.map(v => v.jugador_id));
+    return sugerirVinculosLaLiga(datos.app.filter(j => !lfG.has(j.id)), datos.cat,
+      Object.fromEntries(datos.vinc.equipos.map(e => [e.equipo, e.team_id])), new Set(datos.vinc.jugadores.map(v => v.lf_id)));
+  }, [datos]);
+
+  if (!datos) return (
+    <div className="card">
+      <h2>🛠️ Plataforma · LaLiga Fantasy</h2>
+      {cargando ? <p style={{color:'var(--texto2)'}}>Descargando el catálogo de LaLiga Fantasy…</p>
+        : <>{error && <p style={{color:'#dc3545', fontWeight:600}}>{error}</p>}
+            <button className="btn-fichar" onClick={cargar}>Reintentar</button></>}
+    </div>
+  );
+
+  const { cat, app, vinc } = datos;
+  const equiposApp = [...new Set(app.map(j => j.equipo))].sort((a, b) => a.localeCompare(b, 'es'));
+  const guardadoTeam = Object.fromEntries(vinc.equipos.map(e => [e.team_id, e.equipo]));
+  const teams = [...new Set(cat.map(p => p.t))];
+  const equipoDeTeam = t => equiposB[t] ?? guardadoTeam[t] ?? sugTeam[t] ?? '';
+  const teamDeEquipo = Object.fromEntries(teams.filter(t => equipoDeTeam(t)).map(t => [equipoDeTeam(t), t]));
+  const nombreTeam = t => equipoDeTeam(t) || muestra(t);
+  const muestra = t => cat.filter(p => p.t === t).sort((a, b) => b.v - a.v).slice(0, 4).map(p => p.n).join(', ');
+  const cambiosEquipos = teams.filter(t => equipoDeTeam(t) !== (guardadoTeam[t] ?? ''));
+  const repetidos = equiposApp.filter(eq => teams.filter(t => equipoDeTeam(t) === eq).length > 1);
+
+  const guardarEquipos = async () => {
+    if (repetidos.length) { setError(`Hay equipos de la app asignados dos veces: ${repetidos.join(', ')}.`); return; }
+    setGuardando(true); setError('');
+    const { error: e1 } = await sb.from('equipos_laliga').delete().in('team_id', cambiosEquipos);
+    const nuevos = cambiosEquipos.filter(t => equipoDeTeam(t)).map(t => ({ team_id: t, equipo: equipoDeTeam(t), updated_at: new Date().toISOString() }));
+    const { error: e2 } = e1 || !nuevos.length ? { error: null } : await sb.from('equipos_laliga').insert(nuevos);
+    setGuardando(false);
+    if (e1 || e2) { setError('Error al guardar los equipos: ' + (e1 || e2).message); return; }
+    const equipos = [...vinc.equipos.filter(e => !cambiosEquipos.includes(e.team_id)), ...nuevos];
+    setDatos(d => ({ ...d, vinc: { ...d.vinc, equipos } })); setEquiposB({});
+    flash(`✅ ${cambiosEquipos.length} equipo(s) guardado(s)`);
+  };
+
+  // Jugadores (solo con los equipos ya guardados).
+  const teamGuardado = Object.fromEntries(vinc.equipos.map(e => [e.equipo, e.team_id]));
+  const lfGuardado = Object.fromEntries(vinc.jugadores.map(v => [v.jugador_id, v.lf_id]));
+  const lfDe = id => vincB[id] ?? lfGuardado[id] ?? sugJug[id]?.id ?? '';
+  const catPorId = Object.fromEntries(cat.map(p => [p.id, p]));
+  const campo = app.filter(j => j.posicion !== 'POR' && teamGuardado[j.equipo]);
+  const cambiosJug = campo.filter(j => lfDe(j.id) !== (lfGuardado[j.id] ?? ''));
+  const resumenEq = eq => {
+    const js = campo.filter(j => j.equipo === eq);
+    return { total: js.length, vinculados: js.filter(j => lfGuardado[j.id]).length,
+             pendientes: js.filter(j => lfDe(j.id) !== (lfGuardado[j.id] ?? '')).length,
+             sin: js.filter(j => !lfDe(j.id)).length };
+  };
+
+  const guardarJugadores = async lista => {
+    if (!lista.length) return;
+    const usadoPor = {};
+    campo.forEach(j => { const lf = lfDe(j.id); if (lf) (usadoPor[lf] = usadoPor[lf] || []).push(j.nombre); });
+    const dobles = Object.entries(usadoPor).filter(([, v]) => v.length > 1);
+    if (dobles.length) { setError('Un jugador de LaLiga Fantasy no puede ir con dos de la app: ' + dobles.map(([lf, v]) => `${catPorId[lf]?.n} (${v.join(', ')})`).join('; ')); return; }
+    setGuardando(true); setError('');
+    const ids = lista.map(j => j.id);
+    const { error: e1 } = await sb.from('jugadores_laliga').delete().in('jugador_id', ids);
+    const nuevos = lista.filter(j => lfDe(j.id)).map(j => ({ jugador_id: j.id, lf_id: lfDe(j.id), lf_nombre: catPorId[lfDe(j.id)]?.n || null, updated_at: new Date().toISOString() }));
+    let e2 = null;
+    for (let i = 0; !e1 && !e2 && i < nuevos.length; i += 500) ({ error: e2 } = await sb.from('jugadores_laliga').insert(nuevos.slice(i, i + 500)));
+    setGuardando(false);
+    if (e1 || e2) { setError('Error al guardar los vínculos: ' + (e1 || e2).message + ' (recarga para ver el estado real)'); return; }
+    const jugadores = [...vinc.jugadores.filter(v => !ids.includes(v.jugador_id)), ...nuevos];
+    setDatos(d => ({ ...d, vinc: { ...d.vinc, jugadores } }));
+    setVincB(b => { const n = { ...b }; ids.forEach(id => delete n[id]); return n; });
+    flash(`✅ ${lista.length} jugador(es) guardado(s)`);
+  };
+
+  const equiposConJug = equiposApp.filter(eq => teamGuardado[eq]);
+  const verEq = equiposConJug.includes(equipoVer) ? equipoVer : equiposConJug[0] || '';
+  const jugsVer = campo.filter(j => j.equipo === verEq).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const catVer = cat.filter(p => p.t === teamGuardado[verEq] && p.p !== 1).sort((a, b) => a.n.localeCompare(b.n, 'es'));
+  const usadosVer = new Set(campo.map(j => lfDe(j.id)).filter(Boolean));
+  const sinApp = catVer.filter(p => !usadosVer.has(p.id) && p.s !== 'out_of_league');
+  const selS = { padding:'.2rem .35rem', borderRadius:6, border:'1.5px solid var(--borde)', fontSize:'.8rem',
+                 background:'var(--fondo)', color:'var(--texto)', maxWidth:'100%' };
+
+  return (
+    <div>
+      <div className="card">
+        <h2 style={{marginBottom:'.4rem'}}>🛠️ Plataforma · LaLiga Fantasy</h2>
+        <p style={{fontSize:'.84rem', color:'var(--texto2)', margin:0}}>
+          Solo lo ves tú (admin de la plataforma). Los vínculos sirven para el botón "⬇️ Importar puntos" de Pts Jugadores
+          en todas las ligas. Las porterías no se vinculan: puntúan con los porteros de su club.
+        </p>
+        <div style={{display:'flex', gap:'.75rem', alignItems:'center', flexWrap:'wrap', marginTop:'.6rem'}}>
+          <button onClick={cargar} disabled={cargando}
+                  style={{padding:'.3rem .7rem', borderRadius:7, border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer', fontSize:'.82rem', fontWeight:600}}>
+            {cargando ? 'Descargando…' : '🔄 Volver a descargar'}
+          </button>
+          <span style={{fontSize:'.8rem', color:'var(--texto2)'}}>{cat.length} jugadores en LaLiga Fantasy · {app.length} en la app</span>
+          {msg && <span style={{fontSize:'.84rem', fontWeight:600, color:'var(--verde)'}}>{msg}</span>}
+        </div>
+        {error && <p style={{color:'#dc3545', fontWeight:600, fontSize:'.85rem', marginBottom:0}}>{error}</p>}
+      </div>
+
+      <div className="card">
+        <h3 style={{fontSize:'1rem', marginBottom:'.3rem'}}>1. Equipos</h3>
+        <p style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:0}}>
+          LaLiga Fantasy no da el nombre de los equipos: se reconocen por sus jugadores. Revisa la sugerencia y guarda.
+        </p>
+        <div style={{overflowX:'auto'}}>
+          <table>
+            <thead><tr><th>Jugadores en LaLiga Fantasy</th><th>Equipo en la app</th><th></th></tr></thead>
+            <tbody>
+              {[...teams].sort((a, b) => !equipoDeTeam(a) - !equipoDeTeam(b) || nombreTeam(a).localeCompare(nombreTeam(b), 'es')).map(t => (
+                <tr key={t}>
+                  <td style={{fontSize:'.8rem'}}>{muestra(t)}</td>
+                  <td>
+                    <select value={equipoDeTeam(t)} onChange={e => setEquiposB(b => ({ ...b, [t]: e.target.value }))} style={selS}>
+                      <option value="">— sin emparejar —</option>
+                      {equiposApp.map(eq => <option key={eq} value={eq}>{eq}</option>)}
+                    </select>
+                  </td>
+                  <td style={{fontSize:'.75rem', whiteSpace:'nowrap', color: repetidos.includes(equipoDeTeam(t)) ? '#dc3545' : 'var(--texto2)'}}>
+                    {repetidos.includes(equipoDeTeam(t)) ? '⚠️ repetido'
+                      : equipoDeTeam(t) === (guardadoTeam[t] ?? '') ? (guardadoTeam[t] ? '✓' : '') : '💡 sin guardar'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button className="btn-ok" style={{marginTop:'.6rem'}} onClick={guardarEquipos} disabled={guardando || !cambiosEquipos.length}>
+          Guardar equipos{cambiosEquipos.length ? ` (${cambiosEquipos.length})` : ''}
+        </button>
+      </div>
+
+      <div className="card">
+        <h3 style={{fontSize:'1rem', marginBottom:'.3rem'}}>2. Jugadores</h3>
+        {!equiposConJug.length ? <p style={{fontSize:'.84rem', color:'var(--texto2)'}}>Guarda primero los equipos.</p> : <>
+          <p style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:0}}>
+            💡 = sugerencia por nombre, sin guardar. Revisa las dudosas antes de guardar: un vínculo mal hecho importa los puntos de otro jugador.
+          </p>
+          <div style={{display:'flex', gap:'.6rem', alignItems:'center', flexWrap:'wrap', marginBottom:'.6rem'}}>
+            <button className="btn-ok" onClick={() => guardarJugadores(cambiosJug)} disabled={guardando || !cambiosJug.length}>
+              Guardar todos los cambios ({cambiosJug.length})
+            </button>
+            <span style={{fontSize:'.8rem', color:'var(--texto2)'}}>
+              {campo.filter(j => lfGuardado[j.id]).length} de {campo.length} jugadores de campo vinculados
+            </span>
+          </div>
+          <div className="tabs" style={{flexWrap:'wrap', marginBottom:'.5rem'}}>
+            {equiposConJug.map(eq => {
+              const r = resumenEq(eq);
+              return (
+                <button key={eq} className={`tab ${verEq === eq ? 'active' : ''}`} onClick={() => setEquipoVer(eq)}>
+                  {eq} {r.sin ? <span style={{color:'#dc3545'}}>·{r.sin}</span> : r.pendientes ? '💡' : '✓'}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table>
+              <thead><tr><th>Jugador (app)</th><th>Pos</th><th>LaLiga Fantasy</th><th></th></tr></thead>
+              <tbody>
+                {jugsVer.map(j => {
+                  const lf = lfDe(j.id), guardado = lfGuardado[j.id] ?? '';
+                  return (
+                    <tr key={j.id}>
+                      <td style={{fontWeight:600, fontSize:'.85rem'}}>{j.nombre}</td>
+                      <td style={{fontSize:'.78rem', color:'var(--texto2)'}}>{j.posicion}</td>
+                      <td>
+                        <select value={lf} onChange={e => setVincB(b => ({ ...b, [j.id]: e.target.value }))} style={selS}>
+                          <option value="">— sin vincular —</option>
+                          {lf && !catVer.some(p => p.id === lf) && catPorId[lf] && <option value={lf}>{catPorId[lf].n} (otro equipo)</option>}
+                          {catVer.map(p => (
+                            <option key={p.id} value={p.id} disabled={p.id !== lf && usadosVer.has(p.id)}>
+                              {p.n} · {LF_POSICION[p.p]}{p.s === 'out_of_league' ? ' · fuera de la liga' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{fontSize:'.75rem', whiteSpace:'nowrap', color:'var(--texto2)'}}>
+                        {lf === guardado ? (guardado ? '✓' : <span style={{color:'#dc3545'}}>sin vincular</span>) : '💡 sin guardar'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <button className="btn-ok" style={{marginTop:'.6rem'}} disabled={guardando || !cambiosJug.some(j => j.equipo === verEq)}
+                  onClick={() => guardarJugadores(cambiosJug.filter(j => j.equipo === verEq))}>
+            Guardar {verEq}
+          </button>
+          {sinApp.length > 0 && (
+            <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:0}}>
+              En LaLiga Fantasy y sin pareja en la app ({sinApp.length}): {sinApp.map(p => p.n).join(', ')}
+            </p>
+          )}
+        </>}
+      </div>
+    </div>
+  );
+}
+
 function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador }) {
   const [jornada, setJornada] = useState(1);
   const [jugadores, setJugadores] = useState([]);
@@ -4830,6 +5207,9 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
   const [snapshotEditDatos, setSnapshotEditDatos]   = useState([]);
   const [editComodin, setEditComodin]               = useState(null); // 'banquillo'|'capitan'|null
   const [guardandoEdit, setGuardandoEdit]           = useState(false);
+  // Importación de LaLiga Fantasy: { cargando } | { error } | resultado de puntosLaLigaParaJugadores
+  const [importLF, setImportLF]                     = useState(null);
+  useEffect(() => { setImportLF(null); }, [jornada]);
 
   useEffect(() => {
     if (!sb || !participantes.length) return;
@@ -4901,6 +5281,21 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
       }
     });
   }, [jornada, jugadores, federacion?.id]);
+
+  // Rellena las casillas con los puntos de LaLiga Fantasy (no guarda: se
+  // revisan y se pulsa Guardar). No toca los equipos marcados como aplazados.
+  const importarLaLiga = async () => {
+    setImportLF({ cargando: true }); setMsg('');
+    try {
+      const [vinculos, datos] = await Promise.all([cargarVinculosLaLiga(), llamarLaLiga({ accion: 'puntos', jornada })]);
+      if (!datos?.puntos?.length) { setImportLF({ error: `LaLiga Fantasy aún no tiene puntos de la J${jornada}.` }); return; }
+      const r = puntosLaLigaParaJugadores(jugadores.filter(j => !aplazados.has(j.id)), datos.puntos, vinculos);
+      const distintos = Object.entries(r.pts).filter(([id, v]) => (ptsJug[id] ?? '') !== '' && Number(ptsJug[id]) !== v).length;
+      if (distintos && !window.confirm(`${distintos} jugador(es) ya tienen otros puntos en J${jornada}. ¿Sustituirlos por los de LaLiga Fantasy?`)) { setImportLF(null); return; }
+      setPtsJug(p => ({ ...p, ...Object.fromEntries(Object.entries(r.pts).map(([id, v]) => [id, String(v)])) }));
+      setImportLF({ ...r, importados: new Set(Object.keys(r.pts)), sinVincularIds: new Set(r.sinVincular.map(j => j.id)) });
+    } catch (e) { setImportLF({ error: e.message }); }
+  };
 
   const guardar = async () => {
     if (!sb) return;
@@ -5277,7 +5672,39 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
           Copiar alineaciones J{jornada}
         </button>
         {listado && <span style={{fontSize:'.78rem', color:'var(--verde)', fontWeight:600}}>¡Copiado!</span>}
+        {!jornadaCerrada && (
+          <button onClick={importarLaLiga} disabled={importLF?.cargando || !jugadores.length}
+                  title="Rellena los puntos con los de LaLiga Fantasy; revísalos y pulsa Guardar"
+                  style={{padding:'.32rem .75rem', borderRadius:7, border:'1.5px solid #3b82f6', background:'var(--fondo-alt)',
+                          color:'#1d4ed8', cursor: importLF?.cargando ? 'wait' : 'pointer', fontWeight:600, fontSize:'.83rem', whiteSpace:'nowrap'}}>
+            {importLF?.cargando ? 'Importando…' : `⬇️ Importar puntos LaLiga Fantasy J${jornada}`}
+          </button>
+        )}
       </div>
+      {importLF && !importLF.cargando && !jornadaCerrada && (
+        <div className="card" style={{marginTop:'.5rem', borderColor: importLF.error ? '#dc3545' : '#6ea8fe', fontSize:'.84rem'}}>
+          {importLF.error ? <span style={{color:'#dc3545', fontWeight:600}}>⚠️ {importLF.error}</span> : <>
+            <div style={{fontWeight:700, marginBottom:'.3rem'}}>
+              ⬇️ {importLF.importados.size} jugador(es) con los puntos de LaLiga Fantasy (en azul). Revísalos y pulsa <em>Guardar</em>.
+            </div>
+            {importLF.pendientes.length > 0 && (
+              <div style={{color:'var(--texto2)'}}>⏳ Sin puntos aún (no han jugado), se quedan como estaban: {importLF.pendientes.join(', ')}</div>
+            )}
+            {importLF.sinVincular.length > 0 && (
+              <div style={{color:'#b45309'}}>
+                🔗 Sin vincular con LaLiga Fantasy (pon sus puntos a mano; en naranja): {importLF.sinVincular.map(j => `${j.nombre} (${j.equipo})`).join(', ')}
+              </div>
+            )}
+            {importLF.sinEquipo.length > 0 && (
+              <div style={{color:'#b45309'}}>🔗 Equipos sin emparejar con LaLiga Fantasy: {importLF.sinEquipo.join(', ')}</div>
+            )}
+            {(importLF.sinVincular.length > 0 || importLF.sinEquipo.length > 0) && (
+              <div style={{color:'var(--texto2)', fontSize:'.78rem', marginTop:'.2rem'}}>Los vínculos los hace el admin de la plataforma en Admin → 🛠️ Plataforma.</div>
+            )}
+            {aplazados.size > 0 && <div style={{color:'var(--texto2)', fontSize:'.78rem'}}>Los equipos aplazados no se han tocado.</div>}
+          </>}
+        </div>
+      )}
       {listado && (
         <div className="card" style={{marginTop:'.5rem'}}>
           <pre style={{margin:0, fontFamily:'monospace', fontSize:'.84rem', whiteSpace:'pre-wrap',
@@ -5426,7 +5853,10 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
                               <td style={{textAlign:'right'}}>
                                 <input type="number" min="0" value={ptsJug[j.id] ?? ''}
                                        onChange={e => { setPtsJug(p => ({...p, [j.id]: e.target.value})); setMsg(''); }}
-                                       placeholder="0" style={iS} />
+                                       placeholder="0"
+                                       title={importLF?.importados?.has(j.id) ? 'Importado de LaLiga Fantasy' : importLF?.sinVincularIds?.has(j.id) ? 'Sin vincular con LaLiga Fantasy' : undefined}
+                                       style={importLF?.importados?.has(j.id) ? { ...iS, background:'rgba(13,110,253,.08)', borderColor:'#6ea8fe' }
+                                            : importLF?.sinVincularIds?.has(j.id) ? { ...iS, borderColor:'#fd7e14' } : iS} />
                               </td>
                             </tr>
                           ))}
@@ -11089,7 +11519,34 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
   const [cargando, setCargando]       = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [msg, setMsg]                 = useState('');
+  // Marcado desde LaLiga Fantasy: { cargando: texto } | { error } | resultado de resolverNoJugoLaLiga
+  const [importNJ, setImportNJ]       = useState(null);
   useEffect(() => { if (federacionId && participantes?.length) cargar(); }, [federacionId, jornada, participantes]);
+  useEffect(() => { setImportNJ(null); }, [jornada]);
+
+  // Marca (y desmarca) según los minutos de LaLiga Fantasy; no guarda: se
+  // revisa y se pulsa "Guardar y aplicar sustituciones".
+  const marcarDesdeLaLiga = async () => {
+    setImportNJ({ cargando: 'Leyendo LaLiga Fantasy…' }); setMsg('');
+    try {
+      const [vinculos, datos] = await Promise.all([cargarVinculosLaLiga(), llamarLaLiga({ accion: 'puntos', jornada })]);
+      const plan = planMinutosLaLiga(titulares, datos?.puntos || [], vinculos);
+      const minutos = {};
+      for (let i = 0; i < plan.pedir.length; i += MINUTOS_LALIGA_BLOQUE) {
+        setImportNJ({ cargando: `Consultando minutos en LaLiga Fantasy… ${i} de ${plan.pedir.length}` });
+        const r = await llamarLaLiga({ accion: 'minutos', jornada, ids: plan.pedir.slice(i, i + MINUTOS_LALIGA_BLOQUE) });
+        Object.assign(minutos, r?.minutos || {});
+      }
+      const r = resolverNoJugoLaLiga(plan, minutos);
+      setNoJugo(prev => {
+        const n = new Set(prev);
+        r.noJugaron.forEach(id => n.add(id));
+        r.jugaron.forEach(id => n.delete(id));
+        return n;
+      });
+      setImportNJ({ ...r, marcados: new Set(r.noJugaron) });
+    } catch (e) { setImportNJ({ error: e.message }); }
+  };
 
   const cargar = async () => {
     setCargando(true);
@@ -11290,7 +11747,35 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
             </button>
           ))}
         </div>
+        {!cargando && hayDatos && (
+          <button onClick={marcarDesdeLaLiga} disabled={!!importNJ?.cargando}
+                  title="Marca los alineados que jugaron 0 minutos según LaLiga Fantasy; revisa y guarda"
+                  style={{marginLeft:'auto', padding:'.32rem .75rem', borderRadius:7, border:'1.5px solid #3b82f6', background:'var(--fondo-alt)',
+                          color:'#1d4ed8', cursor: importNJ?.cargando ? 'wait' : 'pointer', fontWeight:600, fontSize:'.83rem', whiteSpace:'nowrap'}}>
+            {importNJ?.cargando ? 'Consultando…' : `⬇️ Marcar desde LaLiga Fantasy J${jornada}`}
+          </button>
+        )}
       </div>
+
+      {importNJ && !cargando && (
+        <div className="card" style={{borderColor: importNJ.error ? '#dc3545' : '#6ea8fe', fontSize:'.84rem'}}>
+          {importNJ.cargando ? <span style={{color:'var(--texto2)'}}>⏳ {importNJ.cargando} (puede tardar hasta un minuto)</span>
+            : importNJ.error ? <span style={{color:'#dc3545', fontWeight:600}}>⚠️ {importNJ.error}</span> : <>
+              <div style={{fontWeight:700, marginBottom:'.3rem'}}>
+                ⬇️ Según LaLiga Fantasy: {importNJ.noJugaron.length} con 0 minutos (marcados) y {importNJ.jugaron.length} que sí jugaron.
+                Revisa y pulsa <em>Guardar y aplicar sustituciones</em>.
+              </div>
+              {importNJ.pendientes.length > 0 && (
+                <div style={{color:'var(--texto2)'}}>⏳ Sin jugar aún, no se han tocado: {importNJ.pendientes.join(', ')}</div>
+              )}
+              {importNJ.sinVincular.length > 0 && (
+                <div style={{color:'#b45309'}}>
+                  🔗 Sin vincular con LaLiga Fantasy (revísalos a mano): {importNJ.sinVincular.map(j => `${j.nombre} (${j.equipo})`).join(', ')}
+                </div>
+              )}
+            </>}
+        </div>
+      )}
 
       {cargando && <div className="card"><div className="empty">Cargando…</div></div>}
 
@@ -11336,7 +11821,7 @@ function AdminNoJugo({ federacion, participantes, actorNombre }) {
                           <input type="checkbox" checked={marcado} onChange={() => toggleNoJugo(j.id)}
                                  style={{accentColor:'#ef4444'}} />
                           <span style={{fontWeight: marcado ? 700 : 400}}>{j.nombre}</span>
-                          <span style={{fontSize:'.72rem', opacity:.6}}>{j.posicion}{!j.es_titular ? ' · supl.' : ''}</span>
+                          <span style={{fontSize:'.72rem', opacity:.6}}>{j.posicion}{!j.es_titular ? ' · supl.' : ''}{importNJ?.marcados?.has(j.id) ? ' · 0′ LaLiga' : ''}</span>
                         </label>
                       );
                     })}
@@ -12773,7 +13258,11 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
   const TABS_MODERADOR = ['ptsjug', 'h2h'];
   const TABS_DEF = isModerador
     ? TABS_DEF_ALL.filter(([k]) => TABS_MODERADOR.includes(k))
-    : TABS_DEF_ALL;
+    : [...TABS_DEF_ALL];
+  // Admin de la plataforma (tabla administradores): vínculos con LaLiga Fantasy.
+  const [esAdminPlataforma, setEsAdminPlataforma] = useState(false);
+  useEffect(() => { sb?.rpc('es_admin').then(({ data }) => setEsAdminPlataforma(data === true)); }, []);
+  if (esAdminPlataforma) TABS_DEF.push(['plataforma', '🛠️ Plataforma']);
   const primera = TABS_DEF[0][0];
   const [subtab, setSubtab] = useState(primera);
 
@@ -12804,6 +13293,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
       {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
       {subtab === 'quiniela'    && <AdminQuiniela federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
+      {subtab === 'plataforma'  && esAdminPlataforma && <AdminPlataforma />}
       {subtab === 'palmares'    && <AdminPalmares federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
     </div>
   );
@@ -19173,6 +19663,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Abrir y cerrar el mercado', 'El admin habilita o deshabilita las ventas y el mercado de jugadores cuando lo considere oportuno. Esta opción está en Admin → Ajustes Generales.'],
         ['Cierres de pujas', 'La hora de cierre automático y la ejecución manual del cierre están en Admin → Ajustes Generales → Cierres.'],
         ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos desde Admin → Equipos.'],
+        ['Importar puntos de LaLiga Fantasy', 'En Admin → Pts Jugadores, el botón "⬇️ Importar puntos LaLiga Fantasy" rellena los puntos de la jornada con los de LaLiga Fantasy (en azul). No guarda nada: revísalos y pulsa Guardar como siempre. Las porterías suman los puntos de los porteros de su club; los jugadores de un equipo que ya ha jugado y que no aparecen en LaLiga Fantasy (no convocados) quedan con 0, y los de equipos que aún no han jugado o marcados como aplazados no se tocan. Los jugadores sin vincular (en naranja) se rellenan a mano. Los puntos de LaLiga Fantasy pueden tardar unas horas en aparecer y a veces se corrigen días después: se puede volver a importar antes de cerrar la jornada. En Admin → Pts Jugadores → No Jugaron, "⬇️ Marcar desde LaLiga Fantasy" marca los alineados que jugaron 0 minutos (y desmarca los que sí jugaron); consulta la ficha de cada jugador, así que puede tardar hasta un minuto. Tampoco guarda: revisa y pulsa "Guardar y aplicar sustituciones".'],
         ['Gestión de jugadores', 'Desde Admin → Jugadores el admin puede añadir, eliminar y marcar como lesionado a cualquier jugador que pertenezca a un equipo de la federación. También puede asignar o quitar la posición alternativa (doble posición) de jugadores no porteros.'],
         ['Draft', 'El admin puede habilitar o deshabilitar el botón "Generar Draft" desde Admin → Ajustes Generales. Cuando está activo, todos los usuarios lo ven en Mi Plantilla y pueden generar un listado aleatorio de jugadores para el draft de la temporada.'],
         ['Doble posición', 'El admin (y los moderadores) pueden asignar una posición alternativa a cualquier jugador no portero desde Admin → Jugadores. Los jugadores con doble posición pueden ser alineados en cualquiera de sus dos posiciones por su equipo fantasy.'],

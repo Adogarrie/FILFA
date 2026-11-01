@@ -12,7 +12,7 @@ clasificación (individual y H2H) y puntuaciones manuales por jornada. Multi-lig
   React, ReactDOM, Babel standalone, xlsx, `@supabase/supabase-js`, `marked`.
 - **Backend**: Supabase (PostgreSQL + Auth + Row Level Security). No hay servidor propio;
   la app habla directamente con Supabase desde el cliente con la clave `anon` (líneas
-  ~227-228 de `index.html`). Una Edge Function en `supabase/functions/actualizar-jugadores`.
+  ~227-228 de `index.html`). Edge Functions en `supabase/functions/`: `actualizar-jugadores` y `puntos-laliga` (intermediario con la API pública de LaLiga Fantasy para importar puntos; vínculos en `supabase_laliga.sql`).
 - **Scripts Python** (fuera del runtime de la app, se ejecutan manualmente):
   - `transfermarkt_scraper.py` — scrapea jugadores/valores de Transfermarkt.
   - `cargar_jugadores.py` — sube el resultado del scraper a Supabase.

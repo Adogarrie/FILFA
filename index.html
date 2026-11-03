@@ -11949,6 +11949,102 @@ function AdminMercadoGroup({ participantes, federacion, actorNombre }) {
 }
 
 // ── ADMIN — COMPETICIONES ──────────────────────────────────────
+// ── Torneos: puntos de una jornada y modo Liga Fantástica ───────
+// Puntos de una jornada para un torneo: los de la Liga Fantástica
+// (clasificacion), con los comodines según su ámbito. clasificacion ya
+// incluye los comodines con ámbito Liga Fantástica: si el torneo no los
+// tiene asignados se quitan, y si los tiene y la Liga Fantástica no, se
+// añaden (capitán: sus puntos otra vez; banquillo: suman todos los
+// alineados). Devuelve { participante_id: pts } (sin fila = sin puntos).
+async function puntosTorneoJornada(federacion, compId, pids, jornada) {
+  const fed = federacion || {};
+  const enCal = {
+    capitan:   !!fed.comodin_capitan_habilitado   && (fed.comodin_capitan_en_calendario   ?? true),
+    banquillo: !!fed.comodin_banquillo_habilitado && (fed.comodin_banquillo_en_calendario ?? true),
+  };
+  const enTor = {
+    capitan:   !!fed.comodin_capitan_habilitado   && (fed.comodin_capitan_en_torneo   ?? false) && (fed.comodin_capitan_torneo_ids   ?? []).includes(compId),
+    banquillo: !!fed.comodin_banquillo_habilitado && (fed.comodin_banquillo_en_torneo ?? false) && (fed.comodin_banquillo_torneo_ids ?? []).includes(compId),
+  };
+  const [{ data: cls, error }, { data: coms, error: errC }] = await Promise.all([
+    sb.from('clasificacion').select('participante_id,puntos_jornada').in('participante_id', pids).eq('jornada', jornada),
+    sb.from('comodines_usados').select('participante_id,tipo').eq('jornada', jornada).in('participante_id', pids),
+  ]);
+  if (error || errC) throw new Error((error || errC).message);
+  const pts = Object.fromEntries((cls || []).map(r => [r.participante_id, Number(r.puntos_jornada) || 0]));
+  // Solo cambia algo para quien usó un comodín con distinto ámbito en la Liga Fantástica y en el torneo.
+  const cambian = (coms || []).filter(c => pts[c.participante_id] != null && enCal[c.tipo] !== undefined && enCal[c.tipo] !== enTor[c.tipo]);
+  if (!cambian.length) return pts;
+  const conCap = cambian.filter(c => c.tipo === 'capitan').map(c => c.participante_id);
+  const conBan = cambian.filter(c => c.tipo === 'banquillo').map(c => c.participante_id);
+  const vacio = { data: [], error: null };
+  const [{ data: pj }, { data: caps }, { data: alis }, { data: subs }] = await Promise.all([
+    sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada', jornada).eq('federacion_id', fed.id),
+    conCap.length ? sb.from('capitanes').select('participante_id,jugador_id').eq('jornada', jornada).in('participante_id', conCap) : vacio,
+    conBan.length ? sb.from('alineaciones').select('participante_id,jugador_id,es_titular').eq('jornada', jornada).in('participante_id', conBan) : vacio,
+    conBan.length ? sb.from('sustituciones_auto').select('participante_id,jugador_sale_id,jugador_entra_id').eq('federacion_id', fed.id).eq('jornada', jornada).in('participante_id', conBan) : vacio,
+  ]);
+  const pjMap = Object.fromEntries((pj || []).map(r => [r.jugador_id, Number(r.pts) || 0]));
+  (caps || []).forEach(c => { pts[c.participante_id] += (enTor.capitan ? 1 : -1) * (pjMap[c.jugador_id] || 0); });
+  conBan.forEach(pid => {
+    const suyas = (alis || []).filter(a => a.participante_id === pid);
+    if (!suyas.length) return; // sin alineación de la jornada: se deja como está
+    if (enTor.banquillo) { pts[pid] = suyas.reduce((t, a) => t + (pjMap[a.jugador_id] || 0), 0); return; }
+    let ids = suyas.filter(a => a.es_titular).map(a => a.jugador_id);
+    (subs || []).filter(x => x.participante_id === pid)
+      .forEach(x => { ids = ids.map(id => id === x.jugador_sale_id ? x.jugador_entra_id : id); });
+    pts[pid] = ids.reduce((t, id) => t + (pjMap[id] || 0), 0);
+  });
+  return pts;
+}
+
+// Clasificación de un grupo en modo Liga Fantástica: suma de los puntos en
+// las jornadas de la fase. Desempate: jornadas ganadas dentro del grupo
+// (si empatan a la cuenta, ganan todos) y después la mejor jornada.
+// `puntos` = fases_competicion.puntos ({ participante_id: { jornada: pts } }).
+function clasificacionGrupoPuntos(miembros, jornadas, puntos) {
+  const filas = miembros.map(pid => {
+    const porJ = jornadas.map(j => puntos?.[pid]?.[j] ?? null);
+    const hechas = porJ.filter(v => v != null).map(Number);
+    return { pid, porJ, total: hechas.reduce((t, v) => t + v, 0), mejor: hechas.length ? Math.max(...hechas) : null, ganadas: 0 };
+  });
+  jornadas.forEach((j, k) => {
+    const vals = filas.map(r => r.porJ[k]).filter(v => v != null);
+    if (!vals.length) return;
+    const max = Math.max(...vals);
+    filas.forEach(r => { if (r.porJ[k] === max) r.ganadas++; });
+  });
+  return filas.sort((a, b) => b.total - a.total || b.ganadas - a.ganadas || (b.mejor ?? -Infinity) - (a.mejor ?? -Infinity));
+}
+
+function TablaGrupoPuntos({ filas, jornadas, nombre, estiloFila }) {
+  const th = { textAlign:'right', padding:'.38rem .5rem', color:'var(--texto2)' };
+  const td = { textAlign:'right', padding:'.38rem .5rem' };
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{fontSize:'.82rem', borderCollapse:'collapse'}}>
+        <thead><tr>
+          <th style={{...th, textAlign:'left'}}>Equipo</th>
+          {jornadas.map(j => <th key={j} style={th}>J{j}</th>)}
+          <th style={th} title="Jornadas ganadas dentro del grupo">JG</th>
+          <th style={th}>Pts</th>
+        </tr></thead>
+        <tbody>
+          {filas.map((r, i) => (
+            <tr key={r.pid} style={{borderTop:'1px solid var(--gris)', ...(estiloFila ? estiloFila(i) : {})}}>
+              <td style={{...td, textAlign:'left', fontWeight: i === 0 ? 700 : 400}}>{nombre(r.pid)}</td>
+              {r.porJ.map((v, k) => <td key={k} style={{...td, color: v == null ? 'var(--texto2)' : undefined}}>{v == null ? '—' : fmtPtsCronica(v)}</td>)}
+              <td style={{...td, color:'var(--texto2)'}}>{r.ganadas}</td>
+              <td style={{...td, fontWeight:800, fontSize:'.98rem'}}>{fmtPtsCronica(r.total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!jornadas.length && <p style={{color:'var(--texto2)', fontSize:'.82rem', margin:'.4rem 0 0'}}>Jornadas pendientes de asignar.</p>}
+    </div>
+  );
+}
+
 function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   const fedId  = federacion?.id;
   const baremo = useMemo(() => {
@@ -11967,6 +12063,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   const [showNewFase, setShowNewFase]   = useState(false);
   const [newFaseName, setNewFaseName]   = useState('');
   const [newFaseTipo, setNewFaseTipo]   = useState('grupos');
+  const [newFaseModo, setNewFaseModo]   = useState('goles'); // 'goles' (H2H con baremo) | 'puntos' (Liga Fantástica)
+  const [jNueva, setJNueva]             = useState('');
   const [showNewGrupo, setShowNewGrupo] = useState(false);
   const [newGrupoName, setNewGrupoName] = useState('');
   const [addToGrupo, setAddToGrupo]     = useState(null);
@@ -12053,9 +12151,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const { data, error } = await sb.from('fases_competicion').insert({
       competicion_id: compSel, federacion_id: fedId,
       nombre: newFaseName.trim(), tipo: newFaseTipo, orden: fases.length,
+      ...(newFaseModo === 'puntos' ? { modo: 'puntos' } : {}),
     }).select().single();
-    if (!error) { setFases(p => [...p, data]); setNewFaseName(''); setShowNewFase(false); }
-    else flash('Error: ' + error.message);
+    if (!error) { setFases(p => [...p, data]); setNewFaseName(''); setNewFaseModo('goles'); setShowNewFase(false); }
+    else flash('Error: ' + (/modo/.test(error.message) ? 'falta ejecutar supabase_torneos_puntos.sql en Supabase.' : error.message));
     setBusy(false);
   };
   const borrarFase = async id => {
@@ -12152,35 +12251,31 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     flash(`Ventaja local guardada: +${val} pts`);
   };
 
-  // Helper: aplica comodines con scope='torneo' sobre un ptsMap dado
-  const aplicarComoDinesTorneo = async (pidsArray, jornada) => {
-    const scopeCapT = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_torneo   ?? false) && (federacion?.comodin_capitan_torneo_ids   ?? []).includes(compSel);
-    const scopeBanT = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_torneo ?? false) && (federacion?.comodin_banquillo_torneo_ids ?? []).includes(compSel);
-    if (!scopeCapT && !scopeBanT) return null; // sin ajuste
-    const {data:comsTorn} = await sb.from('comodines_usados')
-      .select('participante_id,tipo').eq('jornada',jornada).in('participante_id',pidsArray);
-    const tornBan = new Set((comsTorn||[]).filter(c=>c.tipo==='banquillo').map(c=>c.participante_id));
-    const tornCap = new Set((comsTorn||[]).filter(c=>c.tipo==='capitan').map(c=>c.participante_id));
-    const ajuste = {};
-    if (scopeCapT && tornCap.size > 0) {
-      const [{ data: capsTorn }, { data: pjTorn }] = await Promise.all([
-        sb.from('capitanes').select('participante_id,jugador_id').eq('jornada',jornada).in('participante_id',[...tornCap]),
-        sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada).eq('federacion_id',federacion.id),
-      ]);
-      const pjMap = Object.fromEntries((pjTorn||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
-      (capsTorn||[]).forEach(c => { ajuste[c.participante_id] = (ajuste[c.participante_id]||0) + (pjMap[c.jugador_id]||0); });
-    }
-    if (scopeBanT && tornBan.size > 0) {
-      const [{ data: alisTorn }, { data: pjTorn }] = await Promise.all([
-        sb.from('alineaciones').select('participante_id,jugador_id').eq('jornada',jornada).in('participante_id',[...tornBan]),
-        sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jornada).eq('federacion_id',federacion.id),
-      ]);
-      const pjMap = Object.fromEntries((pjTorn||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
-      const alisByPid = {};
-      (alisTorn||[]).forEach(a=>{ if(!alisByPid[a.participante_id]) alisByPid[a.participante_id]=[]; alisByPid[a.participante_id].push(a.jugador_id); });
-      tornBan.forEach(pid => { ajuste[pid] = (alisByPid[pid]||[]).reduce((s,jid)=>s+(pjMap[jid]||0),0); }); // override completo
-    }
-    return ajuste;
+  // ── Fase en modo Liga Fantástica: grupos por puntos ─────────
+  const esPuntos = faseAct?.modo === 'puntos';
+  const jornadasFase = faseAct?.jornadas || [];
+  const guardarJornadasFase = async lista => {
+    const jornadas = [...new Set(lista)].filter(j => j >= 1 && j <= 38).sort((a, b) => a - b);
+    const { error } = await sb.from('fases_competicion').update({ jornadas }).eq('id', faseSel);
+    if (error) { flash('Error: ' + error.message); return; }
+    setFases(prev => prev.map(f => f.id === faseSel ? { ...f, jornadas } : f));
+  };
+  const calcularJornadaPuntos = async j => {
+    const pids = [...new Set(grupos.flatMap(g => gMiembros[g.id] || []))];
+    if (!pids.length) { flash('Añade equipos a los grupos antes de calcular'); return; }
+    setBusy(true);
+    try {
+      const pts = await puntosTorneoJornada(federacion, compSel, pids, j);
+      if (!Object.keys(pts).length) { flash(`Aún no hay puntos de la J${j}`); return; }
+      const puntos = { ...(faseAct?.puntos || {}) };
+      pids.forEach(pid => { puntos[pid] = { ...(puntos[pid] || {}), [j]: pts[pid] ?? 0 }; });
+      const { error } = await sb.from('fases_competicion').update({ puntos }).eq('id', faseSel);
+      if (error) throw new Error(error.message);
+      setFases(prev => prev.map(f => f.id === faseSel ? { ...f, puntos } : f));
+      publicar(fedId, 'admin', `Puntos calculados — ${compAct?.nombre || 'Competición'}, ${faseAct?.nombre || 'fase'}: J${j}.`, actorNombre);
+      flash(`J${j} calculada`);
+    } catch (e) { flash('Error: ' + e.message); }
+    finally { setBusy(false); }
   };
 
   const calcularRonda = async (gid, ronda, jornada) => {
@@ -12189,13 +12284,9 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     if (!ms.length) return;
     setBusy(true);
     const allPids = [...new Set(ms.flatMap(m=>[m.participante_local_id,m.participante_visitante_id]))];
-    const {data:cls} = await sb.from('clasificacion').select('participante_id,puntos_jornada')
-      .in('participante_id',allPids).eq('jornada',jornada);
-    const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
-    const ajuste = await aplicarComoDinesTorneo(allPids, jornada);
-    if (ajuste) for (const pid of allPids) {
-      if (ajuste[pid] != null) ptsMap[pid] = ajuste[pid]; // banquillo: override; capitan: ya sumado en helper
-    }
+    let ptsMap;
+    try { ptsMap = await puntosTorneoJornada(federacion, compSel, allPids, jornada); }
+    catch (e) { flash('Error: ' + e.message); setBusy(false); return; }
     const ptsLocal = faseAct?.pts_local ?? 0;
     const updates = ms.map(m=>({
       id:m.id,
@@ -12216,14 +12307,14 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     if (!m.jornada_fantasy) { flash('Asigna una jornada al partido antes de calcular'); return; }
     setBusy(true);
     const pids = [m.participante_local_id, m.participante_visitante_id];
-    const {data:cls} = await sb.from('clasificacion').select('participante_id,puntos_jornada')
-      .in('participante_id',pids).eq('jornada',m.jornada_fantasy);
-    const ptsMap = Object.fromEntries((cls||[]).map(r=>[r.participante_id,r.puntos_jornada??0]));
-    const ajuste = await aplicarComoDinesTorneo(pids, m.jornada_fantasy);
-    if (ajuste) for (const pid of pids) { if (ajuste[pid] != null) ptsMap[pid] = ajuste[pid]; }
+    let ptsMap;
+    try { ptsMap = await puntosTorneoJornada(federacion, compSel, pids, m.jornada_fantasy); }
+    catch (e) { flash('Error: ' + e.message); setBusy(false); return; }
     const ptsLocal = faseAct?.pts_local ?? 0;
-    const gL = ptsToGoles((ptsMap[m.participante_local_id]??0) + ptsLocal, baremo);
-    const gV = ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo);
+    // Modo Liga Fantástica: el "resultado" son los puntos (sin baremo); gana quien hace más.
+    const [gL, gV] = esPuntos
+      ? [Math.round((ptsMap[m.participante_local_id]??0) + ptsLocal), Math.round(ptsMap[m.participante_visitante_id]??0)]
+      : [ptsToGoles((ptsMap[m.participante_local_id]??0) + ptsLocal, baremo), ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo)];
     await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
     setPartidos(p=>p.map(x=>x.id===m.id?{...x,goles_local:gL,goles_visitante:gV}:x));
     const nomL = nomMap[m.participante_local_id] || 'Local';
@@ -12284,7 +12375,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
             <span style={{flex:1}}>
               <strong>{f.nombre}</strong>
               <span style={{marginLeft:'.5rem', fontSize:'.78rem', color:'var(--texto2)'}}>
-                {f.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}
+                {f.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{f.modo==='puntos' ? ' · Liga Fantástica' : ''}
               </span>
             </span>
             <button style={sBtn} onClick={()=>setFaseSel(f.id)}>Gestionar</button>
@@ -12299,6 +12390,11 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
               <option value="grupos">Fase de grupos</option>
               <option value="sueltos">Partidos sueltos</option>
             </select>
+            <select value={newFaseModo} onChange={e=>setNewFaseModo(e.target.value)} style={inp}
+                    title="H2H: los puntos se convierten en goles con el baremo. Liga Fantástica: cuentan los puntos tal cual">
+              <option value="goles">H2H (baremo)</option>
+              <option value="puntos">Liga Fantástica (puntos)</option>
+            </select>
             <button disabled={busy} className="btn-ok" onClick={crearFase}>Añadir</button>
             <button className="btn-cancel" onClick={()=>{setShowNewFase(false);setNewFaseName('');}}>Cancelar</button>
           </div>
@@ -12307,8 +12403,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
         )}
       </>)}
 
-      {/* Ventaja local — común a grupos y sueltos */}
-      {faseSel && (
+      {/* Ventaja local — común a grupos y sueltos (no en grupos por puntos: no hay partidos) */}
+      {faseSel && !(esPuntos && faseAct?.tipo==='grupos') && (
         <div style={{display:'flex', alignItems:'center', gap:'.6rem', padding:'.55rem .75rem',
                      borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)',
                      marginBottom:'.75rem', flexWrap:'wrap'}}>
@@ -12318,7 +12414,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                  style={{width:65, padding:'.28rem .4rem', borderRadius:6,
                          border:'1.5px solid var(--borde)', background:'var(--fondo-alt)',
                          fontSize:'.88rem', textAlign:'center'}} />
-          <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>pts sumados al local antes del baremo</span>
+          <span style={{fontSize:'.82rem', color:'var(--texto2)'}}>{esPuntos ? 'pts sumados al local' : 'pts sumados al local antes del baremo'}</span>
           <button style={{...sBtn, marginLeft:'auto'}} onClick={guardarPtsLocal}>Guardar</button>
           {(faseAct?.pts_local ?? 0) > 0 && (
             <span style={{fontSize:'.78rem', color:'var(--texto2)', fontStyle:'italic'}}>
@@ -12330,6 +12426,37 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
 
       {/* Fase de grupos */}
       {faseSel && faseAct?.tipo==='grupos' && (<>
+        {esPuntos && (
+          <div style={{padding:'.6rem .75rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)', marginBottom:'.75rem'}}>
+            <div style={{fontSize:'.85rem', fontWeight:600, marginBottom:'.3rem'}}>Jornadas de la fase · Liga Fantástica</div>
+            <div style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.45rem'}}>
+              Cada grupo se ordena por la suma de puntos en estas jornadas (las mismas para todos los grupos); empate: más jornadas
+              ganadas dentro del grupo y después mejor jornada. Calcula cada jornada cuando tenga sus puntos (↻ para recalcular).
+            </div>
+            <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem', alignItems:'center'}}>
+              {jornadasFase.map(j => {
+                const calculada = Object.values(faseAct?.puntos || {}).some(p => p?.[j] != null);
+                return (
+                  <span key={j} style={{display:'inline-flex', alignItems:'center', gap:'.3rem', padding:'.15rem .45rem', borderRadius:8,
+                                        border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', fontSize:'.8rem'}}>
+                    <strong>J{j}</strong>
+                    <button disabled={busy} style={{...sBtn, fontSize:'.72rem', padding:'.1rem .4rem'}} onClick={() => calcularJornadaPuntos(j)}>
+                      {calculada ? '↻ Recalcular' : '▶ Calcular'}
+                    </button>
+                    <button title="Quitar jornada" onClick={() => guardarJornadasFase(jornadasFase.filter(x => x !== j))}
+                            style={{border:'none', background:'none', cursor:'pointer', color:'#dc3545', fontWeight:700, padding:'0 2px'}}>×</button>
+                  </span>
+                );
+              })}
+              <input type="number" min="1" max="38" placeholder="J" value={jNueva} onChange={e => setJNueva(e.target.value)}
+                     style={{...inp, width:60, textAlign:'center', padding:'.3rem .4rem'}} />
+              <button style={{...sBtn, fontSize:'.76rem'}}
+                      onClick={() => { const j = parseInt(jNueva); if (j >= 1 && j <= 38) { guardarJornadasFase([...jornadasFase, j]); setJNueva(''); } }}>
+                + Jornada
+              </button>
+            </div>
+          </div>
+        )}
         {grupos.length===0 && <p style={{color:'var(--texto2)', marginBottom:'1rem'}}>Sin grupos. Crea uno primero.</p>}
         {grupos.map(g => {
           const miembros = gMiembros[g.id]||[];
@@ -12339,15 +12466,15 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
             <div key={g.id} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.75rem', marginBottom:'.75rem', background:'var(--fondo-sub)'}}>
               <div style={{display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.5rem', flexWrap:'wrap'}}>
                 <strong style={{flex:1}}>{g.nombre}</strong>
-                <button style={sBtn} onClick={()=>generarCalendario(g.id)} disabled={busy}>
+                {!esPuntos && <button style={sBtn} onClick={()=>generarCalendario(g.id)} disabled={busy}>
                   {mG.length>0 ? '↻ Regenerar' : '⚙ Generar calendario'}
-                </button>
+                </button>}
                 <button style={dBtn} onClick={()=>borrarGrupo(g.id)}>Borrar</button>
               </div>
               {/* Equipos */}
               <div style={{marginBottom:'.5rem'}}>
                 <div style={{fontSize:'.78rem', color:'var(--texto2)', fontWeight:600, marginBottom:'.3rem'}}>
-                  Equipos ({miembros.length}){miembros.length>0&&miembros.length%2!==0?' · N impar: habrá bye por ronda':''}
+                  Equipos ({miembros.length}){!esPuntos&&miembros.length>0&&miembros.length%2!==0?' · N impar: habrá bye por ronda':''}
                 </div>
                 <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem', marginBottom:'.4rem'}}>
                   {miembros.map(pid=>(
@@ -12370,6 +12497,12 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                   <button style={{...sBtn, fontSize:'.76rem'}} onClick={()=>setAddToGrupo(g.id)}>+ Equipo</button>
                 )}
               </div>
+              {esPuntos && miembros.length>0 && (
+                <div style={{marginTop:'.5rem', borderTop:'1px solid var(--borde)', paddingTop:'.5rem'}}>
+                  <TablaGrupoPuntos filas={clasificacionGrupoPuntos(miembros, jornadasFase, faseAct?.puntos)} jornadas={jornadasFase}
+                                    nombre={pid => nomMap[pid] || pid} />
+                </div>
+              )}
               {/* Calendario por rondas */}
               {rondas.length>0 && (
                 <div style={{marginTop:'.5rem', borderTop:'1px solid var(--borde)', paddingTop:'.5rem'}}>
@@ -13544,9 +13677,16 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             grupos.filter(g => g.fase_id === fase.id).forEach(grupo => {
               sheetClasif.push([]);
               sheetClasif.push([`${fase.nombre} — ${grupo.nombre}`]);
+              const miembros = gMiembros[grupo.id] || [];
+              if (fase.modo === 'puntos') {
+                const js = fase.jornadas || [];
+                sheetClasif.push(['Grupo', 'Pos', 'Equipo', ...js.map(j => `J${j}`), 'JG', 'PTS']);
+                clasificacionGrupoPuntos(miembros, js, fase.puntos).forEach((r, i) => sheetClasif.push(
+                  [grupo.nombre, i + 1, nomMap[r.pid]?.nombre || r.pid, ...r.porJ.map(v => v ?? ''), r.ganadas, r.total]));
+                return;
+              }
               sheetClasif.push(clasHeader);
               const mG = partidos.filter(p => p.grupo_id === grupo.id);
-              const miembros = gMiembros[grupo.id] || [];
               calcularStandingsGrupo(mG, miembros).forEach((row, i) => {
                 const gd = row.gf - row.gc;
                 sheetClasif.push([
@@ -13576,7 +13716,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
             <span>{fase.nombre}</span>
             <span style={{fontSize:'.74rem',color:'var(--texto2)',fontWeight:400}}>
-              {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}
+              {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{fase.modo==='puntos' ? ' · Liga Fantástica' : ''}
             </span>
             {(fase.pts_local??0)>0 && (
               <span style={{fontSize:'.72rem',background:'rgba(15,80,180,0.15)',
@@ -13592,6 +13732,17 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             const miembros = gMiembros[grupo.id]||[];
             const mG = partidos.filter(p=>p.grupo_id===grupo.id);
             const rondas = [...new Set(mG.map(p=>p.ronda))].sort((a,b)=>a-b);
+            if (fase.modo === 'puntos') return (
+              <div key={grupo.id} className="card" style={{marginBottom:'.5rem'}}>
+                <h2 style={{marginBottom:'.75rem'}}>{grupo.nombre}</h2>
+                <TablaGrupoPuntos filas={clasificacionGrupoPuntos(miembros, fase.jornadas || [], fase.puntos)} jornadas={fase.jornadas || []}
+                                  nombre={pid => nomMap[pid]?.nombre || pid}
+                                  estiloFila={i => getClasifColor(federacion?.clasif_colores?.['grupos_' + compSel] || federacion?.clasif_colores?.grupos, i + 1)} />
+                <p style={{fontSize:'.76rem', color:'var(--texto2)', margin:'.5rem 0 0'}}>
+                  Suma de los puntos de la Liga Fantástica en las jornadas de la fase. JG = jornadas ganadas en el grupo (primer desempate); después, mejor jornada.
+                </p>
+              </div>
+            );
             const standings = calcularStandingsGrupo(mG, miembros);
             return (
               <div key={grupo.id} className="card" style={{marginBottom:'.5rem'}}>
@@ -14838,6 +14989,13 @@ function rondasTorneo(fases, grupos, gMiembros, partidos) {
         return;
       }
       const gs = grupos.filter(g => g.fase_id === f.id);
+      if (f.tipo === 'grupos' && gs.length === 1 && f.modo === 'puntos') {
+        const js = f.jornadas || [];
+        const filas = clasificacionGrupoPuntos(gMiembros[gs[0].id] || [], js, f.puntos);
+        if (!js.length || filas.some(r => r.porJ.some(v => v == null))) dudoso = true;
+        filas.forEach((row, k) => asignar(row.pid, k === 0 ? 1 : k === 1 ? 2 : 7));
+        return;
+      }
       if (f.tipo === 'grupos' && gs.length === 1) {
         if (ms.some(m => m.goles_local == null || m.goles_visitante == null)) dudoso = true;
         calcularStandingsGrupo(ms, gMiembros[gs[0].id] || []).forEach((row, k) => asignar(row.pid, k === 0 ? 1 : k === 1 ? 2 : 7));
@@ -14949,7 +15107,7 @@ async function calcularPalmaresTemporada(federacion, participantes) {
   // Torneos
   const compIds = comps.data.map(c => c.id);
   if (compIds.length) {
-    const { data: fs, error: eF } = await sb.from('fases_competicion').select('id, competicion_id, nombre, tipo, orden').in('competicion_id', compIds);
+    const { data: fs, error: eF } = await sb.from('fases_competicion').select('*').in('competicion_id', compIds);
     if (eF) throw eF;
     const faseIds = (fs || []).map(f => f.id);
     let gs = [], gm = {}, ps = [];
@@ -19624,6 +19782,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
+        ['Torneos en modo Liga Fantástica', 'Cada fase de un torneo puede jugarse en modo H2H (los puntos fantasy se convierten en goles con el baremo) o en modo Liga Fantástica (cuentan los puntos tal cual). En los partidos sueltos en modo Liga Fantástica gana quien hace más puntos en la jornada del partido. En las fases de grupos en modo Liga Fantástica no hay partidos: cada grupo se ordena por la suma de puntos de sus equipos en las jornadas de la fase (J = puntos de cada jornada). Si empatan, va delante quien ha ganado más jornadas dentro del grupo (JG) y después quien tiene la mejor jornada. Los comodines cuentan en un torneo solo si el admin los ha asignado a ese torneo.'],
         ['🎯 Quiniela', 'Si el admin la activa, en Competiciones → 🎯 Quiniela tienes cada jornada una quiniela con los partidos de la Liga FILFA y de los torneos que se juegan con esa jornada de la Liga Fantástica. En cada partido eliges 1, X o 2 (o el resultado exacto en goles, si el admin lo marca así) y pulsas "Enviar quiniela". Puedes cambiarla hasta el cierre de alineaciones (o, si no hay cierre, hasta que se cierre la jornada). Hasta entonces nadie más ve tus pronósticos, salvo el admin y los delegados de quinielas; después se hacen públicos.'],
         ['Quiniela — premio y clasificación', 'Al cerrar y archivar la jornada (o al calcular el último resultado que faltara) se cuentan los aciertos y se publica el resumen en el Tablón 🎯. El equipo con más aciertos se lleva el premio que haya fijado el admin (se reparte a partes iguales si hay empate); si hay coste por participar, se descuenta a los equipos que la enviaron. Cada acierto vale 1, sea 1·X·2 o resultado exacto. En la pestaña Clasificación se suman los aciertos de todas las jornadas, desglosados por competición; en caso de empate cuentan primero los aciertos de resultado exacto y después las quinielas ganadas.'],
         ['🏛️ Palmarés', 'En Competiciones → 🏛️ Palmarés está el historial de la liga, que no se borra al reiniciar la temporada. "Por temporada" muestra la clasificación final de cada competición (Liga Fantástica, cada división de la Liga FILFA con sus ascensos ⬆️ y descensos ⬇️, la quiniela) y la ronda a la que llegó cada equipo en los torneos, con los récords de la temporada. "Vitrina" reúne los títulos de cada equipo, "Récords" los mejores registros de todas las temporadas y la ficha de cada equipo (Equipos) muestra su palmarés. Puede incluir temporadas anteriores a la app añadidas por el admin.'],

@@ -11951,20 +11951,34 @@ function AdminMercadoGroup({ participantes, federacion, actorNombre }) {
 // ── ADMIN — COMPETICIONES ──────────────────────────────────────
 // ── Torneos: puntos de una jornada y modo Liga Fantástica ───────
 // Puntos de una jornada para un torneo: los de la Liga Fantástica
-// (clasificacion), con los comodines según su ámbito. clasificacion ya
-// incluye los comodines con ámbito Liga Fantástica: si el torneo no los
-// tiene asignados se quitan, y si los tiene y la Liga Fantástica no, se
-// añaden (capitán: sus puntos otra vez; banquillo: suman todos los
-// alineados). Devuelve { participante_id: pts } (sin fila = sin puntos).
+// (clasificacion), con los comodines según su ámbito (ver puntosComodinesJornada).
 async function puntosTorneoJornada(federacion, compId, pids, jornada) {
   const fed = federacion || {};
+  return puntosComodinesJornada(fed, pids, jornada, {
+    capitan:   !!fed.comodin_capitan_habilitado   && (fed.comodin_capitan_en_torneo   ?? false) && (fed.comodin_capitan_torneo_ids   ?? []).includes(compId),
+    banquillo: !!fed.comodin_banquillo_habilitado && (fed.comodin_banquillo_en_torneo ?? false) && (fed.comodin_banquillo_torneo_ids ?? []).includes(compId),
+  });
+}
+
+// Lo mismo para la Liga FILFA (ámbito comodin_*_en_h2h).
+function puntosH2HJornada(federacion, pids, jornada) {
+  const fed = federacion || {};
+  return puntosComodinesJornada(fed, pids, jornada, {
+    capitan:   !!fed.comodin_capitan_habilitado   && (fed.comodin_capitan_en_h2h   ?? false),
+    banquillo: !!fed.comodin_banquillo_habilitado && (fed.comodin_banquillo_en_h2h ?? false),
+  });
+}
+
+// Puntos de la Liga Fantástica (clasificacion) adaptados a otra competición
+// con su propio ámbito de comodines (`enTor` = { capitan, banquillo }).
+// clasificacion ya incluye los comodines con ámbito Liga Fantástica: si la
+// competición no los tiene se quitan, y si los tiene y la Liga Fantástica
+// no, se añaden (capitán: sus puntos otra vez; banquillo: suman todos los
+// alineados). Devuelve { participante_id: pts } (sin fila = sin puntos).
+async function puntosComodinesJornada(fed, pids, jornada, enTor) {
   const enCal = {
     capitan:   !!fed.comodin_capitan_habilitado   && (fed.comodin_capitan_en_calendario   ?? true),
     banquillo: !!fed.comodin_banquillo_habilitado && (fed.comodin_banquillo_en_calendario ?? true),
-  };
-  const enTor = {
-    capitan:   !!fed.comodin_capitan_habilitado   && (fed.comodin_capitan_en_torneo   ?? false) && (fed.comodin_capitan_torneo_ids   ?? []).includes(compId),
-    banquillo: !!fed.comodin_banquillo_habilitado && (fed.comodin_banquillo_en_torneo ?? false) && (fed.comodin_banquillo_torneo_ids ?? []).includes(compId),
   };
   const [{ data: cls, error }, { data: coms, error: errC }] = await Promise.all([
     sb.from('clasificacion').select('participante_id,puntos_jornada').in('participante_id', pids).eq('jornada', jornada),
@@ -18696,46 +18710,13 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
       if (jf) pidsByJf[jf].push(p.id);
     });
 
+    // Puntos por jornada fantasy, con los comodines según su ámbito en la Liga FILFA.
     const ptsMap = {};
-    const scopeCapH2H = federacion?.comodin_capitan_habilitado   && (federacion?.comodin_capitan_en_h2h   ?? false);
-    const scopeBanH2H = federacion?.comodin_banquillo_habilitado && (federacion?.comodin_banquillo_en_h2h ?? false);
-
-    // Procesar cada jornada fantasy de forma independiente
-    for (const jf of uniqueJfs) {
-      const pids = pidsByJf[jf];
-      if (pids.length === 0) continue;
-
-      const { data: clsData } = await sb.from('clasificacion')
-        .select('participante_id, puntos_jornada').eq('jornada', jf).in('participante_id', pids);
-      (clsData || []).forEach(r => { ptsMap[r.participante_id] = r.puntos_jornada ?? 0; });
-
-      if (scopeCapH2H || scopeBanH2H) {
-        const { data: comsH2H } = await sb.from('comodines_usados')
-          .select('participante_id, tipo').eq('jornada', jf).in('participante_id', pids);
-        const h2hBan = new Set((comsH2H||[]).filter(c=>c.tipo==='banquillo').map(c=>c.participante_id));
-        const h2hCap = new Set((comsH2H||[]).filter(c=>c.tipo==='capitan').map(c=>c.participante_id));
-
-        if (scopeCapH2H && h2hCap.size > 0) {
-          const [{ data: capsH2H }, { data: pjH2H }] = await Promise.all([
-            sb.from('capitanes').select('participante_id,jugador_id').eq('jornada',jf).in('participante_id',[...h2hCap]),
-            sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jf).eq('federacion_id',federacion.id),
-          ]);
-          const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
-          (capsH2H||[]).forEach(c => { ptsMap[c.participante_id] = (ptsMap[c.participante_id]||0) + (pjMap[c.jugador_id]||0); });
-        }
-
-        if (scopeBanH2H && h2hBan.size > 0) {
-          const [{ data: alisH2H }, { data: pjH2H }] = await Promise.all([
-            sb.from('alineaciones').select('participante_id,jugador_id').eq('jornada',jf).in('participante_id',[...h2hBan]),
-            sb.from('puntos_jugador').select('jugador_id,pts').eq('jornada',jf).eq('federacion_id',federacion.id),
-          ]);
-          const pjMap = Object.fromEntries((pjH2H||[]).map(r=>[r.jugador_id,Number(r.pts)||0]));
-          const alisByPid = {};
-          (alisH2H||[]).forEach(a=>{ if(!alisByPid[a.participante_id]) alisByPid[a.participante_id]=[]; alisByPid[a.participante_id].push(a.jugador_id); });
-          h2hBan.forEach(pid => { ptsMap[pid] = (alisByPid[pid]||[]).reduce((s,jid)=>s+(pjMap[jid]||0),0); });
-        }
+    try {
+      for (const jf of uniqueJfs) {
+        if (pidsByJf[jf].length) Object.assign(ptsMap, await puntosH2HJornada(federacion, pidsByJf[jf], jf));
       }
-    }
+    } catch (e) { setCalculando(null); setMsg('Error: ' + e.message); return; }
 
     const nuevosRes = {}; // id → resultado recién calculado (para la predicción)
     await Promise.all(ms.map(m => {

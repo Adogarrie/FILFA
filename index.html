@@ -4957,10 +4957,224 @@ function resolverNoJugoLaLiga(plan, minutos) {
   return { noJugaron, jugaron, pendientes: [...pendientes].sort(), sinVincular: plan.sinVincular };
 }
 
+// Errores de las acciones del catálogo (supabase_catalogo_plataforma.sql).
+const errorCatalogo = e => {
+  const m = e?.message || String(e);
+  if (/baja_jugador_catalogo|publicar_en_federaciones/.test(m) && /does not exist|Could not find|schema cache/i.test(m))
+    return 'Falta ejecutar supabase_catalogo_plataforma.sql en Supabase.';
+  if (/no_autorizado|row-level security/i.test(m)) return 'Solo el admin de la plataforma puede cambiar el catálogo de jugadores.';
+  if (/jugadores_nombre_equipo|duplicate key/i.test(m)) return 'Ya hay un jugador con ese nombre en ese equipo.';
+  return 'Error: ' + m;
+};
+
+// Propuestas de sincronización con LaLiga Fantasy (Admin → 🛠️ Plataforma).
+// `todos` = jugadores de la app (también los de baja); solo cuentan los
+// equipos ya emparejados. Las porterías no se tocan (no se vinculan).
+//   traspasos:  vinculado cuyo club en LaLiga Fantasy es otro equipo de la app.
+//   bajas:      vinculado que ya no está o está "fuera de la liga".
+//   reactivar:  vinculado de baja que vuelve a estar en un equipo de la app.
+//   altas:      de LaLiga Fantasy, de un equipo emparejado, sin pareja en la
+//               app ni sugerencia pendiente (`sugeridos` = lf_id sugeridos).
+//   sinEquipo:  vinculados que se van a un club de LaLiga Fantasy sin emparejar.
+function propuestasSyncLaLiga(cat, todos, vinc, sugeridos) {
+  const equipoDeTeam = Object.fromEntries(vinc.equipos.map(e => [e.team_id, e.equipo]));
+  const catPorId = Object.fromEntries(cat.map(p => [p.id, p]));
+  const lfDe = Object.fromEntries(vinc.jugadores.map(v => [v.jugador_id, v.lf_id]));
+  const usados = new Set(vinc.jugadores.map(v => v.lf_id));
+  const r = { traspasos: [], bajas: [], reactivar: [], altas: [], sinEquipo: [] };
+  todos.forEach(j => {
+    const lf = lfDe[j.id];
+    if (!lf || j.posicion === 'POR') return;
+    const p = catPorId[lf], fuera = !p || p.s === 'out_of_league';
+    const destino = p && equipoDeTeam[p.t];
+    if (j.baja) { if (!fuera && destino) r.reactivar.push({ j, p, equipo: destino }); return; }
+    if (fuera) r.bajas.push({ j, p, equipo: j.equipo, motivo: p ? 'fuera de la liga' : 'ya no está en LaLiga Fantasy' });
+    else if (!destino) r.sinEquipo.push({ j, p });
+    else if (destino !== j.equipo) r.traspasos.push({ j, p, equipo: destino });
+  });
+  const sinVinc = todos.filter(j => !j.baja && j.posicion !== 'POR' && !lfDe[j.id]);
+  cat.forEach(p => {
+    const equipo = equipoDeTeam[p.t];
+    if (p.p === 1 || !LF_POSICION[p.p] || p.s === 'out_of_league' || !equipo || usados.has(p.id) || sugeridos.has(p.id)) return;
+    // Posible pareja sin vincular en la app (mismo apellido…): se avisa.
+    const parecido = sinVinc.find(j => j.equipo === equipo && parecidoLaLiga(normLaLiga(j.nombre), normLaLiga(p.n)) >= 60);
+    r.altas.push({ p, equipo, posicion: LF_POSICION[p.p], parecido: parecido?.nombre || null });
+  });
+  const nom = x => x.j?.nombre || x.p.n;
+  const orden = (a, b) => a.equipo.localeCompare(b.equipo, 'es') || nom(a).localeCompare(nom(b), 'es');
+  ['altas', 'traspasos', 'bajas', 'reactivar'].forEach(k => r[k].sort(orden));
+  return r;
+}
+
+// Paso 3 de 🛠️ Plataforma: altas, traspasos, bajas y vueltas desde LaLiga
+// Fantasy, como propuestas que el admin marca y aplica. Sin valor de mercado:
+// las altas lo piden a mano (el de LaLiga Fantasy solo como referencia).
+function SincronizarLaLiga({ cat, todos, vinc, sugeridos, actorNombre, onAplicado }) {
+  const prop = useMemo(() => propuestasSyncLaLiga(cat, todos, vinc, sugeridos), [cat, todos, vinc, sugeridos]);
+  const [marcados, setMarcados]   = useState({}); // "tipo:id" → true
+  const [altasB, setAltasB]       = useState({}); // lf_id → { nombre, valor }
+  const [aplicando, setAplicando] = useState('');
+  const [res, setRes]             = useState(null); // { ok, texto }
+  const clave = (tipo, x) => tipo + ':' + (x.j?.id || x.p.id);
+  const marcado = (tipo, x) => !!marcados[clave(tipo, x)];
+  const marcar = (tipo, x, v) => setMarcados(m => ({ ...m, [clave(tipo, x)]: v }));
+  const selec = tipo => prop[tipo].filter(x => marcado(tipo, x));
+  const altaDe = p => ({ nombre: p.n, valor: '', ...altasB[p.id] });
+  const cambiarAlta = (p, campo, v) => setAltasB(b => ({ ...b, [p.id]: { ...altaDe(p), [campo]: v } }));
+
+  // Aplica lo marcado de una sección; `fn` devuelve el texto del resultado.
+  const aplicar = async (tipo, fn) => {
+    setAplicando(tipo); setRes(null);
+    try {
+      const texto = await fn(selec(tipo));
+      if (texto) { setRes({ ok: true, texto }); setMarcados({}); onAplicado(); }
+    } catch (e) { setRes({ ok: false, texto: errorCatalogo(e) }); }
+    setAplicando('');
+  };
+
+  const aplicarTraspasos = async lista => {
+    for (const x of lista) {
+      const { error } = await sb.from('jugadores').update({ equipo: x.equipo }).eq('id', x.j.id);
+      if (error) throw new Error(`${x.j.nombre}: ${error.message}`);
+    }
+    return `✅ ${lista.length} traspaso(s) aplicados.`;
+  };
+  const aplicarBajas = async lista => {
+    if (!confirm(`¿Dar de baja a ${lista.length} jugador(es) en todas las ligas?\nSalen de plantillas, pujas y fichajes pendientes; cada dueño recupera su valor de mercado (y los fichajes pendientes, lo pagado). El historial de puntos se conserva.`)) return null;
+    let reemb = 0;
+    for (const x of lista) {
+      const { data, error } = await sb.rpc('baja_jugador_catalogo', { p_jugador_id: x.j.id, p_actor: actorNombre || null });
+      if (error) throw new Error(`${x.j.nombre}: ${error.message}`);
+      reemb += data?.reembolsos || 0;
+    }
+    return `✅ ${lista.length} baja(s) · ${reemb} reembolso(s), avisados en el Tablón de cada liga.`;
+  };
+  const aplicarReactivar = async lista => {
+    for (const x of lista) {
+      const { error } = await sb.from('jugadores').update({ baja: false, equipo: x.equipo }).eq('id', x.j.id);
+      if (error) throw new Error(`${x.j.nombre}: ${error.message}`);
+    }
+    await sb.rpc('publicar_en_federaciones', { p_texto: 'VUELVEN A ESTAR DISPONIBLES: ' + lista.map(x => `${x.j.nombre} (${x.equipo})`).join(', '), p_actor: actorNombre || null });
+    return `✅ ${lista.length} jugador(es) reactivados.`;
+  };
+  const aplicarAltas = async lista => {
+    const filas = lista.map(x => {
+      const a = altaDe(x.p), valor = Number(String(a.valor).replace(',', '.'));
+      if (!a.nombre.trim()) throw new Error(`Falta el nombre de ${x.p.n}.`);
+      if (a.valor === '' || !(valor >= 0)) throw new Error(`Escribe el valor de mercado de ${a.nombre.trim()}.`);
+      return { x, fila: { nombre: a.nombre.trim(), equipo: x.equipo, posicion: x.posicion, valor_mercado: Math.round(valor * 1_000_000) } };
+    });
+    const { data, error } = await sb.from('jugadores').insert(filas.map(f => f.fila)).select('id, nombre, equipo');
+    if (error) throw error;
+    const idDe = Object.fromEntries((data || []).map(j => [j.nombre + '|' + j.equipo, j.id]));
+    const vinculos = filas.map(({ x, fila }) => ({ jugador_id: idDe[fila.nombre + '|' + fila.equipo], lf_id: x.p.id, lf_nombre: x.p.n, updated_at: new Date().toISOString() }))
+      .filter(v => v.jugador_id);
+    const { error: eV } = await sb.from('jugadores_laliga').insert(vinculos);
+    await sb.rpc('publicar_en_federaciones', { p_texto: 'NUEVOS JUGADORES DISPONIBLES: ' + filas.map(({ fila }) => `${fila.nombre} (${fila.equipo}, ${fila.posicion})`).join(', '), p_actor: actorNombre || null });
+    return `✅ ${filas.length} alta(s), libres en el mercado de todas las ligas${eV ? ` · ⚠️ sin vincular: ${eV.message}` : ''}.`;
+  };
+
+  const inpS = { padding:'.2rem .35rem', borderRadius:6, border:'1.5px solid var(--borde)', fontSize:'.8rem', background:'var(--fondo)', color:'var(--texto)' };
+  const seccion = ({ titulo, tipo, nota, cabecera, fila, boton, fn, peligro }) => (
+    <div style={{marginTop:'1rem'}}>
+      <h4 style={{fontSize:'.92rem', margin:'0 0 .25rem'}}>{titulo} · {prop[tipo].length}</h4>
+      <p style={{fontSize:'.78rem', color:'var(--texto2)', margin:'0 0 .35rem'}}>{nota}</p>
+      {prop[tipo].length > 0 && <>
+        <div style={{overflowX:'auto'}}>
+          <table>
+            <thead><tr>
+              <th style={{width:28}}>
+                <input type="checkbox" checked={prop[tipo].every(x => marcado(tipo, x))}
+                       onChange={e => setMarcados(m => { const n = { ...m }; prop[tipo].forEach(x => { n[clave(tipo, x)] = e.target.checked; }); return n; })} />
+              </th>
+              {cabecera.map(c => <th key={c} style={{fontSize:'.78rem'}}>{c}</th>)}
+            </tr></thead>
+            <tbody>
+              {prop[tipo].map(x => (
+                <tr key={clave(tipo, x)}>
+                  <td><input type="checkbox" checked={marcado(tipo, x)} onChange={e => marcar(tipo, x, e.target.checked)} /></td>
+                  {fila(x)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button className={peligro ? undefined : 'btn-ok'} disabled={!!aplicando || !selec(tipo).length}
+                onClick={() => aplicar(tipo, fn)}
+                style={{marginTop:'.5rem', ...(peligro ? { background:'#dc3545', color:'#fff', border:'none', padding:'.4rem .9rem', borderRadius:8,
+                        fontWeight:600, cursor:'pointer', opacity: selec(tipo).length ? 1 : .5 } : {})}}>
+          {aplicando === tipo ? 'Aplicando…' : `${boton} (${selec(tipo).length})`}
+        </button>
+      </>}
+    </div>
+  );
+  const nada = !['altas', 'traspasos', 'bajas', 'reactivar'].some(t => prop[t].length);
+
+  return (
+    <div className="card">
+      <h3 style={{fontSize:'1rem', marginBottom:'.3rem'}}>3. Sincronizar con LaLiga Fantasy</h3>
+      <p style={{fontSize:'.8rem', color:'var(--texto2)', marginTop:0}}>
+        Cambios en el catálogo común (afectan a todas las ligas); nada se aplica sin marcarlo. Solo se miran los equipos emparejados en el paso 1
+        y los jugadores vinculados en el paso 2: vincula antes para no crear duplicados. El catálogo de LaLiga Fantasy va con unas horas de retraso.
+      </p>
+      {res && <p style={{fontSize:'.84rem', fontWeight:600, color: res.ok ? 'var(--verde)' : '#dc3545'}}>{res.texto}</p>}
+      {nada && <p style={{fontSize:'.84rem', color:'var(--texto2)'}}>✓ El catálogo está al día con LaLiga Fantasy.</p>}
+
+      {seccion({ titulo: '🆕 Altas', tipo: 'altas', boton: 'Dar de alta', fn: aplicarAltas,
+        nota: 'En LaLiga Fantasy y sin pareja en la app. Revisa el nombre y escribe el valor de mercado (M): entran libres en el mercado de todas las ligas y se avisa en sus Tablones.',
+        cabecera: ['Nombre en la app', 'Equipo', 'Pos', 'Valor (M)', 'LaLiga Fantasy'],
+        fila: x => { const a = altaDe(x.p); return <>
+          <td><input value={a.nombre} onChange={e => cambiarAlta(x.p, 'nombre', e.target.value)} style={{...inpS, width:150}} /></td>
+          <td style={{fontSize:'.8rem'}}>{x.equipo}</td>
+          <td><span className={`badge ${x.posicion}`}>{x.posicion}</span></td>
+          <td><input type="number" min="0" step="0.1" value={a.valor} placeholder="—" style={{...inpS, width:64}}
+                     onChange={e => { cambiarAlta(x.p, 'valor', e.target.value); if (e.target.value !== '') marcar('altas', x, true); }} /></td>
+          <td style={{fontSize:'.75rem', color:'var(--texto2)'}}>
+            {x.p.n} · ref. {fmt(x.p.v || 0)}{x.p.s && x.p.s !== 'ok' ? ` · ${x.p.s}` : ''}
+            {x.parecido && <div style={{color:'#b45309'}}>⚠️ ¿Es {x.parecido}? Vincúlalo en el paso 2</div>}
+          </td>
+        </>; } })}
+
+      {seccion({ titulo: '🔁 Traspasos', tipo: 'traspasos', boton: 'Aplicar traspasos', fn: aplicarTraspasos,
+        nota: 'Cambian de club dentro de LaLiga. Solo cambia su equipo real: siguen en las plantillas de sus dueños. No se publica en el Tablón.',
+        cabecera: ['Jugador', 'De', 'A'],
+        fila: x => <>
+          <td style={{fontWeight:600, fontSize:'.85rem'}}>{x.j.nombre}</td>
+          <td style={{fontSize:'.8rem'}}>{x.j.equipo}</td>
+          <td style={{fontSize:'.8rem', fontWeight:600}}>{x.equipo}</td>
+        </> })}
+
+      {seccion({ titulo: '👋 Bajas', tipo: 'bajas', boton: 'Dar de baja', fn: aplicarBajas, peligro: true,
+        nota: 'Ya no están en LaLiga (se han ido a otra liga o han desaparecido del juego). Salen de todas las ligas y sus dueños recuperan el valor de mercado; se avisa en cada Tablón.',
+        cabecera: ['Jugador', 'Equipo', 'Motivo'],
+        fila: x => <>
+          <td style={{fontWeight:600, fontSize:'.85rem'}}>{x.j.nombre}</td>
+          <td style={{fontSize:'.8rem'}}>{x.j.equipo}</td>
+          <td style={{fontSize:'.78rem', color:'var(--texto2)'}}>{x.motivo}</td>
+        </> })}
+
+      {seccion({ titulo: '↩️ Vuelven', tipo: 'reactivar', boton: 'Reactivar', fn: aplicarReactivar,
+        nota: 'Dados de baja en la app que vuelven a estar en un equipo de LaLiga. Se reactivan libres en el mercado de todas las ligas.',
+        cabecera: ['Jugador', 'Equipo'],
+        fila: x => <>
+          <td style={{fontWeight:600, fontSize:'.85rem'}}>{x.j.nombre}</td>
+          <td style={{fontSize:'.8rem'}}>{x.equipo !== x.j.equipo ? `${x.j.equipo} → ${x.equipo}` : x.equipo}</td>
+        </> })}
+
+      {prop.sinEquipo.length > 0 && (
+        <p style={{fontSize:'.78rem', color:'#b45309', marginBottom:0, marginTop:'1rem'}}>
+          ⚠️ Se han ido a un club sin emparejar en el paso 1 ({prop.sinEquipo.length}): {prop.sinEquipo.map(x => x.j.nombre).join(', ')}.
+          Si es un club nuevo en LaLiga, crea antes su Portería en Admin → Jugadores y emparéjalo.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // Admin → 🛠️ Plataforma (solo el admin de la plataforma): vincular equipos y
-// jugadores de la app con los de LaLiga Fantasy.
-function AdminPlataforma() {
-  const [datos, setDatos]       = useState(null); // { cat, app, vinc }
+// jugadores de la app con los de LaLiga Fantasy y sincronizar el catálogo.
+function AdminPlataforma({ actorNombre }) {
+  const [datos, setDatos]       = useState(null); // { cat, todos, app (sin bajas), vinc }
   const [cargando, setCargando] = useState(false);
   const [error, setError]       = useState('');
   const [msg, setMsg]           = useState('');
@@ -4972,13 +5186,13 @@ function AdminPlataforma() {
   const cargar = async () => {
     setCargando(true); setError(''); setMsg('');
     try {
-      const [cat, app, vinc] = await Promise.all([
+      const [cat, todos, vinc] = await Promise.all([
         llamarLaLiga({ accion: 'catalogo' }).then(d => d.jugadores || []),
-        obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion')
-          .eq('activo', true).eq('baja', false).order('id')).then(r => { if (r.error) throw new Error(r.error.message); return r.data || []; }),
+        obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion, baja')
+          .eq('activo', true).order('id')).then(r => { if (r.error) throw new Error(r.error.message); return r.data || []; }),
         cargarVinculosLaLiga(),
       ]);
-      setDatos({ cat, app, vinc }); setEquiposB({}); setVincB({});
+      setDatos({ cat, todos, app: todos.filter(j => !j.baja), vinc }); setEquiposB({}); setVincB({});
     } catch (e) { setError(e.message); }
     setCargando(false);
   };
@@ -4994,6 +5208,7 @@ function AdminPlataforma() {
     return sugerirVinculosLaLiga(datos.app.filter(j => !lfG.has(j.id)), datos.cat,
       Object.fromEntries(datos.vinc.equipos.map(e => [e.equipo, e.team_id])), new Set(datos.vinc.jugadores.map(v => v.lf_id)));
   }, [datos]);
+  const sugeridosLF = useMemo(() => new Set(Object.values(sugJug).map(p => p.id)), [sugJug]);
 
   if (!datos) return (
     <div className="card">
@@ -5076,8 +5291,8 @@ function AdminPlataforma() {
       <div className="card">
         <h2 style={{marginBottom:'.4rem'}}>🛠️ Plataforma · LaLiga Fantasy</h2>
         <p style={{fontSize:'.84rem', color:'var(--texto2)', margin:0}}>
-          Solo lo ves tú (admin de la plataforma). Los vínculos sirven para el botón "⬇️ Importar puntos" de Pts Jugadores
-          en todas las ligas. Las porterías no se vinculan: puntúan con los porteros de su club.
+          Solo lo ves tú (admin de la plataforma). Los vínculos sirven para "⬇️ Importar puntos" (Pts Jugadores) y "⬇️ Marcar desde
+          LaLiga Fantasy" (No Jugaron) en todas las ligas, y para sincronizar el catálogo (paso 3). Las porterías no se vinculan: puntúan con los porteros de su club.
         </p>
         <div style={{display:'flex', gap:'.75rem', alignItems:'center', flexWrap:'wrap', marginTop:'.6rem'}}>
           <button onClick={cargar} disabled={cargando}
@@ -5187,6 +5402,11 @@ function AdminPlataforma() {
           )}
         </>}
       </div>
+
+      {equiposConJug.length > 0 && (
+        <SincronizarLaLiga cat={cat} todos={datos.todos} vinc={vinc} sugeridos={sugeridosLF} actorNombre={actorNombre}
+                           onAplicado={cargar} />
+      )}
     </div>
   );
 }
@@ -10690,7 +10910,11 @@ function Ofertas({ miParticipanteId, participantes, federacion, isAdmin, onBadge
 }
 
 // ── ADMIN JUGADORES — añadir / borrar jugadores ────────────────
-function AdminJugadores({ participantes, federacion, actorNombre }) {
+// Admin → Jugadores. El catálogo (tabla jugadores) es común a todas las ligas:
+// crearlo, darlo de baja, reactivarlo, borrarlo o cambiar su nacionalidad es
+// solo del admin de la plataforma. Cada liga gestiona lo suyo: asignar un
+// jugador libre a un equipo, lesionado y posición en la liga.
+function AdminJugadores({ participantes, federacion, actorNombre, esAdminPlataforma }) {
   const POSICIONES = ['POR', 'DEF', 'MED', 'DEL'];
 
   // ── Equipos reales conocidos (del mapa de escudos + los de la BD)
@@ -10706,8 +10930,11 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
   const [form, setForm]         = useState(vacioForm);
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg]           = useState('');
+  // Asignar un jugador libre del catálogo a un equipo de la liga.
+  const [asig, setAsig]         = useState({ busca: '', jugador_id: '', participante_id: '', precio: '' });
+  const [msgAsig, setMsgAsig]   = useState('');
 
-  // Lista de jugadores para borrar
+  // Lista de jugadores
   const [jugadores, setJugadores]   = useState(null);
   const [filtroNom, setFiltroNom]   = useState('');
   const [filtroEq, setFiltroEq]     = useState('');
@@ -10773,7 +11000,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     const val = nuevaNac.trim() || null;
     if (val === (j.nacionalidad || null)) return;
     const { error } = await sb.from('jugadores').update({ nacionalidad: val }).eq('id', j.id);
-    if (error) { alert('Error: ' + error.message); return; }
+    if (error) { alert(errorCatalogo(error)); return; }
     setJugadores(prev => prev.map(p => p.id === j.id ? { ...p, nacionalidad: val } : p));
   };
 
@@ -10812,7 +11039,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
       posicion_alt:  (form.posicion !== 'POR' && form.posicion_alt) ? form.posicion_alt : null,
       valor_mercado: Number(form.valor) * 1_000_000,
     }).select().single();
-    if (errJug) { setMsg('Error: ' + errJug.message); setGuardando(false); return; }
+    if (errJug) { setMsg(errorCatalogo(errJug)); setGuardando(false); return; }
 
     // 2. Si destino es un equipo, añadir a plantillas y descontar presupuesto (atómico)
     if (form.destino === 'equipo') {
@@ -10826,39 +11053,64 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     }
 
     const nomJug = form.posicion === 'POR' ? `Portería de ${form.equipo.trim()}` : form.nombre.trim();
-    publicar(federacion?.id, 'admin', `NUEVO JUGADOR DISPONIBLE. Jugador añadido: ${nomJug} (${form.equipo.trim()}, ${form.posicion})${form.destino === 'equipo' ? ` → ${participantes.find(p => p.id === form.participante_id)?.nombre}` : ' → Mercado libre'}`, actorNombre);
+    // El catálogo es común: el resto de ligas lo tiene libre en su mercado.
+    const texto = `NUEVO JUGADOR DISPONIBLE. Jugador añadido: ${nomJug} (${form.equipo.trim()}, ${form.posicion})`;
+    if (form.destino === 'equipo') {
+      publicar(federacion?.id, 'admin', `${texto} → ${participantes.find(p => p.id === form.participante_id)?.nombre}`, actorNombre);
+      const { data: feds } = await sb.from('federaciones').select('id');
+      const otras = (feds || []).map(x => x.id).filter(id => id !== federacion?.id);
+      if (otras.length) await sb.rpc('publicar_en_federaciones', { p_texto: texto + ' → Mercado libre', p_federaciones: otras, p_actor: actorNombre || null });
+    } else {
+      const { error: eP } = await sb.rpc('publicar_en_federaciones', { p_texto: texto + ' → Mercado libre', p_actor: actorNombre || null });
+      if (eP) publicar(federacion?.id, 'admin', texto + ' → Mercado libre', actorNombre);
+    }
     setMsg(`✓ ${nomJug} añadido${form.destino === 'equipo' ? ' a la plantilla' : ' al mercado'}.`);
     setForm(vacioForm);
     setGuardando(false);
     cargarJugadores();
   };
 
+  // Libres en esta liga: sin dueño aquí y sin baja.
+  const libres = (jugadores || []).filter(j => !j.baja && !propietarios[j.id]);
+  const jugAsig = libres.find(j => j.id === asig.jugador_id);
+  const asignar = async () => {
+    if (!jugAsig) { setMsgAsig('Elige un jugador libre.'); return; }
+    if (!asig.participante_id) { setMsgAsig('Elige el equipo de la liga.'); return; }
+    const precio = Number(String(asig.precio).replace(',', '.'));
+    if (asig.precio === '' || !(precio >= 0)) { setMsgAsig('Precio no válido.'); return; }
+    setGuardando(true); setMsgAsig('');
+    const { data, error } = await sb.rpc('asignar_jugador_a_equipo', {
+      p_jugador_id: jugAsig.id, p_participante_id: asig.participante_id,
+      p_precio: Math.round(precio * 1_000_000), p_federacion_id: federacion?.id,
+    });
+    setGuardando(false);
+    if (error || !data?.ok) { setMsgAsig('Error: ' + (error?.message || data?.error || 'desconocido')); return; }
+    const nomJug = jugAsig.posicion === 'POR' ? `Portería de ${jugAsig.equipo}` : jugAsig.nombre;
+    const nomPart = participantes.find(p => p.id === asig.participante_id)?.nombre;
+    publicar(federacion?.id, 'admin', `Jugador asignado: ${nomJug} (${jugAsig.equipo}, ${jugAsig.posicion}) → ${nomPart}`, actorNombre);
+    setMsgAsig(`✓ ${nomJug} asignado a ${nomPart}.`);
+    setAsig({ busca: '', jugador_id: '', participante_id: '', precio: '' });
+    cargarJugadores();
+  };
+
   const borrar = async (j) => {
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
-    if (!confirm(`¿Eliminar definitivamente a "${nomJug}" (${j.equipo})?\nSe borrará también de plantillas, alineaciones y pujas.\nSi tiene historial de puntos, usa "Dar de baja" en su lugar.`)) return;
+    if (!confirm(`¿Eliminar definitivamente a "${nomJug}" (${j.equipo}) de TODAS las ligas?\nSe borrará también de plantillas, alineaciones y pujas, sin reembolso.\nSi tiene historial de puntos, usa "Dar de baja" en su lugar.`)) return;
     setBorrando(j.id);
     const { error } = await sb.from('jugadores').delete().eq('id', j.id);
     setBorrando(null);
-    if (error) { alert('Error: ' + error.message + '\n\nSi el jugador tiene alineaciones históricas usa el botón "Dar de baja".'); return; }
+    if (error) { alert(errorCatalogo(error) + '\n\nSi el jugador tiene alineaciones históricas usa el botón "Dar de baja".'); return; }
     publicar(federacion?.id, 'admin', `Jugador eliminado: ${nomJug} (${j.equipo}).`, actorNombre);
     cargarJugadores();
   };
 
   const darDeBaja = async (j) => {
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
-    if (!confirm(`¿Dar de baja a "${nomJug}" (${j.equipo})?\nSe eliminará de plantillas y pujas activas.\nEl historial de puntos y alineaciones se conservará.`)) return;
+    if (!confirm(`¿Dar de baja a "${nomJug}" (${j.equipo}) en TODAS las ligas?\nSale de plantillas, pujas y fichajes pendientes; cada dueño recupera su valor de mercado (y los fichajes pendientes, lo pagado), publicado en su Tablón.\nEl historial de puntos y alineaciones se conservará.`)) return;
     setBorrando(j.id);
-    // 1. Marcar baja lógica
-    const { error } = await sb.from('jugadores').update({ baja: true }).eq('id', j.id);
-    if (error) { setBorrando(null); alert('Error: ' + error.message); return; }
-    // 2. Sacar de plantillas
-    await sb.from('plantillas').delete().eq('jugador_id', j.id);
-    // 3. Cancelar pujas activas
-    await sb.from('pujas').delete().eq('jugador_id', j.id).eq('resuelta', false);
-    // 4. Cancelar fichajes pendientes
-    await sb.from('fichajes_pendientes').delete().eq('jugador_id', j.id);
+    const { error } = await sb.rpc('baja_jugador_catalogo', { p_jugador_id: j.id, p_actor: actorNombre || null });
     setBorrando(null);
-    publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) dado de baja de la liga.`, actorNombre);
+    if (error) { alert(errorCatalogo(error)); return; }
     cargarJugadores();
   };
 
@@ -10866,8 +11118,9 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
     const nomJug = j.posicion === 'POR' ? `Portería ${j.equipo}` : j.nombre;
     if (!confirm(`¿Reactivar a "${nomJug}"? Volverá a estar disponible en el mercado.`)) return;
     const { error } = await sb.from('jugadores').update({ baja: false }).eq('id', j.id);
-    if (error) { alert('Error: ' + error.message); return; }
-    publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) reactivado.`, actorNombre);
+    if (error) { alert(errorCatalogo(error)); return; }
+    const { error: eP } = await sb.rpc('publicar_en_federaciones', { p_texto: `${nomJug} (${j.equipo}) vuelve a estar disponible.`, p_actor: actorNombre || null });
+    if (eP) publicar(federacion?.id, 'admin', `${nomJug} (${j.equipo}) reactivado.`, actorNombre);
     cargarJugadores();
   };
 
@@ -10883,12 +11136,57 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
 
   const iS = { width: '100%', padding: '.45rem .7rem', borderRadius: 8,
                border: '1.5px solid var(--borde)', fontSize: '.92rem' };
+  const etiquetaLibre = j => `${j.posicion === 'POR' ? 'Portería' : j.nombre} · ${j.equipo} · ${j.posicion} · ${fmt(j.valor_mercado ?? 0)}`;
 
   return (
     <div>
-      {/* ── Formulario alta ── */}
+      {/* ── Asignar un jugador libre a un equipo de la liga ── */}
       <div className="card">
-        <h2>Añadir jugador</h2>
+        <h2>Asignar jugador a un equipo</h2>
+        <p style={{ fontSize:'.82rem', color:'var(--texto2)', marginTop:0 }}>
+          Pasa un jugador libre del mercado a un equipo de la liga y descuenta el precio de su presupuesto.
+          {!esAdminPlataforma && ' Los jugadores nuevos, bajas y traspasos de LaLiga los gestiona el admin de la plataforma para todas las ligas.'}
+        </p>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:'1rem', marginBottom:'1rem' }}>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Jugador libre</label>
+            <input list="libres-lista" value={asig.busca} placeholder="Escribe para buscar…" style={iS}
+                   onChange={e => {
+                     const t = e.target.value, j = libres.find(x => etiquetaLibre(x) === t);
+                     setAsig(a => ({ ...a, busca: t, jugador_id: j?.id || '', precio: j ? String((j.valor_mercado || 0) / 1_000_000) : a.precio }));
+                   }} />
+            <datalist id="libres-lista">
+              {libres.map(j => <option key={j.id} value={etiquetaLibre(j)} />)}
+            </datalist>
+          </div>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Equipo de la liga</label>
+            <select value={asig.participante_id} onChange={e => setAsig(a => ({ ...a, participante_id: e.target.value }))} style={iS}>
+              <option value="">— Selecciona —</option>
+              {participantes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Precio (M)</label>
+            <input type="number" min="0" step="0.01" value={asig.precio} onChange={e => setAsig(a => ({ ...a, precio: e.target.value }))}
+                   placeholder="Valor de mercado" style={iS} />
+          </div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap' }}>
+          <button onClick={asignar} disabled={guardando || !jugAsig} className="btn-ok" style={{ opacity: guardando || !jugAsig ? .6 : 1 }}>
+            Asignar jugador
+          </button>
+          {msgAsig && <span style={{ color: msgAsig.startsWith('✓') ? 'var(--verde)' : '#dc3545', fontWeight: 600, fontSize: '.9rem' }}>{msgAsig}</span>}
+        </div>
+      </div>
+
+      {/* ── Formulario alta en el catálogo (solo admin de la plataforma) ── */}
+      {esAdminPlataforma && <div className="card">
+        <h2>Crear jugador en el catálogo</h2>
+        <p style={{ fontSize:'.82rem', color:'var(--texto2)', marginTop:0 }}>
+          🛠️ Solo tú (admin de la plataforma). El catálogo es común: el jugador queda disponible en el mercado de todas las ligas.
+          Los de LaLiga Fantasy se dan de alta más cómodo desde 🛠️ Plataforma → Sincronizar.
+        </p>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:'1rem', marginBottom:'1rem' }}>
           <div>
             <label style={{ fontSize:'.82rem', color:'var(--texto2)', display:'block', marginBottom:'.3rem' }}>Nombre</label>
@@ -10940,15 +11238,15 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
         <div style={{ display:'flex', alignItems:'center', gap:'1rem', flexWrap:'wrap' }}>
           <button onClick={añadir} disabled={guardando} className="btn-ok"
                   style={{ opacity: guardando ? .6 : 1, cursor: guardando ? 'wait' : 'pointer' }}>
-            {guardando ? 'Añadiendo…' : 'Añadir jugador'}
+            {guardando ? 'Añadiendo…' : 'Crear jugador'}
           </button>
           {msg && <span style={{ color: msg.startsWith('✓') ? 'var(--verde)' : '#dc3545', fontWeight: 600, fontSize: '.9rem' }}>{msg}</span>}
         </div>
-      </div>
+      </div>}
 
-      {/* ── Lista para borrar ── */}
+      {/* ── Lista de jugadores ── */}
       <div className="card">
-        <h2>Eliminar jugador</h2>
+        <h2>Jugadores</h2>
         <div style={{ display:'flex', gap:'.75rem', flexWrap:'wrap', marginBottom:'1rem' }}>
           <input value={filtroNom} onChange={e => setFiltroNom(e.target.value)}
                  placeholder="Buscar por nombre…"
@@ -11024,13 +11322,14 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                       <td>
                         <span style={{display:'inline-flex', alignItems:'center', gap:5}}>
                           <Bandera nacionalidad={j.nacionalidad} size={16} />
+                          {!esAdminPlataforma ? <span style={{ fontSize:'.8rem' }}>{j.nacionalidad || '—'}</span> :
                           <input type="text" defaultValue={j.nacionalidad || ''}
                                  placeholder="—"
                                  onBlur={e => cambiarNacionalidad(j, e.target.value)}
                                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                                  style={{ width:110, padding:'.2rem .4rem', borderRadius:6,
                                           border:'1.5px solid var(--borde)', fontSize:'.8rem',
-                                          background:'var(--fondo)', color:'var(--texto)' }} />
+                                          background:'var(--fondo)', color:'var(--texto)' }} />}
                         </span>
                       </td>
                       <td style={{ textAlign:'center' }}>
@@ -11059,7 +11358,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                         }
                       </td>
                       <td style={{ textAlign:'right' }}>
-                        <div style={{ display:'flex', gap:'.35rem', justifyContent:'flex-end' }}>
+                        {esAdminPlataforma && <div style={{ display:'flex', gap:'.35rem', justifyContent:'flex-end' }}>
                           {j.baja
                             ? <button onClick={() => reactivar(j)}
                                       style={{ background:'var(--verde)', color:'#fff', border:'none',
@@ -11080,7 +11379,7 @@ function AdminJugadores({ participantes, federacion, actorNombre }) {
                                            fontSize:'.8rem', fontWeight:600, opacity: borrando===j.id?.5:1 }}>
                             {borrando === j.id ? '…' : 'Eliminar'}
                           </button>
-                        </div>
+                        </div>}
                       </td>
                     </tr>
                   ))}
@@ -13406,7 +13705,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
   const TABS_DEF = isModerador
     ? TABS_DEF_ALL.filter(([k]) => TABS_MODERADOR.includes(k))
     : [...TABS_DEF_ALL];
-  // Admin de la plataforma (tabla administradores): vínculos con LaLiga Fantasy.
+  // Admin de la plataforma (tabla administradores): catálogo común de jugadores y vínculos con LaLiga Fantasy.
   const [esAdminPlataforma, setEsAdminPlataforma] = useState(false);
   useEffect(() => { sb?.rpc('es_admin').then(({ data }) => setEsAdminPlataforma(data === true)); }, []);
   if (esAdminPlataforma) TABS_DEF.push(['plataforma', '🛠️ Plataforma']);
@@ -13436,11 +13735,11 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'presupuestos'&& <AdminPresupuestos participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
       {subtab === 'ajustes'     && <AdminAjustesGroup federacion={federacion} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
       {subtab === 'mercado'     && <AdminMercadoGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
-      {subtab === 'jugadores'   && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
+      {subtab === 'jugadores'   && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} esAdminPlataforma={esAdminPlataforma} />}
       {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
       {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
       {subtab === 'quiniela'    && <AdminQuiniela federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
-      {subtab === 'plataforma'  && esAdminPlataforma && <AdminPlataforma />}
+      {subtab === 'plataforma'  && esAdminPlataforma && <AdminPlataforma actorNombre={actorNombre} />}
       {subtab === 'palmares'    && <AdminPalmares federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
     </div>
   );
@@ -19804,7 +20103,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Cierres de pujas', 'La hora de cierre automático y la ejecución manual del cierre están en Admin → Ajustes Generales → Cierres.'],
         ['Gestión de equipos', 'El admin puede crear equipos, asignarles usuarios, cambiar su nombre o eliminarlos desde Admin → Equipos.'],
         ['Importar puntos de LaLiga Fantasy', 'En Admin → Pts Jugadores, el botón "⬇️ Importar puntos LaLiga Fantasy" rellena los puntos de la jornada con los de LaLiga Fantasy (en azul). No guarda nada: revísalos y pulsa Guardar como siempre. Las porterías suman los puntos de los porteros de su club; los jugadores de un equipo que ya ha jugado y que no aparecen en LaLiga Fantasy (no convocados) quedan con 0, y los de equipos que aún no han jugado o marcados como aplazados no se tocan. Los jugadores sin vincular (en naranja) se rellenan a mano. Los puntos de LaLiga Fantasy pueden tardar unas horas en aparecer y a veces se corrigen días después: se puede volver a importar antes de cerrar la jornada. En Admin → Pts Jugadores → No Jugaron, "⬇️ Marcar desde LaLiga Fantasy" marca los alineados que jugaron 0 minutos (y desmarca los que sí jugaron); consulta la ficha de cada jugador, así que puede tardar hasta un minuto. Tampoco guarda: revisa y pulsa "Guardar y aplicar sustituciones".'],
-        ['Gestión de jugadores', 'Desde Admin → Jugadores el admin puede añadir, eliminar y marcar como lesionado a cualquier jugador que pertenezca a un equipo de la federación. También puede asignar o quitar la posición alternativa (doble posición) de jugadores no porteros.'],
+        ['Gestión de jugadores', 'El catálogo de jugadores es común a todas las ligas, así que crear, dar de baja, reactivar o eliminar un jugador (y cambiar su nacionalidad) solo lo puede hacer el admin de la plataforma; lo hace también desde Admin → 🛠️ Plataforma → Sincronizar, con las altas, traspasos y bajas de LaLiga Fantasy. Una baja saca al jugador de todas las ligas y cada dueño recupera su valor de mercado (aviso en el Tablón). El admin de cada liga, desde Admin → Jugadores, asigna jugadores libres a sus equipos ("Asignar jugador a un equipo"), los marca como lesionados y les asigna o quita la posición alternativa (doble posición).'],
         ['Draft', 'El admin puede habilitar o deshabilitar el botón "Generar Draft" desde Admin → Ajustes Generales. Cuando está activo, todos los usuarios lo ven en Mi Plantilla y pueden generar un listado aleatorio de jugadores para el draft de la temporada.'],
         ['Doble posición', 'El admin (y los moderadores) pueden asignar una posición alternativa a cualquier jugador no portero desde Admin → Jugadores. Los jugadores con doble posición pueden ser alineados en cualquiera de sus dos posiciones por su equipo fantasy.'],
         ['Introducir puntuaciones', 'Desde Admin → Pts Jugadores el admin introduce los puntos de cada jugador por jornada. Los partidos aplazados se marcan por equipo real: al pulsar "⏸ Aplazar" en la cabecera de un equipo, todos sus jugadores quedan marcados como aplazados y los usuarios pueden modificar su alineación aunque la jornada esté cerrada.'],

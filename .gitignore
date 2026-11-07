@@ -15,3 +15,7 @@ jugadores_cache.json
 # ── Sistema ────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ── Build (compilar.js / Vercel) ────────────────────
+node_modules/
+dist/

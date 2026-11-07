@@ -7,9 +7,16 @@ clasificación (individual y H2H) y puntuaciones manuales por jornada. Multi-lig
 ## Stack y arquitectura
 
 - **Frontend**: React 18 + Babel standalone, **todo en un único archivo** `index.html`
-  (~12.700 líneas). Sin build step: se abre directamente en el navegador o se sirve
-  estático (Vercel, ver `vercel.json`). Librerías cargadas por CDN (unpkg/jsdelivr):
-  React, ReactDOM, Babel standalone, xlsx, `@supabase/supabase-js`, `marked`.
+  (~20.000 líneas). En local se abre directamente en el navegador (Babel compila el JSX
+  allí). Librerías cargadas por CDN (unpkg/jsdelivr): React, ReactDOM, Babel standalone,
+  xlsx, `@supabase/supabase-js`, `marked`.
+- **Despliegue (Vercel)**: `vercel.json` ejecuta `npm ci` + `npm run build` → `compilar.js`,
+  que genera `dist/` con el JSX ya compilado (sin Babel en el navegador: carga mucho más
+  rápida) y solo los archivos que usa la página (`manifest.json`, `sw.js`, `icons/`,
+  `escudos/`, `nations/`). Babel fijado en `package.json` (`@babel/standalone`). Si la
+  compilación falla, Vercel cancela el despliegue y sigue la versión anterior. Un archivo
+  nuevo que la página cargue en tiempo de ejecución hay que añadirlo a `ASSETS` en
+  `compilar.js`. Probar el build en local: `npm install` y `npm run build`.
 - **Backend**: Supabase (PostgreSQL + Auth + Row Level Security). No hay servidor propio;
   la app habla directamente con Supabase desde el cliente con la clave `anon` (líneas
   ~227-228 de `index.html`). Edge Functions en `supabase/functions/`: `actualizar-jugadores` y `puntos-laliga` (intermediario con la API pública de LaLiga Fantasy para importar puntos; vínculos en `supabase_laliga.sql`).
@@ -58,8 +65,9 @@ Componentes React principales (búsqueda rápida por nombre de función):
 ## Cómo trabajar en este repo
 
 - Al editar `index.html`, mantener el estilo existente: componentes funcionales con hooks,
-  sin TypeScript, sin JSX externo (todo vía Babel standalone in-browser). No introducir un
-  build step ni dividir el archivo salvo que el usuario lo pida explícitamente.
+  sin TypeScript, sin JSX externo (todo vía Babel standalone in-browser). `index.html` sigue
+  siendo el único archivo que se edita: el build de despliegue (`compilar.js`) no cambia
+  eso. No dividir el archivo ni añadir más pasos de build salvo que el usuario lo pida.
 - Cambios de esquema van en un `supabase_*.sql` nuevo y descriptivo (no editar
   `supabase_schema.sql` retroactivamente salvo que el usuario lo pida).
 - Comentarios de UI y nombres de dominio están en español; mantener ese idioma en el código

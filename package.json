@@ -1,0 +1,14 @@
+{
+  "name": "filfa",
+  "private": true,
+  "description": "FILFA — Fantasy LaLiga. index.html se compila para producción con compilar.js (lo ejecuta Vercel).",
+  "scripts": {
+    "build": "node compilar.js"
+  },
+  "devDependencies": {
+    "@babel/standalone": "7.29.9"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

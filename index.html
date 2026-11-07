@@ -4243,7 +4243,13 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
             </div>
           </div>
           <div className="card">
-            <h2>Jornada {jornada}{!jornadasConDatos.includes(jornada) && <span style={{fontWeight:400, color:'var(--texto2)', fontSize:'.8rem', marginLeft:'.5rem'}}>(sin datos)</span>}</h2>
+            <div style={{display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap', marginBottom:'.5rem'}}>
+              <h2 style={{margin:0}}>Jornada {jornada}{!jornadasConDatos.includes(jornada) && <span style={{fontWeight:400, color:'var(--texto2)', fontSize:'.8rem', marginLeft:'.5rem'}}>(sin datos)</span>}</h2>
+              {jornadasConDatos.includes(jornada) && (
+                <BotonCopiarWA style={{marginLeft:'auto'}} texto={() => textoWA(`Liga Fantástica · Jornada ${jornada}`,
+                  [{ lineas: lineasClasificacionWA(filasJornada.filter(e => e.pts != null).map(e => ({ nombre: e.nombre, pts: e.pts }))) }])} />
+              )}
+            </div>
             <p style={{fontSize:'.78rem', color:'var(--texto2)', marginBottom:'.6rem'}}>Pincha en un equipo para ver su alineación y puntos de cada jugador.</p>
             <table>
               <thead>
@@ -4385,7 +4391,14 @@ function CalendarioFantasy({ participantes, federacion, isAdmin, miParticipanteI
               </div>
             </div>
             <div className="card">
-              <h2>{titulo}</h2>
+              <div style={{display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap', marginBottom:'.5rem'}}>
+                <h2 style={{margin:0}}>{titulo}</h2>
+                {!filas.every(e => e.total === 0) && (
+                  <BotonCopiarWA style={{marginLeft:'auto'}} texto={() => textoWA(
+                    `Liga Fantástica · ${jornadaAcum !== null ? `hasta J${jornadaAcum}` : `tras J${Math.max(...clasFiltradas.map(r => r.jornada))}`}`,
+                    [{ lineas: lineasClasificacionWA(filas.map(e => ({ nombre: e.nombre, pts: e.total }))) }])} />
+                )}
+              </div>
               {filas.every(e => e.total === 0)
                 ? <div className="empty">Aún no hay puntuaciones introducidas.</div>
                 : <div style={{overflowX:'auto'}}><table>
@@ -6723,6 +6736,41 @@ function descargarExcel(nombreArchivo, hojas) {
     XLSX.utils.book_append_sheet(wb, ws, nombre.slice(0, 31));
   });
   XLSX.writeFile(wb, `${nombreArchivo}.xlsx`);
+}
+
+// ── Copiar clasificaciones para WhatsApp ──────────────────────
+// Texto simplificado con el formato de WhatsApp (*negrita*, _cursiva_):
+// una línea por equipo, medallas para el podio.
+// filas: [{ nombre, pts, extra? }] ya ordenadas (mismo puesto que en la app).
+const fmtNumWA = x => Number(x).toLocaleString('es-ES', { maximumFractionDigits: 1 });
+function lineasClasificacionWA(filas) {
+  return filas.map((f, i) => {
+    const pos = i + 1;
+    const marca = ['🥇', '🥈', '🥉'][pos - 1] || `${pos}.`;
+    return `${marca} ${f.nombre} · *${f.pts == null ? '—' : fmtNumWA(f.pts)}*${f.extra ? ` _(${f.extra})_` : ''}`;
+  });
+}
+// secciones: [{ titulo?, lineas }] → bloques separados por una línea en blanco.
+function textoWA(titulo, secciones) {
+  return [`🏆 *${titulo}*`, ...secciones.filter(s => s.lineas.length)
+    .map(s => [s.titulo ? `\n*${s.titulo}*` : '', ...s.lineas].filter(Boolean).join('\n'))].join('\n');
+}
+
+// Botón "📋 WhatsApp": copia el texto que devuelve `texto()` al portapapeles.
+function BotonCopiarWA({ texto, style }) {
+  const [estado, setEstado] = useState('');
+  const copiar = async () => {
+    try { await navigator.clipboard.writeText(texto()); setEstado('✅ Copiado'); }
+    catch (e) { setEstado('No se pudo copiar'); }
+    setTimeout(() => setEstado(''), 2500);
+  };
+  return (
+    <button onClick={copiar} title="Copia la clasificación en texto para pegarla en WhatsApp"
+            style={{padding:'.28rem .85rem', borderRadius:7, fontSize:'.82rem', border:'1.5px solid #25d366',
+                    background:'#e9fbf0', color:'#0b7a55', cursor:'pointer', fontWeight:600, whiteSpace:'nowrap', ...style}}>
+      {estado || '📋 WhatsApp'}
+    </button>
+  );
 }
 
 // ── INFORMACIÓN DE LA FEDERACIÓN ──────────────────────────────
@@ -13942,6 +13990,31 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
   );
 
   const compNombre = comps.find(c=>c.id===compSel)?.nombre;
+  // Grupos (clasificación) y partidos sueltos (resultados) en texto para WhatsApp.
+  const textoTorneoWA = () => {
+    const nom = pid => nomMap[pid]?.nombre || '?';
+    const secciones = [];
+    fases.forEach(fase => {
+      if (fase.tipo === 'grupos') {
+        grupos.filter(g => g.fase_id === fase.id).forEach(grupo => {
+          const miembros = gMiembros[grupo.id] || [];
+          const filas = fase.modo === 'puntos'
+            ? clasificacionGrupoPuntos(miembros, fase.jornadas || [], fase.puntos).map(r => ({ nombre: nom(r.pid), pts: r.total, extra: `${r.ganadas} JG` }))
+            : calcularStandingsGrupo(partidos.filter(p => p.grupo_id === grupo.id), miembros).map(r => {
+                const dif = r.gf - r.gc;
+                return { nombre: nom(r.pid), pts: r.pts, extra: `${r.pj} PJ · ${dif > 0 ? '+' : ''}${dif}` };
+              });
+          secciones.push({ titulo: `${fase.nombre} · ${grupo.nombre}`, lineas: lineasClasificacionWA(filas) });
+        });
+      } else {
+        secciones.push({ titulo: fase.nombre, lineas: partidos.filter(p => p.fase_id === fase.id).map(m => {
+          const res = resPartido(m);
+          return `${m.nombre ? `${m.nombre}: ` : ''}${nom(m.participante_local_id)} ${res ? `*${fmtNumWA(res.gL)}-${fmtNumWA(res.gV)}*` : 'vs'} ${nom(m.participante_visitante_id)}${!res && m.jornada_fantasy ? ` _(J${m.jornada_fantasy})_` : ''}`;
+        }) });
+      }
+    });
+    return textoWA(compNombre || 'Torneo', secciones);
+  };
   return (
     <div>
       <div style={{marginBottom:'.5rem', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap'}}>
@@ -14020,6 +14093,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                 color:'#1d6f42',cursor:'pointer',fontWeight:600}}>
           ⬇ Excel
         </button>}
+        {!cargando && fases.length > 0 && <BotonCopiarWA texto={textoTorneoWA} />}
       </div>
       <div className="card" style={{marginBottom:'.5rem'}}><h2>{compNombre}</h2></div>
       {cargando ? <div className="loading">Cargando...</div> : fases.map(fase=>(
@@ -17040,6 +17114,24 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
   const divIds = [...new Set(participantes.map(p => p.division_id).filter(Boolean))];
   const hasDivs = divIds.length > 0;
 
+  // Clasificación de la sub-pestaña actual en texto para WhatsApp (todas las divisiones).
+  const textoClasifH2HWA = () => {
+    const jugadas = [...new Set(partidos.filter(m => m.pts_local !== null && m.pts_visitante !== null).map(m => m.jornada))].sort((a, b) => a - b);
+    const jSel = jugadas.includes(jornadaHistorial) ? jornadaHistorial : jugadas[jugadas.length - 1];
+    const k = subTabClasif;
+    const filasDe = d => k === 'historial' ? computeClasif(d, jSel) : k === 'general' ? computeClasif(d) : k === 'neutro' ? computeClasifNeutro(d)
+      : k.startsWith('ult') ? computeClasifUltimos(d, Number(k.slice(3))) : computeClasifSide(d, k);
+    const etiqueta = k === 'historial' ? `hasta J${jSel}` : k === 'general' ? `tras J${jugadas[jugadas.length - 1]}`
+      : k.startsWith('ult') ? `últimas ${k.slice(3)} jornadas` : { local: 'como local', visitante: 'como visitante', neutro: 'neutral' }[k];
+    const lineas = d => lineasClasificacionWA(filasDe(d).map(e => {
+      const dif = (e.gf || 0) - (e.gc || 0);
+      return { nombre: e.nombre, pts: e.pts, extra: `${e.pj} PJ · ${dif > 0 ? '+' : ''}${dif}` };
+    }));
+    return textoWA(`Liga FILFA · ${etiqueta}`, hasDivs
+      ? divIds.map(d => ({ titulo: divisiones.find(x => x.id === d)?.nombre || 'División', lineas: lineas(d) }))
+      : [{ lineas: lineas(null) }]);
+  };
+
   const parseCriteriosH2H = () => criteriosDesempateH2H(federacion);
 
 
@@ -17774,6 +17866,7 @@ function LigaH2H({ federacion, participantes, isAdmin, miParticipanteId }) {
                   {l}
                 </button>
               ))}
+              {jornadasJugadas.length > 0 && <BotonCopiarWA style={{marginLeft:'auto'}} texto={textoClasifH2HWA} />}
             </div>
           </div>
 
@@ -20063,6 +20156,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
         ['Torneos en modo Liga Fantástica', 'Cada fase de un torneo puede jugarse en modo H2H (los puntos fantasy se convierten en goles con el baremo) o en modo Liga Fantástica (cuentan los puntos tal cual). En los partidos sueltos en modo Liga Fantástica gana quien hace más puntos en la jornada del partido. En las fases de grupos en modo Liga Fantástica no hay partidos: cada grupo se ordena por la suma de puntos de sus equipos en las jornadas de la fase (J = puntos de cada jornada). Si empatan, va delante quien ha ganado más jornadas dentro del grupo (JG) y después quien tiene la mejor jornada. Los comodines cuentan en un torneo solo si el admin los ha asignado a ese torneo.'],
+        ['Copiar para WhatsApp', 'En Competiciones, el botón "📋 WhatsApp" copia en texto la clasificación que estás viendo (Liga Fantástica total o de una jornada, Liga FILFA con todas sus divisiones, o un torneo con sus grupos y partidos) para pegarla en un grupo de WhatsApp, con las negritas y medallas ya puestas.'],
         ['🎯 Quiniela', 'Si el admin la activa, en Competiciones → 🎯 Quiniela tienes cada jornada una quiniela con los partidos de la Liga FILFA y de los torneos que se juegan con esa jornada de la Liga Fantástica. En cada partido eliges 1, X o 2 (o el resultado exacto en goles, si el admin lo marca así) y pulsas "Enviar quiniela". Puedes cambiarla hasta el cierre de alineaciones (o, si no hay cierre, hasta que se cierre la jornada). Hasta entonces nadie más ve tus pronósticos, salvo el admin y los delegados de quinielas; después se hacen públicos.'],
         ['Quiniela — premio y clasificación', 'Al cerrar y archivar la jornada (o al calcular el último resultado que faltara) se cuentan los aciertos y se publica el resumen en el Tablón 🎯. El equipo con más aciertos se lleva el premio que haya fijado el admin (se reparte a partes iguales si hay empate); si hay coste por participar, se descuenta a los equipos que la enviaron. Cada acierto vale 1, sea 1·X·2 o resultado exacto. En la pestaña Clasificación se suman los aciertos de todas las jornadas, desglosados por competición; en caso de empate cuentan primero los aciertos de resultado exacto y después las quinielas ganadas.'],
         ['🏛️ Palmarés', 'En Competiciones → 🏛️ Palmarés está el historial de la liga, que no se borra al reiniciar la temporada. "Por temporada" muestra la clasificación final de cada competición (Liga Fantástica, cada división de la Liga FILFA con sus ascensos ⬆️ y descensos ⬇️, la quiniela) y la ronda a la que llegó cada equipo en los torneos, con los récords de la temporada. "Vitrina" reúne los títulos de cada equipo, "Récords" los mejores registros de todas las temporadas y la ficha de cada equipo (Equipos) muestra su palmarés. Puede incluir temporadas anteriores a la app añadidas por el admin.'],

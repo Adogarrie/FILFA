@@ -18085,7 +18085,7 @@ const LOGROS_CATALOGO = {
   racha_porteria_cero: {
     nombre: 'Muralla', icono: '🧱',
     descripcion: 'Partidos consecutivos de Liga FILFA sin encajar ningún gol.',
-    tiers: [3, 5, 10, 15],
+    tiers: [3, 5, 10, 15, 'temporada'],
     desc: t => t === 'temporada' ? 'Toda la temporada sin encajar' : `${t} partidos seguidos sin encajar`,
   },
   goles_temporada: {
@@ -18285,13 +18285,13 @@ const LOGROS_CATALOGO = {
   },
   once_ideal_equipo: {
     nombre: 'Estrellas de la jornada', icono: '🌟',
-    descripcion: 'Veces que algún jugador de tu plantilla ha aparecido en el Once Ideal de la jornada (acumulado de toda la plantilla, toda la temporada).',
+    descripcion: 'Veces que un jugador que tenías alineado esa jornada (titular o suplente) ha aparecido en el Once Ideal (acumulado de toda la plantilla, toda la temporada). Fichar a un jugador no trae sus apariciones anteriores.',
     tiers: [1, 3, 7, 15, 20, 30, 50],
     desc: t => `${t} apariciones en el Once Ideal`,
   },
   jugador_jornada: {
     nombre: 'Foco mediático', icono: '📸',
-    descripcion: 'Veces que un jugador de tu plantilla ha sido nombrado Jugador de la Jornada (mayor puntuación entre todos los jugadores fichados esa semana).',
+    descripcion: 'Veces que un jugador que tenías alineado esa jornada (titular o suplente) ha sido nombrado Jugador de la Jornada (mayor puntuación entre todos los jugadores fichados esa semana).',
     tiers: [1, 3, 5, 7, 10, 15],
     desc: t => `${t} veces con el Jugador de la Jornada`,
   },
@@ -18464,6 +18464,45 @@ function metricasLogrosExtra(partidos, participantes, extra = {}) {
 // `extra.plantillas` (jugador_id, participante_id) alimentan los logros de
 // composición de plantilla — se evalúan contra la plantilla ACTUAL en el
 // momento de llamar a esta función, no contra un histórico de fichajes.
+// Apariciones en el Once Ideal y como Jugador de la Jornada, por equipo. Se
+// atribuyen al equipo que tenía al jugador alineado (titular o suplente) ESA
+// jornada, no al dueño actual: fichar a un jugador no trae sus apariciones
+// anteriores. Si un equipo no guardó alineación, hereda la guardada más
+// reciente (como al calcular la jornada). Candidatos: fichados ahora o
+// alineados esa jornada (igual que calcularEstadisticasJugadores).
+function aparicionesDestacadosPorEquipo(puntosJugador, alineaciones, plantillas, jugadoresCatMap) {
+  const onceIdeal = {}, jugadorJornada = {};
+  const alinPorEquipo = {}; // pid → jornada → [jugador_id]
+  alineaciones.forEach(a => {
+    const porJ = (alinPorEquipo[a.participante_id] = alinPorEquipo[a.participante_id] || {});
+    (porJ[a.jornada] = porJ[a.jornada] || []).push(a.jugador_id);
+  });
+  const jornadasGuardadas = Object.fromEntries(Object.entries(alinPorEquipo)
+    .map(([pid, porJ]) => [pid, Object.keys(porJ).map(Number).sort((a, b) => a - b)]));
+  const fichadosActuales = plantillas.map(r => r.jugador_id);
+  const ptsPorJornada = {};
+  puntosJugador.forEach(r => { (ptsPorJornada[r.jornada] = ptsPorJornada[r.jornada] || []).push(r); });
+  Object.entries(ptsPorJornada).forEach(([jStr, ptsRowsJ]) => {
+    const j = Number(jStr);
+    const alineados = {}; // jugador_id → Set(pid)
+    Object.entries(jornadasGuardadas).forEach(([pid, js]) => {
+      let ref = null;
+      for (const x of js) { if (x <= j) ref = x; else break; }
+      if (ref === null) return;
+      alinPorEquipo[pid][ref].forEach(jid => (alineados[jid] = alineados[jid] || new Set()).add(pid));
+    });
+    const candidatos = {};
+    fichadosActuales.forEach(id => { candidatos[id] = ''; });
+    Object.keys(alineados).forEach(id => { candidatos[id] = ''; });
+    const sumar = (mapa, jid) => (alineados[jid] || []).forEach(pid => { mapa[pid] = (mapa[pid] || 0) + 1; });
+    const once = calcularOnceIdeal(ptsRowsJ, jugadoresCatMap, candidatos);
+    if (once) once.titulares.forEach(t => sumar(onceIdeal, t.jugador_id));
+    const mvp = calcularJugadorJornada(ptsRowsJ, jugadoresCatMap, candidatos);
+    if (mvp) mvp.jugadores.forEach(jug => sumar(jugadorJornada, jug.jugador_id));
+  });
+  return { onceIdeal, jugadorJornada };
+}
+
 function detectarLogros(partidos, participantes, extra = {}) {
   const { clasificacion = [], alineaciones = [], puntosJugador = [], sustitucionesAuto = [],
           jugadoresCat = [], plantillas = [], maxJugadores = 14 } = extra;
@@ -18499,10 +18538,8 @@ function detectarLogros(partidos, participantes, extra = {}) {
   // Plantilla actual de cada equipo (para los logros de composición).
   const jugadoresCatMap = Object.fromEntries(jugadoresCat.map(j => [j.id, j]));
   const plantillaPorEquipo = {};
-  const fichadosPorId = {};
   plantillas.forEach(r => {
     (plantillaPorEquipo[r.participante_id] = plantillaPorEquipo[r.participante_id] || []).push(r.jugador_id);
-    fichadosPorId[r.jugador_id] = r.participante_id;
   });
   // "Multicontinental": UEFA + CONMEBOL + CAF obligatorias, y AFC o CONCACAF
   // (basta con una de las dos). Se usa tanto en la detección como en el
@@ -18515,27 +18552,9 @@ function detectarLogros(partidos, participantes, extra = {}) {
     CONFEDS_OBLIGATORIAS.filter(c => confsPresentes.has(c)).length +
     ((confsPresentes.has('AFC') || confsPresentes.has('CONCACAF')) ? 1 : 0);
 
-  // Once Ideal y Jugador de la Jornada: se recorre cada jornada con
-  // puntuaciones una sola vez (no por equipo) y se acumula por equipo.
-  const onceIdealPorEquipo = {}, jugadorJornadaPorEquipo = {};
-  const jornadasConPts = [...new Set(puntosJugador.map(r => r.jornada))];
-  jornadasConPts.forEach(j => {
-    const ptsRowsJ = puntosJugador.filter(r => r.jornada === j);
-    const once = calcularOnceIdeal(ptsRowsJ, jugadoresCatMap, fichadosPorId);
-    if (once) {
-      once.titulares.forEach(t => {
-        const pid = fichadosPorId[t.jugador_id];
-        if (pid) onceIdealPorEquipo[pid] = (onceIdealPorEquipo[pid] || 0) + 1;
-      });
-    }
-    const mvp = calcularJugadorJornada(ptsRowsJ, jugadoresCatMap, fichadosPorId);
-    if (mvp) {
-      mvp.jugadores.forEach(jug => {
-        const pid = fichadosPorId[jug.jugador_id];
-        if (pid) jugadorJornadaPorEquipo[pid] = (jugadorJornadaPorEquipo[pid] || 0) + 1;
-      });
-    }
-  });
+  // Once Ideal y Jugador de la Jornada (al equipo que lo tenía alineado esa jornada).
+  const { onceIdeal: onceIdealPorEquipo, jugadorJornada: jugadorJornadaPorEquipo } =
+    aparicionesDestacadosPorEquipo(puntosJugador, alineaciones, plantillas, jugadoresCatMap);
 
   // Puntualidad: jornadas seguidas (de Liga Fantástica) con alineación
   // propia guardada, sin importar si es la titular real de esa jornada.
@@ -18755,31 +18774,16 @@ function progresoLogros(partidos, participantes, extra = {}) {
 
   const jugadoresCatMap = Object.fromEntries(jugadoresCat.map(j => [j.id, j]));
   const plantillaPorEquipo = {};
-  const fichadosPorId = {};
   plantillas.forEach(r => {
     (plantillaPorEquipo[r.participante_id] = plantillaPorEquipo[r.participante_id] || []).push(r.jugador_id);
-    fichadosPorId[r.jugador_id] = r.participante_id;
   });
   const CONFEDS_OBLIGATORIAS = ['UEFA', 'CONMEBOL', 'CAF'];
   const huecosMulticontinental = (confsPresentes) =>
     CONFEDS_OBLIGATORIAS.filter(c => confsPresentes.has(c)).length +
     ((confsPresentes.has('AFC') || confsPresentes.has('CONCACAF')) ? 1 : 0);
 
-  const onceIdealPorEquipo = {}, jugadorJornadaPorEquipo = {};
-  const jornadasConPts = [...new Set(puntosJugador.map(r => r.jornada))];
-  jornadasConPts.forEach(j => {
-    const ptsRowsJ = puntosJugador.filter(r => r.jornada === j);
-    const once = calcularOnceIdeal(ptsRowsJ, jugadoresCatMap, fichadosPorId);
-    if (once) once.titulares.forEach(t => {
-      const pid = fichadosPorId[t.jugador_id];
-      if (pid) onceIdealPorEquipo[pid] = (onceIdealPorEquipo[pid] || 0) + 1;
-    });
-    const mvp = calcularJugadorJornada(ptsRowsJ, jugadoresCatMap, fichadosPorId);
-    if (mvp) mvp.jugadores.forEach(jug => {
-      const pid = fichadosPorId[jug.jugador_id];
-      if (pid) jugadorJornadaPorEquipo[pid] = (jugadorJornadaPorEquipo[pid] || 0) + 1;
-    });
-  });
+  const { onceIdeal: onceIdealPorEquipo, jugadorJornada: jugadorJornadaPorEquipo } =
+    aparicionesDestacadosPorEquipo(puntosJugador, alineaciones, plantillas, jugadoresCatMap);
 
   const jornadasFantasticas = [...new Set(clasificacion.map(r => r.jornada))].sort((a, b) => a - b);
   const tieneAlineacionPropia = new Set(alineaciones.map(a => `${a.participante_id}_${a.jornada}`));
@@ -19265,7 +19269,12 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
           categoria: l.categoria, tier: l.tier, valor: l.valor, jornada: l.jornada,
         }));
         const { error } = await sb.from('logros').insert(filas);
-        if (error) { console.error('[Logros] Error al guardar:', error.message); }
+        if (error) {
+          console.error('[Logros] Error al guardar:', error.message);
+          setMsg('Error al guardar logros: ' + error.message
+            + (/integer/i.test(error.message) ? ' (ejecuta supabase_logros_valor_decimal.sql)' : ''));
+          setTimeout(() => setMsg(''), 8000);
+        }
         else {
           const nomLog = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
           nuevos.forEach(l => {

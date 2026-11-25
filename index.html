@@ -5778,6 +5778,15 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
     trasCerrarJornadaFantasy({ federacion, participantes, jornada, snapshots, esAdmin: !isModerador, ligaFilfa });
     // Quiniela de la jornada: se resuelve ya si todos sus partidos tienen resultado.
     resolverQuinielaJornada(federacion, jornada);
+    // Logros: único momento automático en que se otorgan (además del botón
+    // "Recalcular logros" de Admin → Liga FILFA). En segundo plano.
+    recalcularLogrosFederacion(federacion, participantes).then(r => {
+      if (r.error) { setMsg(r.error); setTimeout(() => setMsg(''), 8000); }
+      else if (r.nuevos > 0) {
+        setMsg(`${r.nuevos} logro${r.nuevos === 1 ? '' : 's'} nuevo${r.nuevos === 1 ? '' : 's'} desbloqueado${r.nuevos === 1 ? '' : 's'}`);
+        setTimeout(() => setMsg(''), 3500);
+      }
+    });
   };
 
   const reabrirJornada = async () => {
@@ -14240,8 +14249,8 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
 // ── LOGROS (vista de usuario) ───────────────────────────────────
 // Palmarés completo por equipo: logros ya conseguidos (LOGROS_CATALOGO,
 // tabla `logros`) más el progreso hacia el siguiente tramo de cada
-// categoría. El progreso NO se calcula aquí: lo precalcula recalcularLogros
-// (AdminLigaH2H) al calcular cada jornada y lo guarda en `logros_progreso`
+// categoría. El progreso NO se calcula aquí: lo precalcula recalcularLogrosFederacion
+// al cerrar y archivar cada jornada (o con "Recalcular logros") y lo guarda en `logros_progreso`
 // (ver supabase_logros_progreso.sql). Así esta vista solo lee dos tablas
 // pequeñas en vez de descargar todo el histórico de la temporada.
 // LOGROS_CATALOGO/detectarLogros/progresoLogros están definidos junto a
@@ -18894,6 +18903,102 @@ function progresoLogros(partidos, participantes, extra = {}) {
   return out;
 }
 
+// Recalcula los logros de todos los equipos a partir del calendario actual
+// (jugado y pendiente) y persiste solo los tramos que todavía no existan en
+// la tabla `logros` — nunca se borra ni se sobrescribe uno ya conseguido.
+// Solo se llama al cerrar y archivar una jornada fantasy (AdminPtsJugadores)
+// y con el botón "Recalcular logros" (AdminLigaH2H): calcular o guardar
+// resultados de Liga FILFA no otorga logros. Devuelve { error, nuevos }.
+async function recalcularLogrosFederacion(federacion, participantes) {
+  if (!sb || !federacion?.logros_habilitado || !federacion?.id) return { error: null, nuevos: 0 };
+  try {
+    const partIds = participantes.map(p => p.id);
+    // Todo paginado: el histórico de la temporada supera las 1000 filas y
+    // una respuesta truncada otorgaría (o saltaría) logros para siempre.
+    const vacio = Promise.resolve({ data: [], error: null });
+    const resultados = await Promise.all([
+      obtenerTodasLasFilas(() => sb.from('h2h_partidos')
+        .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
+        .eq('federacion_id', federacion.id).order('id')),
+      obtenerTodasLasFilas(() => sb.from('logros').select('participante_id, categoria, tier')
+        .eq('federacion_id', federacion.id).order('id')),
+      partIds.length ? obtenerTodasLasFilas(() => sb.from('clasificacion').select('participante_id, jornada, puntos_jornada')
+        .in('participante_id', partIds).order('participante_id').order('jornada')) : vacio,
+      partIds.length ? obtenerTodasLasFilas(() => sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular')
+        .in('participante_id', partIds).order('id')) : vacio,
+      obtenerTodasLasFilas(() => sb.from('puntos_jugador').select('jugador_id, jornada, pts')
+        .eq('federacion_id', federacion.id).order('id')),
+      obtenerTodasLasFilas(() => sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada')
+        .eq('federacion_id', federacion.id).order('id')),
+      obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento')
+        .order('id')),
+      partIds.length ? obtenerTodasLasFilas(() => sb.from('plantillas').select('jugador_id, participante_id')
+        .in('participante_id', partIds).order('id')) : vacio,
+      // Qué jornada fantasy decide cada jornada de Liga FILFA (para Antidoblete).
+      sb.from('h2h_jornada_config').select('jornada_h2h, division_id, jornada_fantasy')
+        .eq('federacion_id', federacion.id),
+    ]);
+    // Con datos parciales se detectarían logros erróneos (y son permanentes):
+    // ante cualquier fallo se aborta sin guardar nada.
+    const fallo = resultados.find(r => r.error);
+    if (fallo) {
+      console.error('[Logros] Error al leer datos, recálculo cancelado:', fallo.error.message);
+      return { error: 'Error al recalcular logros: ' + fallo.error.message, nuevos: 0 };
+    }
+    const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas },
+           { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }, { data: jornadaCfg }] = resultados;
+    const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
+    const extraLogros = {
+      clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],
+      sustitucionesAuto: sustsTodas || [], jugadoresCat: jugCatTodos || [], plantillas: plantsTodas || [],
+      jornadaConfig: jornadaCfg || [],
+      maxJugadores: federacion?.max_jugadores ?? 14,
+    };
+    const detectados = detectarLogros(partidosTodos || [], participantes, extraLogros);
+
+    // Progreso hacia el siguiente tramo, precalculado aquí (que ya tiene todo
+    // el histórico) para que la pestaña Logros solo lea una tabla pequeña.
+    const progreso = progresoLogros(partidosTodos || [], participantes, extraLogros);
+    const filasProgreso = participantes.map(p => ({
+      participante_id: p.id, federacion_id: federacion.id,
+      datos: progreso[p.id] || {}, actualizado_at: new Date().toISOString(),
+    }));
+    if (filasProgreso.length) {
+      const { error: errProg } = await sb.from('logros_progreso')
+        .upsert(filasProgreso, { onConflict: 'participante_id' });
+      if (errProg) console.error('[Logros] Error al guardar el progreso:', errProg.message);
+    }
+
+    const nuevos = detectados.filter(l => !yaTiene.has(`${l.participante_id}|${l.categoria}|${l.tier}`));
+    if (nuevos.length > 0) {
+      const filas = nuevos.map(l => ({
+        federacion_id: federacion.id, participante_id: l.participante_id,
+        categoria: l.categoria, tier: l.tier, valor: l.valor, jornada: l.jornada,
+      }));
+      const { error } = await sb.from('logros').insert(filas);
+      if (error) {
+        console.error('[Logros] Error al guardar:', error.message);
+        return { error: 'Error al guardar logros: ' + error.message
+          + (/integer/i.test(error.message) ? ' (ejecuta supabase_logros_valor_decimal.sql)' : ''), nuevos: 0 };
+      }
+      else {
+        const nomLog = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
+        nuevos.forEach(l => {
+          const cat = LOGROS_CATALOGO[l.categoria];
+          const desc = cat?.desc ? cat.desc(l.tier === 'temporada' ? 'temporada' : Number(l.tier)) : l.categoria;
+          publicar(federacion.id, 'logro',
+            `${cat?.icono || '🏆'} ${nomLog[l.participante_id] || 'Un equipo'} ha conseguido: ${desc}`,
+            nomLog[l.participante_id]);
+        });
+      }
+    }
+    return { error: null, nuevos: nuevos.length };
+  } catch (e) {
+    console.error('[Logros] Error al recalcular:', e);
+    return { error: 'Error al recalcular logros: ' + (e?.message || e), nuevos: 0 };
+  }
+}
+
 function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerador, actorNombre }) {
   const [h2hOn,      setH2hOn]      = useState(!!federacion?.h2h_habilitado);
   const [logrosOn,   setLogrosOn]   = useState(!!federacion?.logros_habilitado);
@@ -19141,7 +19246,8 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     publicar(federacion?.id, 'admin', `H2H J${j_h2h} calculada automáticamente (${detalle})`, actorNombre);
     setMsg(`J${j_h2h} calculada`);
     setTimeout(() => setMsg(''), 3000);
-    recalcularLogros();
+    // Los logros NO se recalculan aquí: solo al cerrar y archivar la jornada
+    // fantasy o con el botón "Recalcular logros".
     // Predicción en segundo plano (solo el admin; la crónica sale al cerrar la jornada fantasy).
     if (!isModerador) trasCalcularJornadaH2H({
       federacion, participantes, vueltasExtra, baremo,
@@ -19193,105 +19299,17 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setTimeout(() => setMsg(''), 2500);
   };
 
-  // Recalcula los logros de todos los equipos a partir del calendario actual
-  // (jugado y pendiente) y persiste solo los tramos que todavía no existan en
-  // la tabla `logros` — nunca se borra ni se sobrescribe uno ya conseguido.
-  // Se llama automáticamente tras guardar resultados de Liga FILFA, y también
-  // se puede forzar a mano con el botón "Recalcular logros".
+  // Botón "Recalcular logros" (el cálculo está en recalcularLogrosFederacion).
   const recalcularLogros = async () => {
     if (!federacion?.logros_habilitado || !federacion?.id) return;
     setRecalculandoLogros(true);
-    try {
-      const partIds = participantes.map(p => p.id);
-      // Todo paginado: el histórico de la temporada supera las 1000 filas y
-      // una respuesta truncada otorgaría (o saltaría) logros para siempre.
-      const vacio = Promise.resolve({ data: [], error: null });
-      const resultados = await Promise.all([
-        obtenerTodasLasFilas(() => sb.from('h2h_partidos')
-          .select('id, jornada, division_id, local_id, visitante_id, pts_local, pts_visitante, fantasy_local, fantasy_visitante')
-          .eq('federacion_id', federacion.id).order('id')),
-        obtenerTodasLasFilas(() => sb.from('logros').select('participante_id, categoria, tier')
-          .eq('federacion_id', federacion.id).order('id')),
-        partIds.length ? obtenerTodasLasFilas(() => sb.from('clasificacion').select('participante_id, jornada, puntos_jornada')
-          .in('participante_id', partIds).order('participante_id').order('jornada')) : vacio,
-        partIds.length ? obtenerTodasLasFilas(() => sb.from('alineaciones').select('jugador_id, participante_id, jornada, es_titular')
-          .in('participante_id', partIds).order('id')) : vacio,
-        obtenerTodasLasFilas(() => sb.from('puntos_jugador').select('jugador_id, jornada, pts')
-          .eq('federacion_id', federacion.id).order('id')),
-        obtenerTodasLasFilas(() => sb.from('sustituciones_auto').select('jugador_entra_id, participante_id, jornada')
-          .eq('federacion_id', federacion.id).order('id')),
-        obtenerTodasLasFilas(() => sb.from('jugadores').select('id, nombre, equipo, posicion, nacionalidad, fecha_nacimiento')
-          .order('id')),
-        partIds.length ? obtenerTodasLasFilas(() => sb.from('plantillas').select('jugador_id, participante_id')
-          .in('participante_id', partIds).order('id')) : vacio,
-        // Qué jornada fantasy decide cada jornada de Liga FILFA (para Antidoblete).
-        sb.from('h2h_jornada_config').select('jornada_h2h, division_id, jornada_fantasy')
-          .eq('federacion_id', federacion.id),
-      ]);
-      // Con datos parciales se detectarían logros erróneos (y son permanentes):
-      // ante cualquier fallo se aborta sin guardar nada.
-      const fallo = resultados.find(r => r.error);
-      if (fallo) {
-        console.error('[Logros] Error al leer datos, recálculo cancelado:', fallo.error.message);
-        setMsg('Error al recalcular logros: ' + fallo.error.message);
-        setTimeout(() => setMsg(''), 5000);
-        setRecalculandoLogros(false);
-        return;
-      }
-      const [{ data: partidosTodos }, { data: existentes }, { data: clasifTodos }, { data: alinsTodas },
-             { data: ptsJugTodos }, { data: sustsTodas }, { data: jugCatTodos }, { data: plantsTodas }, { data: jornadaCfg }] = resultados;
-      const yaTiene = new Set((existentes || []).map(l => `${l.participante_id}|${l.categoria}|${l.tier}`));
-      const extraLogros = {
-        clasificacion: clasifTodos || [], alineaciones: alinsTodas || [], puntosJugador: ptsJugTodos || [],
-        sustitucionesAuto: sustsTodas || [], jugadoresCat: jugCatTodos || [], plantillas: plantsTodas || [],
-        jornadaConfig: jornadaCfg || [],
-        maxJugadores: federacion?.max_jugadores ?? 14,
-      };
-      const detectados = detectarLogros(partidosTodos || [], participantes, extraLogros);
-
-      // Progreso hacia el siguiente tramo, precalculado aquí (que ya tiene todo
-      // el histórico) para que la pestaña Logros solo lea una tabla pequeña.
-      const progreso = progresoLogros(partidosTodos || [], participantes, extraLogros);
-      const filasProgreso = participantes.map(p => ({
-        participante_id: p.id, federacion_id: federacion.id,
-        datos: progreso[p.id] || {}, actualizado_at: new Date().toISOString(),
-      }));
-      if (filasProgreso.length) {
-        const { error: errProg } = await sb.from('logros_progreso')
-          .upsert(filasProgreso, { onConflict: 'participante_id' });
-        if (errProg) console.error('[Logros] Error al guardar el progreso:', errProg.message);
-      }
-
-      const nuevos = detectados.filter(l => !yaTiene.has(`${l.participante_id}|${l.categoria}|${l.tier}`));
-      if (nuevos.length > 0) {
-        const filas = nuevos.map(l => ({
-          federacion_id: federacion.id, participante_id: l.participante_id,
-          categoria: l.categoria, tier: l.tier, valor: l.valor, jornada: l.jornada,
-        }));
-        const { error } = await sb.from('logros').insert(filas);
-        if (error) {
-          console.error('[Logros] Error al guardar:', error.message);
-          setMsg('Error al guardar logros: ' + error.message
-            + (/integer/i.test(error.message) ? ' (ejecuta supabase_logros_valor_decimal.sql)' : ''));
-          setTimeout(() => setMsg(''), 8000);
-        }
-        else {
-          const nomLog = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
-          nuevos.forEach(l => {
-            const cat = LOGROS_CATALOGO[l.categoria];
-            const desc = cat?.desc ? cat.desc(l.tier === 'temporada' ? 'temporada' : Number(l.tier)) : l.categoria;
-            publicar(federacion.id, 'logro',
-              `${cat?.icono || '🏆'} ${nomLog[l.participante_id] || 'Un equipo'} ha conseguido: ${desc}`,
-              nomLog[l.participante_id]);
-          });
-          setMsg(`${nuevos.length} logro${nuevos.length === 1 ? '' : 's'} nuevo${nuevos.length === 1 ? '' : 's'} desbloqueado${nuevos.length === 1 ? '' : 's'}`);
-          setTimeout(() => setMsg(''), 3500);
-        }
-      }
-    } catch (e) {
-      console.error('[Logros] Error al recalcular:', e);
-    }
+    const r = await recalcularLogrosFederacion(federacion, participantes);
     setRecalculandoLogros(false);
+    if (r.error) { setMsg(r.error); setTimeout(() => setMsg(''), 8000); return; }
+    setMsg(r.nuevos > 0
+      ? `${r.nuevos} logro${r.nuevos === 1 ? '' : 's'} nuevo${r.nuevos === 1 ? '' : 's'} desbloqueado${r.nuevos === 1 ? '' : 's'}`
+      : 'Logros recalculados: ninguno nuevo');
+    setTimeout(() => setMsg(''), 3500);
   };
 
   // ── Utilidades ─────────────────────────────────────────────
@@ -19443,7 +19461,6 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
     setMsg('Resultados guardados');
     setTimeout(() => setMsg(''), 2500);
     cargar();
-    recalcularLogros();
   };
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p.nombre]));
@@ -19536,9 +19553,9 @@ function AdminLigaH2H({ federacion, participantes, onFederacionUpdate, isModerad
               <div style={{fontSize:'.85rem', color:'var(--texto2)'}}>
                 Insignias automáticas por rachas y récords de Liga FILFA (victorias seguidas, invicto, goles en un
                 partido…), puntuaciones de Liga Fantástica y composición de la plantilla (nacionalidades, edades).
-                Se recalculan solas, junto con el progreso que ven los equipos, al calcular una jornada H2H y al
-                guardar resultados de Liga FILFA. Usa "Recalcular logros" para forzarlo (por ejemplo, tras corregir
-                puntos). Una vez conseguidas son permanentes, incluso si más adelante reinicias la temporada.
+                Se recalculan solas, junto con el progreso que ven los equipos, al cerrar y archivar una jornada
+                (calcular o guardar resultados de Liga FILFA no las otorga). Usa "Recalcular logros" para forzarlo
+                (por ejemplo, tras corregir puntos). Una vez conseguidas son permanentes, incluso si más adelante reinicias la temporada.
               </div>
             </div>
             <div style={{display:'flex', alignItems:'center', gap:'.6rem', flexShrink:0, flexWrap:'wrap', justifyContent:'flex-end'}}>

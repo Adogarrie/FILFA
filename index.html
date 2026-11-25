@@ -12446,6 +12446,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   const [sJornada, setSJornada]         = useState('');
   const [msg, setMsg]   = useState('');
   const [busy, setBusy] = useState(false);
+  const [copiadoJ, setCopiadoJ] = useState(null); // jornada cuyos resultados se acaban de copiar
   const [ptsLocalFase, setPtsLocalFase] = useState(0);
 
   const flash  = m => { setMsg(m); setTimeout(() => setMsg(''), 3500); };
@@ -12685,16 +12686,63 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const [gL, gV] = esPuntos
       ? [Math.round((ptsMap[m.participante_local_id]??0) + ptsLocal), Math.round(ptsMap[m.participante_visitante_id]??0)]
       : [ptsToGoles((ptsMap[m.participante_local_id]??0) + ptsLocal, baremo), ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo)];
-    await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
+    // Recalcular: el partido ya tenía resultado (se sobrescribe con los puntos actuales).
+    const recalculo = m.goles_local != null;
+    if (recalculo && gL === m.goles_local && gV === m.goles_visitante) {
+      flash(`Sin cambios: ${gL} — ${gV}`); setBusy(false); return;
+    }
+    const { error } = await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
+    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
     setPartidos(p=>p.map(x=>x.id===m.id?{...x,goles_local:gL,goles_visitante:gV}:x));
     const nomL = nomMap[m.participante_local_id] || 'Local';
     const nomV = nomMap[m.participante_visitante_id] || 'Visitante';
     const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomL} vs ${nomV}`;
-    publicar(fedId, 'admin', `Resultado calculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}.`, actorNombre);
+    publicar(fedId, 'admin', recalculo
+      ? `Resultado recalculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV} (antes ${m.goles_local}–${m.goles_visitante}).`
+      : `Resultado calculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}.`, actorNombre);
     resolverQuinielaJornada(federacion, m.jornada_fantasy);
-    flash(`Calculado: ${gL} — ${gV}`);
+    flash(`${recalculo ? 'Recalculado' : 'Calculado'}: ${gL} — ${gV}`);
     setBusy(false);
   };
+
+  // ── Copiar resultados de una jornada (partidos sueltos) ──────
+  // Mismo formato que "Copiar plantilla Resultados" de Liga FILFA: goles y,
+  // entre paréntesis, los puntos fantasy (con la ventaja local, para que
+  // cuadren con los goles). Los puntos no se guardan en partidos_competicion,
+  // así que se leen al copiar. En modo Liga Fantástica el resultado ya son
+  // los puntos y no se repiten.
+  // `clave` identifica el botón (para el "¡Copiado!"); `subtitulo` se añade
+  // al título (p. ej. "Grupo A · Ronda 2").
+  const copiarResultadosJornada = async (ms, j, clave, subtitulo = '') => {
+    if (!ms.length || !j) return;
+    setBusy(true);
+    let ptsMap = {};
+    if (!esPuntos) {
+      const pids = [...new Set(ms.flatMap(m => [m.participante_local_id, m.participante_visitante_id]))];
+      try { ptsMap = await puntosTorneoJornada(federacion, compSel, pids, j); }
+      catch (e) { flash('Error: ' + e.message); setBusy(false); return; }
+    }
+    const ptsLocal = faseAct?.pts_local ?? 0;
+    const titulo = [(compAct?.nombre || 'Torneo').toUpperCase(), faseAct?.nombre, subtitulo].filter(Boolean).join(' · ');
+    const lineas = [`${titulo} — JORNADA ${j}`];
+    ms.forEach((m, i) => {
+      const nL = nomMap[m.participante_local_id] || '—';
+      const nV = nomMap[m.participante_visitante_id] || '—';
+      const gL = m.goles_local ?? '?';
+      const gV = m.goles_visitante ?? '?';
+      if (esPuntos) { lineas.push(`${i + 1}. ${nL} ${gL} - ${gV} ${nV}`); return; }
+      const pL = ptsMap[m.participante_local_id]    != null ? Math.round(ptsMap[m.participante_local_id] + ptsLocal) : '?';
+      const pV = ptsMap[m.participante_visitante_id] != null ? Math.round(ptsMap[m.participante_visitante_id]) : '?';
+      lineas.push(`${i + 1}. ${nL} ${gL} (${pL}) - ${gV} (${pV}) ${nV}`);
+    });
+    setBusy(false);
+    try {
+      await navigator.clipboard.writeText(lineas.join('\n'));
+      setCopiadoJ(clave);
+      setTimeout(() => setCopiadoJ(c => c === clave ? null : c), 2000);
+    } catch (e) { flash('Error: no se pudo copiar al portapapeles'); }
+  };
+  const jornadasSueltos = [...new Set(partidos.map(m => m.jornada_fantasy).filter(Boolean))].sort((a, b) => a - b);
 
   const sBtn = { padding:'.22rem .65rem', borderRadius:6, border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer', fontSize:'.8rem' };
   const dBtn = { padding:'.2rem .5rem', borderRadius:6, border:'1.5px solid #dc3545', background:'var(--fondo-alt)', color:'#dc3545', cursor:'pointer', fontSize:'.78rem' };
@@ -12894,6 +12942,11 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                               style={{...inp, width:55, textAlign:'center', padding:'.3rem .4rem'}} />
                             <button style={{...sBtn, fontSize:'.76rem'}} onClick={()=>asignarJornadaRonda(g.id,r)}>Asignar</button>
                             <button disabled={busy||!jornadaAsig} style={{...sBtn, fontSize:'.76rem', background:'rgba(15,80,180,0.18)', borderColor:'var(--borde)', opacity:jornadaAsig?1:.45}} onClick={()=>calcularRonda(g.id,r,jornadaAsig)}>▶ Calcular</button>
+                            <button disabled={busy||!jornadaAsig} title="Copiar los resultados de esta ronda"
+                              style={{...sBtn, fontSize:'.76rem', opacity:jornadaAsig?1:.45}}
+                              onClick={()=>copiarResultadosJornada(ms, jornadaAsig, `g_${key}`, `${g.nombre} · Ronda ${r}`)}>
+                              {copiadoJ===`g_${key}` ? '¡Copiado!' : '📋 Copiar'}
+                            </button>
                           </div>
                         </div>
                         {ms.map(m=>(
@@ -12927,6 +12980,18 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
       {/* Fase de partidos sueltos */}
       {faseSel && faseAct?.tipo==='sueltos' && (<>
         {partidos.length===0 && <p style={{color:'var(--texto2)', marginBottom:'.75rem'}}>Sin partidos aún.</p>}
+        {jornadasSueltos.length>0 && (
+          <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.6rem'}}>
+            <span style={{fontSize:'.8rem', color:'var(--texto2)'}}>Copiar resultados:</span>
+            {jornadasSueltos.map(j=>(
+              <button key={j} disabled={busy} onClick={()=>copiarResultadosJornada(partidos.filter(m=>m.jornada_fantasy===j), j, `s_${j}`)}
+                style={{padding:'.18rem .55rem', borderRadius:6, fontSize:'.75rem', border:'1.5px solid var(--borde)',
+                        background:'var(--fondo)', cursor:'pointer', fontWeight:600}}>
+                {copiadoJ===`s_${j}` ? '¡Copiado!' : `📋 J${j}`}
+              </button>
+            ))}
+          </div>
+        )}
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%', fontSize:'.85rem', borderCollapse:'collapse', marginBottom:'.75rem'}}>
             {partidos.length>0&&<thead><tr>
@@ -12951,7 +13016,12 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                   </td>
                   <td style={{textAlign:'center',padding:'.35rem .5rem',whiteSpace:'nowrap'}}>
                     {m.goles_local!=null
-                      ? <span style={{fontWeight:700,fontSize:'.88rem'}}>{m.goles_local}—{m.goles_visitante}</span>
+                      ? <span style={{display:'inline-flex',alignItems:'center',gap:'.4rem'}}>
+                          <span style={{fontWeight:700,fontSize:'.88rem'}}>{m.goles_local}—{m.goles_visitante}</span>
+                          <button disabled={busy||!m.jornada_fantasy} title="Recalcular el resultado con los puntos actuales"
+                            style={{...sBtn,fontSize:'.72rem',padding:'.15rem .45rem',opacity:m.jornada_fantasy?1:.45}}
+                            onClick={()=>calcularSuelto(m)}>↻</button>
+                        </span>
                       : <button disabled={busy||!m.jornada_fantasy} style={{...sBtn,fontSize:'.75rem',opacity:m.jornada_fantasy?1:.45}} onClick={()=>calcularSuelto(m)}>▶ Calcular</button>
                     }
                   </td>

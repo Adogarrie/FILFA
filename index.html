@@ -5701,7 +5701,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
     setCerrando(true);
     const [{ data: alis }, { data: ptsData }, { data: clasData }, { data: jugsData }, { data: subsData },
            { data: capsData }, { data: comsData }] = await Promise.all([
-      sb.from('alineaciones').select('participante_id, jugador_id, es_titular, orden_suplente, posicion_usada').eq('jornada', jornada).in('participante_id', partIds),
+      sb.from('alineaciones').select('participante_id, jugador_id, es_titular, orden_suplente, posicion_usada, orden_penalti').eq('jornada', jornada).in('participante_id', partIds),
       sb.from('puntos_jugador').select('jugador_id, pts').eq('jornada', jornada).eq('federacion_id', federacion.id),
       sb.from('clasificacion').select('participante_id, puntos_jornada').eq('jornada', jornada).in('participante_id', partIds),
       sb.from('jugadores').select('id, nombre, posicion, equipo'),
@@ -5730,7 +5730,7 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
           .lt('jornada', jornada).order('jornada', { ascending: false }).limit(1);
         if (ref?.length) {
           const { data: prev } = await sb.from('alineaciones')
-            .select('participante_id, jugador_id, es_titular, orden_suplente, posicion_usada')
+            .select('participante_id, jugador_id, es_titular, orden_suplente, posicion_usada, orden_penalti')
             .eq('participante_id', pid).eq('jornada', ref[0].jornada);
           if (prev?.length) alisByPart[pid] = prev;
         }
@@ -5755,7 +5755,8 @@ function AdminPtsJugadores({ participantes, federacion, actorNombre, isModerador
         return { jugador_id: a.jugador_id, nombre: jug.nombre || '?', posicion: jug.posicion || '?',
                  equipo_real: jug.equipo || '?', es_titular: a.es_titular, orden_suplente: a.orden_suplente,
                  posicion_usada: a.posicion_usada, jugo, pts: ptsMap[a.jugador_id] ?? 0,
-                 es_capitan: a.jugador_id === capId };
+                 es_capitan: a.jugador_id === capId,
+                 orden_penalti: a.es_titular ? (a.orden_penalti ?? null) : null };
       });
       return { federacion_id: federacion.id, participante_id: p.id, participante_nombre: p.nombre,
                jornada, datos, puntos_totales: clasMap[p.id] ?? 0 };
@@ -6235,7 +6236,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
     setAlineacion(null);
     const cargarAli = async () => {
       const { data: ali } = await sb.from('alineaciones')
-        .select('jugador_id, es_titular, jugadores(nombre, equipo, posicion)')
+        .select('jugador_id, es_titular, orden_penalti, jugadores(nombre, equipo, posicion)')
         .eq('participante_id', equipoId)
         .eq('jornada', aliJornada);
       if (ali && ali.length > 0) { setAlineacion(ali); return; }
@@ -6248,7 +6249,7 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
         .limit(1);
       if (ref?.length > 0) {
         const { data: ultima } = await sb.from('alineaciones')
-          .select('jugador_id, es_titular, jugadores(nombre, equipo, posicion)')
+          .select('jugador_id, es_titular, orden_penalti, jugadores(nombre, equipo, posicion)')
           .eq('participante_id', equipoId)
           .eq('jornada', ref[0].jornada);
         setAlineacion(ultima || []);
@@ -6672,6 +6673,9 @@ function Equipos({ participantes, miParticipanteId, sesionParticipanteId, jornad
                   </table>
                 </>
               )}
+              <div style={{marginTop:'1rem'}}>
+                <ListaPenaltis items={titulares.map(a => ({ orden: a.orden_penalti, nombre: nombreJugador(a.jugadores?.nombre, a.jugadores?.posicion, a.jugadores?.equipo), posicion: a.jugadores?.posicion }))} />
+              </div>
             </>
         }
       </div>
@@ -7848,12 +7852,40 @@ function FederacionOnboarding({ user, onDone, onLogout }) {
 }
 
 // ── ALINEACIÓN ─────────────────────────────────────────────────
+// Orden de lanzadores de penaltis (solo lectura). `items` = [{ orden,
+// nombre, posicion }]; se muestra en Equipos y en la jornada archivada.
+// Es informativo: no lo usa ningún cálculo (ver supabase_penaltis.sql).
+function ListaPenaltis({ items }) {
+  const lista = (items || []).filter(x => x.orden != null).sort((a, b) => a.orden - b.orden);
+  if (!lista.length) return null;
+  return (
+    <div style={{marginBottom:'1rem'}}>
+      <div style={{fontWeight:700, fontSize:'.78rem', color:'#6f42c1', textTransform:'uppercase',
+                   letterSpacing:'.05em', marginBottom:'.35rem'}}>
+        🥅 Lanzadores de penaltis
+      </div>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem'}}>
+        {lista.map(x => (
+          <span key={x.orden} style={{display:'inline-flex', alignItems:'center', gap:'.3rem', fontSize:'.8rem',
+                                      padding:'.18rem .5rem', borderRadius:6, border:'1.5px solid var(--borde)',
+                                      background:'var(--fondo-alt)'}}>
+            <strong style={{color:'#6f42c1'}}>{x.orden}.</strong>
+            {x.posicion && <span className={`badge ${x.posicion}`} style={{fontSize:'.62rem'}}>{x.posicion}</span>}
+            {x.nombre}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Alineacion({ participanteId, participanteNombre, jornadaActual, federacionId, federacion }) {
   const [jornada, setJornada]     = useState(jornadaActual || 1);
   const [cierre, setCierre]       = useState(null);
   const [plantilla, setPlantilla] = useState(null);
   const [estado, setEstado]         = useState({});      // id → 'T'|'S'|'F'
   const [ordenSup, setOrdenSup]     = useState({});      // id → 1|2|3|4
+  const [ordenPen, setOrdenPen]     = useState({});      // id → 1..11 (lanzadores de penaltis, solo titulares; informativo)
   const [posicionUsada, setPosicionUsada] = useState({}); // id → posicion elegida (solo titulares con doble pos)
   const [jugadoresHistoricos, setJugadoresHistoricos] = useState([]);
   const [jugadoresCedidos, setJugadoresCedidos]       = useState([]);
@@ -7894,7 +7926,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
       setCargandoAli(true);
       const [{ data: ali }, { data: cierreRow }, { data: cesData }, { data: aplData }, { data: snapData },
              { data: capitanData }, { data: comodinData }, { data: comodinesHistData }] = await Promise.all([
-        sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente, posicion_usada')
+        sb.from('alineaciones').select('jugador_id, es_titular, orden_suplente, posicion_usada, orden_penalti')
           .eq('participante_id', participanteId).eq('jornada', jornada),
         sb.from('jornadas_cierre').select('cierre')
           .eq('federacion_id', federacionId).eq('jornada', jornada).maybeSingle(),
@@ -7942,7 +7974,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
           .limit(1);
         if (ref?.length > 0) {
           const { data: ultima } = await sb.from('alineaciones')
-            .select('jugador_id, es_titular, orden_suplente, posicion_usada')
+            .select('jugador_id, es_titular, orden_suplente, posicion_usada, orden_penalti')
             .eq('participante_id', participanteId)
             .eq('jornada', ref[0].jornada);
           fuente = ultima || [];
@@ -7956,12 +7988,14 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 
       const ord = {};
       const pu  = {};
+      const pen = {};
       for (const a of fuente) {
         if (Object.prototype.hasOwnProperty.call(e, a.jugador_id)) {
           const esLes = lesionadosSet.has(a.jugador_id);
           e[a.jugador_id] = esLes ? 'F' : (a.es_titular ? 'T' : 'S');
           if (!esLes && !a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
           if (!esLes && a.es_titular && a.posicion_usada)          pu[a.jugador_id]  = a.posicion_usada;
+          if (!esLes && a.es_titular && a.orden_penalti != null)   pen[a.jugador_id] = a.orden_penalti;
         }
       }
       setPosicionUsada(pu);
@@ -7979,6 +8013,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
           if (idsVendidos.includes(a.jugador_id)) {
             e[a.jugador_id] = a.es_titular ? 'T' : 'S';
             if (!a.es_titular && a.orden_suplente != null) ord[a.jugador_id] = a.orden_suplente;
+            if (a.es_titular && a.orden_penalti != null)   pen[a.jugador_id] = a.orden_penalti;
           }
         }
         setJugadoresHistoricos(jugsHist || []);
@@ -7997,6 +8032,8 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
 
       setEstado(e);
       setOrdenSup(ord);
+      // Compacta a 1..N: al heredar pueden faltar lanzadores (vendidos, lesionados).
+      setOrdenPen(Object.fromEntries(Object.entries(pen).sort(([, a], [, b]) => a - b).map(([id], i) => [id, i + 1])));
       setCargandoAli(false);
     };
     cargar();
@@ -8035,7 +8072,10 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     const prev = estado[id];
     if (op === 'T' && nT >= 11 && prev !== 'T') { alert('Ya tienes 11 titulares.'); return; }
     setEstado(e => ({ ...e, [id]: op }));
-    if (prev === 'T' && op !== 'T') setPosicionUsada(p => { const n = {...p}; delete n[id]; return n; });
+    if (prev === 'T' && op !== 'T') {
+      setPosicionUsada(p => { const n = {...p}; delete n[id]; return n; });
+      setOrdenPen(o => quitarDeOrden(o, id));
+    }
     if (op === 'S' && prev !== 'S') {
       // Asignar siguiente posición disponible
       setOrdenSup(o => {
@@ -8062,6 +8102,31 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     const otro = Object.entries(ordenSup).find(([, v]) => v === nueva)?.[0];
     if (!otro) return;
     setOrdenSup(o => ({ ...o, [id]: nueva, [otro]: pos }));
+  };
+
+  // ── Lanzadores de penaltis (informativo; solo titulares, 1..11) ──
+  // Quita `id` del orden y sube un puesto a los que iban detrás.
+  function quitarDeOrden(o, id) {
+    const quitado = o[id];
+    if (quitado == null) return o;
+    const nuevo = { ...o };
+    delete nuevo[id];
+    for (const k of Object.keys(nuevo)) if (nuevo[k] > quitado) nuevo[k]--;
+    return nuevo;
+  }
+  const nPen = Object.keys(ordenPen).length;
+  const togglePenalti = id => {
+    if (bloqueado || estado[id] !== 'T') return;
+    setOrdenPen(o => o[id] != null ? quitarDeOrden(o, id) : { ...o, [id]: Object.keys(o).length + 1 });
+    setMsg('');
+  };
+  const moverPenalti = (id, dir) => {
+    if (bloqueado) return;
+    const pos = ordenPen[id];
+    const nueva = pos + dir;
+    const otro = Object.entries(ordenPen).find(([, v]) => v === nueva)?.[0];
+    if (!otro) return;
+    setOrdenPen(o => ({ ...o, [id]: nueva, [otro]: pos }));
   };
 
   const toggleCapitan = async (jugadorId) => {
@@ -8143,11 +8208,12 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
     setEstado(newEstado);
     setOrdenSup(newOrden);
     setPosicionUsada(newPosUsada);
+    setOrdenPen({}); // once nuevo: el orden de penaltis anterior ya no encaja
     setGuardando(true);
     const registros = [
-      { participante_id: participanteId, jornada, jugador_id: porElegido.id, es_titular: true, orden_suplente: null, posicion_usada: null },
-      ...titulares.map(j => ({ participante_id: participanteId, jornada, jugador_id: j.id, es_titular: true, orden_suplente: null, posicion_usada: newPosUsada[j.id] ?? null })),
-      ...suplentes.map((j, i) => ({ participante_id: participanteId, jornada, jugador_id: j.id, es_titular: false, orden_suplente: i + 1, posicion_usada: null })),
+      { participante_id: participanteId, jornada, jugador_id: porElegido.id, es_titular: true, orden_suplente: null, posicion_usada: null, orden_penalti: null },
+      ...titulares.map(j => ({ participante_id: participanteId, jornada, jugador_id: j.id, es_titular: true, orden_suplente: null, posicion_usada: newPosUsada[j.id] ?? null, orden_penalti: null })),
+      ...suplentes.map((j, i) => ({ participante_id: participanteId, jornada, jugador_id: j.id, es_titular: false, orden_suplente: i + 1, posicion_usada: null, orden_penalti: null })),
     ];
     const { error: errUps } = await sb.from('alineaciones').upsert(registros, { onConflict: 'participante_id,jornada,jugador_id' });
     if (errUps) { alert('Error al guardar: ' + errUps.message); setGuardando(false); return; }
@@ -8174,6 +8240,7 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
         jugador_id: jugadorId, es_titular: v === 'T',
         orden_suplente: v === 'S' ? (ordenSup[jugadorId] ?? null) : null,
         posicion_usada: v === 'T' ? (posicionUsada[jugadorId] ?? null) : null,
+        orden_penalti:  v === 'T' ? (ordenPen[jugadorId] ?? null) : null,
       }));
     // Paso 1: upsert — si falla aquí los datos anteriores quedan intactos
     if (registros.length) {
@@ -8323,6 +8390,8 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                   </table>
                 </div>
               )}
+              <ListaPenaltis items={(snapshot.datos||[]).filter(d => d.es_titular)
+                .map(d => ({ orden: d.orden_penalti, nombre: d.nombre, posicion: d.posicion_usada || d.posicion }))} />
               <div style={{textAlign:'right', fontWeight:700, fontSize:'1rem', paddingTop:'.5rem', borderTop:'1.5px solid var(--borde)', color:'var(--verde)'}}>
                 Total: {snapshot.puntos_totales} pts
               </div>
@@ -8470,6 +8539,81 @@ function Alineacion({ participanteId, participanteNombre, jornadaActual, federac
                 </div>
               );
             })}
+
+            {/* ── Lanzadores de penaltis (informativo) ── */}
+            {nT > 0 && (() => {
+              const tits = [...plantilla, ...jugadoresHistoricos, ...jugadoresCedidos].filter(j => estado[j.id] === 'T');
+              const conOrden = tits.filter(j => ordenPen[j.id] != null).sort((a, b) => ordenPen[a.id] - ordenPen[b.id]);
+              const sinOrden = tits.filter(j => ordenPen[j.id] == null);
+              const flecha = (j, dir, off) => (
+                <button className="btn-ali" onClick={() => moverPenalti(j.id, dir)} disabled={off}
+                        style={{marginLeft:2, padding:'.15rem .4rem', fontSize:'.72rem', border:'1.5px solid var(--borde)',
+                                borderRadius:6, background:'var(--fondo-alt)', cursor: off ? 'default' : 'pointer', opacity: off ? .35 : 1}}>
+                  {dir < 0 ? '▲' : '▼'}
+                </button>
+              );
+              return (
+                <div style={{marginTop:'1rem', padding:'.75rem 1rem', borderRadius:9, border:'1.5px solid var(--borde)', background:'rgba(111,66,193,.04)'}}>
+                  <div style={{display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap', marginBottom:'.4rem'}}>
+                    <div style={{fontSize:'.78rem', fontWeight:700, color:'#6f42c1', textTransform:'uppercase', letterSpacing:'.04em'}}>
+                      🥅 Lanzadores de penaltis ({nPen}/{tits.length})
+                    </div>
+                    {!bloqueado && sinOrden.length > 0 && (
+                      <button onClick={() => setOrdenPen(o => { const n = { ...o }; sinOrden.forEach((j, i) => { n[j.id] = conOrden.length + i + 1; }); return n; })}
+                              style={{marginLeft:'auto', padding:'.15rem .5rem', fontSize:'.72rem', borderRadius:6,
+                                      border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer'}}>
+                        Completar con el resto
+                      </button>
+                    )}
+                    {!bloqueado && nPen > 0 && (
+                      <button onClick={() => setOrdenPen({})}
+                              style={{marginLeft: sinOrden.length > 0 ? 0 : 'auto', padding:'.15rem .5rem', fontSize:'.72rem', borderRadius:6,
+                                      border:'1.5px solid var(--borde)', background:'var(--fondo-alt)', cursor:'pointer'}}>
+                        Vaciar
+                      </button>
+                    )}
+                  </div>
+                  <div style={{fontSize:'.76rem', color:'var(--texto2)', marginBottom:'.5rem'}}>
+                    Solo informativo. {bloqueado ? 'La jornada está cerrada.' : 'Pulsa los titulares en el orden en que lanzarán (hasta los 11, por si hay muerte súbita) y guarda la alineación.'}
+                  </div>
+                  {conOrden.length > 0 && (
+                    <table className="tabla-alineacion" style={{width:'100%', marginBottom: sinOrden.length ? '.5rem' : 0}}>
+                      <tbody>
+                        {conOrden.map(j => (
+                          <tr key={j.id}>
+                            <td style={{width:28, textAlign:'center', fontWeight:700, fontSize:'.85rem', color:'#6f42c1'}}>{ordenPen[j.id]}.</td>
+                            <td style={{width:48}}><span className={`badge ${posicionUsada[j.id] ?? j.posicion}`}>{posicionUsada[j.id] ?? j.posicion}</span></td>
+                            <td style={{fontWeight:600}}>{nombreJugador(j.nombre, j.posicion, j.equipo)}</td>
+                            {!bloqueado && (
+                              <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
+                                {flecha(j, -1, ordenPen[j.id] === 1)}
+                                {flecha(j, +1, ordenPen[j.id] === nPen)}
+                                <button className="btn-ali" onClick={() => togglePenalti(j.id)} title="Quitar del orden"
+                                        style={{marginLeft:3, padding:'.15rem .45rem', fontSize:'.72rem', border:'1.5px solid #dc3545',
+                                                borderRadius:6, background:'var(--fondo-alt)', color:'#dc3545', cursor:'pointer'}}>✕</button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {!bloqueado && sinOrden.length > 0 && (
+                    <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem'}}>
+                      {sinOrden.map(j => (
+                        <button key={j.id} onClick={() => togglePenalti(j.id)} title="Añadir como siguiente lanzador"
+                                style={{display:'inline-flex', alignItems:'center', gap:'.3rem', fontSize:'.78rem',
+                                        padding:'.2rem .5rem', borderRadius:6, border:'1.5px dashed var(--borde)',
+                                        background:'var(--fondo)', cursor:'pointer', color:'var(--texto)'}}>
+                          <span className={`badge ${posicionUsada[j.id] ?? j.posicion}`} style={{fontSize:'.62rem'}}>{posicionUsada[j.id] ?? j.posicion}</span>
+                          {nombreJugador(j.nombre, j.posicion, j.equipo)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* ── Capitán y comodines ── */}
             {(federacion?.comodin_capitan_habilitado || federacion?.comodin_banquillo_habilitado) && !bloqueado && (
@@ -20174,6 +20318,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],
         ['Jugadores con doble posición', 'Si un jugador tiene una posición alternativa asignada por el admin, verás dos badges pulsables junto a su nombre cuando sea titular. Pulsa el que prefieras para elegir en qué posición computa ese jugador en tu formación. Los suplentes muestran ambas posiciones como referencia pero sin toggle.'],
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
+        ['Lanzadores de penaltis', 'Debajo de la alineación puedes elegir en qué orden lanzarían los penaltis tus titulares (hasta los 11, por si hay muerte súbita): pulsa los jugadores en orden, ajústalo con ▲ ▼ y guarda la alineación. Es solo informativo: no afecta a los puntos ni a ningún resultado. Se guarda por jornada, se hereda como la alineación y todos los equipos pueden verlo en Equipos. Si un lanzador deja de ser titular, sale del orden y los siguientes suben un puesto.'],
         ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
         ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al suplente disponible más prioritario (según el orden en que los colocaste en el banquillo) cuya posición sea compatible con alguna de las formaciones permitidas. Un suplente que también haya disputado 0 minutos nunca entra como sustituto. Si el suplente tiene doble posición, puede entrar en cualquiera de sus dos posiciones siempre que una encaje con la formación. Los porteros no participan en este mecanismo.'],
         ['Partidos aplazados', 'Si el partido de un equipo real queda aplazado, el admin lo marca y los jugadores afectados muestran el indicador ⏸ APL en tu alineación. Puedes cambiar esos jugadores aunque la jornada ya esté cerrada.'],

@@ -12685,6 +12685,51 @@ const golesDe = (m, pid) => Number(pid === m.participante_local_id ? m.goles_loc
 // Cruces que hay (o habrá, en cuadro fijo) en una ronda.
 const crucesEnRonda = (cruces, r) => Math.max(0, ...cruces.filter(c => c.ronda === r).map(c => c.posicion));
 
+// ── Sorteos ──
+// Barajado Fisher-Yates (con crypto si está disponible).
+function barajar(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    let j;
+    if (window.crypto?.getRandomValues) { const u = new Uint32Array(1); window.crypto.getRandomValues(u); j = u[0] % (i + 1); }
+    else j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+// Cruces al azar: los equipos salen por parejas en el orden de las bolas y
+// los exentos (elegidos por el admin) ocupan un hueco al azar del cuadro.
+// Devuelve [{ local, visitante, exento }] en orden de cruce.
+function sortearCruces(equipos, exentos) {
+  const bolas = barajar(equipos);
+  const pares = [];
+  for (let i = 0; i + 1 < bolas.length; i += 2) pares.push({ local: bolas[i], visitante: bolas[i + 1], exento: false });
+  if (!exentos.length) return pares;
+  // Huecos de los exentos al azar, sin cambiar el orden de salida de las parejas.
+  const total = pares.length + exentos.length;
+  const huecos = new Set(barajar([...Array(total).keys()]).slice(0, exentos.length));
+  const exB = barajar(exentos);
+  const res = [];
+  for (let k = 0, p = 0, e = 0; k < total; k++) res.push(huecos.has(k) ? { local: exB[e++], visitante: null, exento: true } : pares[p++]);
+  return res;
+}
+// Cruces desde una fase de grupos, con patrón: `grupos` = [{ nombre, ids }]
+// (ids = clasificación del grupo). n = 1: 1.º A – 1.º B, 1.º C – 1.º D…
+// n = 2: 1.º A – 2.º B y 1.º B – 2.º A en mitades distintas del cuadro, así
+// dos equipos del mismo grupo solo pueden volver a cruzarse en la final.
+// null si el patrón no sirve (nº de grupos impar, otro n o faltan equipos).
+function crucesPorPatron(grupos, n) {
+  const G = grupos.length;
+  if (G < 2 || G % 2 || grupos.some(g => g.ids.length < n)) return null;
+  const it = (g, k) => ({ id: grupos[g].ids[k], etq: `${k + 1}.º ${grupos[g].nombre}` });
+  const par = (a, b) => ({ local: a.id, visitante: b.id, exento: false, desc: `${a.etq} – ${b.etq}` });
+  if (n === 1) return Array.from({ length: G / 2 }, (_, i) => par(it(2 * i, 0), it(2 * i + 1, 0)));
+  if (n !== 2) return null;
+  const arriba = [], abajo = [];
+  for (let g = 0; g < G; g += 2) { arriba.push(par(it(g, 0), it(g + 1, 1))); abajo.push(par(it(g + 1, 0), it(g, 1))); }
+  return [...arriba, ...abajo];
+}
+
 // ¿Este partido de eliminatoria, con este resultado, se decide en penaltis?
 // Único: empate. Ida y vuelta: solo la vuelta, con el global empatado (y los
 // goles fuera, si cuentan). Siempre que la ronda tenga penaltis.
@@ -13646,7 +13691,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
         <AdminEliminatoria federacion={federacion} fase={faseAct} compNombre={compAct?.nombre || 'Competición'}
           participantes={participantes} nomMap={nomMap} partidos={partidos} setPartidos={setPartidos}
           cruces={cruces} setCruces={setCruces} setFases={setFases} busy={busy} setBusy={setBusy} flash={flash}
-          actorNombre={actorNombre} calcularPartido={calcularSuelto} penaltisManual={penaltisManual}
+          actorNombre={actorNombre} calcularPartido={calcularSuelto} penaltisManual={penaltisManual} fasesComp={fases}
           copiarResultadosJornada={copiarResultadosJornada} copiadoJ={copiadoJ} estilos={{ sBtn, dBtn, inp }} />
       )}
     </div>
@@ -13661,7 +13706,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
 // y, en cuadro fijo, se coloca en la ronda siguiente.
 function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap, partidos, setPartidos, cruces, setCruces,
                              setFases, busy, setBusy, flash, actorNombre, calcularPartido, penaltisManual,
-                             copiarResultadosJornada, copiadoJ, estilos }) {
+                             copiarResultadosJornada, copiadoJ, estilos, fasesComp = [] }) {
   const { sBtn, dBtn, inp } = estilos;
   const faseProp = fase; // las funciones que reciben otra versión de la fase la llaman `fase`
   const fedId = federacion?.id;
@@ -13747,24 +13792,25 @@ function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap
     const r = c.ronda + 1, pos = Math.ceil(c.posicion / 2);
     const lado = c.posicion % 2 ? 'local_id' : 'visitante_id';
     let sig = cs.find(x => x.ronda === r && x.posicion === pos);
-    if ((sig?.[lado] ?? null) === g) return;
-    if (!sig && !g) return;
+    if ((sig?.[lado] ?? null) === g) return null;
+    if (!sig && !g) return null;
     if (sig && conResultado(ps.filter(m => m.cruce_id === sig.id))) {
       flash(`Aviso: el cruce ${pos} de ${rondaElim(fase, r)?.nombre} ya tiene resultados; cambia sus equipos a mano si hace falta.`);
-      return;
+      return null;
     }
     if (sig) {
       const { data, error } = await sb.from('cruces_competicion').update({ [lado]: g, ganador_id: null, ganador_manual: false }).eq('id', sig.id).select().single();
-      if (error) { flash('Error: ' + error.message); return; }
+      if (error) { flash('Error: ' + error.message); return null; }
       sig = data;
       setCruces(prev => prev.map(x => x.id === sig.id ? sig : x));
     } else {
       const { data, error } = await sb.from('cruces_competicion').insert({ federacion_id: fedId, fase_id: fase.id, ronda: r, posicion: pos, [lado]: g }).select().single();
-      if (error) { flash('Error: ' + error.message); return; }
+      if (error) { flash('Error: ' + error.message); return null; }
       sig = data;
       setCruces(prev => [...prev, sig]);
     }
     await sincronizarPartidos([sig], ps, fase.rondas || []);
+    return sig;
   };
 
   // ── Rondas ──
@@ -13877,6 +13923,167 @@ function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap
     // (con el ganador anterior, para que actualizarCruce vea el cambio)
     await actualizarCruce(pid ? { ...data, ganador_id: c.ganador_id } : data, partidos, cs);
     setBusy(false);
+  };
+
+  // ── Sorteo de cruces / clasificados ──
+  // sorteo = { r, sel: [ids], exentos: [ids], preview: [{ local, visitante, exento, desc? }] | null,
+  //            patron: bool, faseG, n, grupos: [{ nombre, ids }] | null, aviso }
+  const [sorteo, setSorteo] = useState(null);
+  const fasesGrupos = fasesComp.filter(f => f.tipo === 'grupos');
+  const puedeSortear = r => (fase.cuadro !== 'fijo' || r === 1) && !cruces.some(c => c.ronda === r && (c.local_id || c.visitante_id));
+  const ganadoresDe = r => cruces.filter(c => c.ronda === r).sort((a, b) => a.posicion - b.posicion)
+    .map(c => resultadoCruce(c, partidos, fase).ganador).filter(Boolean);
+  const abrirSorteo = r => setSorteo({ r, sel: r > 1 ? ganadoresDe(r - 1) : [], exentos: [], preview: null, patron: false,
+                                       faseG: fasesGrupos[fasesGrupos.length - 1]?.id ?? '', n: 2, grupos: null, aviso: '' });
+  const togSel = id => setSorteo(s => s.sel.includes(id)
+    ? { ...s, sel: s.sel.filter(x => x !== id), exentos: s.exentos.filter(x => x !== id), preview: null }
+    : { ...s, sel: [...s.sel, id], preview: null });
+  const togExento = id => setSorteo(s => ({ ...s, exentos: s.exentos.includes(id) ? s.exentos.filter(x => x !== id) : [...s.exentos, id], preview: null }));
+
+  // Clasificación de cada grupo de una fase de grupos (hasta 3 consultas, solo al pulsar).
+  const cargarClasificados = async () => {
+    const fg = fasesGrupos.find(f => String(f.id) === String(sorteo.faseG));
+    const n = Math.max(1, parseInt(sorteo.n) || 1);
+    if (!fg) { flash('Error: elige la fase de grupos'); return; }
+    setBusy(true);
+    const { data: gs, error: e1 } = await sb.from('grupos_competicion').select('id, nombre').eq('fase_id', fg.id).order('nombre');
+    const gids = (gs || []).map(g => g.id);
+    const [{ data: gps, error: e2 }, { data: ms, error: e3 }] = gids.length ? await Promise.all([
+      sb.from('grupos_participantes').select('grupo_id, participante_id').in('grupo_id', gids),
+      fg.modo === 'puntos' ? Promise.resolve({ data: [] })
+        : sb.from('partidos_competicion').select('grupo_id, participante_local_id, participante_visitante_id, goles_local, goles_visitante').eq('fase_id', fg.id),
+    ]) : [{ data: [] }, { data: [] }];
+    setBusy(false);
+    const err = e1 || e2 || e3;
+    if (err) { flash('Error: ' + err.message); return; }
+    if (!gids.length) { flash('Error: esa fase no tiene grupos'); return; }
+    const grupos = (gs || []).map(g => {
+      const miembros = (gps || []).filter(x => x.grupo_id === g.id).map(x => x.participante_id);
+      const filas = fg.modo === 'puntos'
+        ? clasificacionGrupoPuntos(miembros, fg.jornadas || [], fg.puntos)
+        : calcularStandingsGrupo((ms || []).filter(m => m.grupo_id === g.id), miembros);
+      return { nombre: g.nombre, ids: filas.slice(0, n).map(f => f.pid) };
+    });
+    const sinTerminar = fg.modo === 'puntos'
+      ? !(fg.jornadas || []).length || (fg.jornadas || []).some(j => !Object.values(fg.puntos || {}).some(pp => pp?.[j] != null))
+      : (ms || []).some(m => m.goles_local == null || m.goles_visitante == null);
+    const patron = crucesPorPatron(grupos, n);
+    setSorteo(s => ({ ...s, sel: grupos.flatMap(g => g.ids), exentos: [], grupos, n, preview: patron, patron: !!patron,
+      aviso: [sinTerminar ? `${fg.nombre} no ha terminado: la clasificación aún puede cambiar.` : '',
+              patron ? `Cruces según la clasificación (patrón ${n === 1 ? '1.º A – 1.º B' : '1.º A – 2.º B, en mitades distintas del cuadro'}). También puedes sortearlos al azar.`
+                     : `Sin patrón para ${grupos.length} grupos y ${n} clasificados por grupo: sortéalos al azar o edita los cruces después.`].filter(Boolean).join(' ') }));
+  };
+  const sortear = () => {
+    const equipos = sorteo.sel.filter(id => !sorteo.exentos.includes(id));
+    if (equipos.length < 2) { flash('Error: elige al menos dos equipos que jueguen'); return; }
+    if (equipos.length % 2) { flash('Error: número impar de equipos: marca un exento más o quita un equipo'); return; }
+    setSorteo(s => ({ ...s, preview: sortearCruces(equipos, s.exentos), patron: false }));
+  };
+  const confirmarSorteo = async () => {
+    const { r, preview, patron } = sorteo;
+    const ronda = rondaElim(fase, r);
+    setBusy(true);
+    // Los cruces vacíos que hubiera en la ronda se sustituyen.
+    const vacios = cruces.filter(c => c.ronda === r);
+    if (vacios.length) {
+      const { error } = await sb.from('cruces_competicion').delete().in('id', vacios.map(c => c.id));
+      if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+    }
+    const filas = preview.map((x, i) => ({ federacion_id: fedId, fase_id: fase.id, ronda: r, posicion: i + 1, local_id: x.local,
+                                           visitante_id: x.visitante, exento: x.exento, ganador_id: x.exento ? x.local : null }));
+    const { data: nuevos, error } = await sb.from('cruces_competicion').insert(filas).select();
+    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+    const idsV = new Set(vacios.map(c => c.id));
+    let cs = [...cruces.filter(c => !idsV.has(c.id)), ...nuevos];
+    setCruces(prev => [...prev.filter(c => !idsV.has(c.id)), ...nuevos]);
+    const ps = await sincronizarPartidos(nuevos, partidos.filter(m => !idsV.has(m.cruce_id))) || partidos;
+    // Cuadro fijo: los exentos pasan ya a la ronda siguiente.
+    if (fase.cuadro === 'fijo' && rondaElim(fase, r + 1)) {
+      for (const c of nuevos.filter(x => x.exento).sort((a, b) => a.posicion - b.posicion)) {
+        const sig = await colocarEnSiguiente(c, c.local_id, ps, cs);
+        if (sig) cs = cs.some(x => x.id === sig.id) ? cs.map(x => x.id === sig.id ? sig : x) : [...cs, sig];
+      }
+    }
+    // Un solo anuncio con el orden (ficticio) en que salen las bolas.
+    let bola = 0;
+    const lineas = preview.map((x, i) => {
+      if (x.exento) return `Cruce ${i + 1}: ${nom(x.local)}, exento.`;
+      if (patron) return `Cruce ${i + 1}: ${nom(x.local)} – ${nom(x.visitante)} (${x.desc}).`;
+      const b1 = ++bola, b2 = ++bola;
+      return `Cruce ${i + 1}: ${b1}.ª bola, ${nom(x.local)}; ${b2}.ª bola, ${nom(x.visitante)} → ${nom(x.local)} – ${nom(x.visitante)}.`;
+    });
+    publicar(fedId, 'admin', `${patron ? '📋 Cruces' : '🎲 Sorteo'} — ${compNombre} · ${ronda?.nombre || `Ronda ${r}`}${patron ? ' según la clasificación' : ''}\n${lineas.join('\n')}`, actorNombre);
+    setSorteo(null);
+    setBusy(false);
+    flash(`${ronda?.nombre || 'Ronda'}: ${preview.length} cruces creados`);
+  };
+
+  const panelSorteo = r => {
+    const s = sorteo;
+    const chip = (on, extra = {}) => ({ display:'inline-flex', alignItems:'center', gap:'.3rem', padding:'.15rem .45rem', borderRadius:10, fontSize:'.76rem',
+      border:`1.5px solid ${on ? 'var(--verde)' : 'var(--borde)'}`, background: on ? 'rgba(40,167,69,.1)' : 'var(--fondo-alt)', cursor:'pointer', ...extra });
+    const ordenados = [...participantes].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+    const hayPatron = s.grupos && crucesPorPatron(s.grupos, s.n);
+    return (
+      <div style={{border:'1.5px dashed var(--borde)', borderRadius:8, padding:'.55rem', margin:'.3rem 0 .5rem', background:'var(--fondo-alt)', fontSize:'.8rem'}}>
+        <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.4rem'}}>
+          <strong>Equipos: {s.sel.length}{s.exentos.length ? ` (${s.exentos.length} exento${s.exentos.length === 1 ? '' : 's'})` : ''}</strong>
+          <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => setSorteo(x => ({ ...x, sel: participantes.map(p => p.id), preview: null }))}>Todos</button>
+          <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => setSorteo(x => ({ ...x, sel: [], exentos: [], preview: null }))}>Ninguno</button>
+          {r > 1 && <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => setSorteo(x => ({ ...x, sel: ganadoresDe(r - 1), exentos: [], preview: null }))}>
+            Ganadores de {rondaElim(fase, r - 1)?.nombre}</button>}
+        </div>
+        {fasesGrupos.length > 0 && (
+          <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.45rem'}}>
+            <span>Clasificados de</span>
+            <select value={s.faseG} onChange={e => setSorteo(x => ({ ...x, faseG: e.target.value }))} style={{...inp, padding:'.22rem .35rem'}}>
+              {fasesGrupos.map(f => <option key={f.id} value={f.id}>{f.nombre}</option>)}
+            </select>
+            <span>: los</span>
+            <input type="number" min="1" max="8" value={s.n} onChange={e => setSorteo(x => ({ ...x, n: e.target.value }))}
+                   style={{...inp, width:48, textAlign:'center', padding:'.22rem .3rem'}} />
+            <span>primeros de cada grupo</span>
+            <button disabled={busy} style={{...sBtn, fontSize:'.72rem'}} onClick={cargarClasificados}>Cargar</button>
+          </div>
+        )}
+        <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem', marginBottom:'.45rem'}}>
+          {ordenados.map(p => {
+            const on = s.sel.includes(p.id), ex = s.exentos.includes(p.id);
+            return (
+              <span key={p.id} style={chip(on, ex ? { borderStyle:'dashed' } : {})}>
+                <span onClick={() => togSel(p.id)}>{on ? '✓ ' : ''}{p.nombre}</span>
+                {on && <span title="Exento: pasa de ronda sin jugar" onClick={() => togExento(p.id)}
+                             style={{fontSize:'.66rem', fontWeight:700, color: ex ? '#c77700' : 'var(--texto2)'}}>{ex ? 'EXENTO' : 'ex.'}</span>}
+              </span>
+            );
+          })}
+        </div>
+        {s.aviso && <div style={{color:'var(--texto2)', marginBottom:'.4rem'}}>{s.aviso}</div>}
+        <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center'}}>
+          <button disabled={busy} style={{...sBtn, fontWeight:700}} onClick={sortear}>🎲 {s.preview && !s.patron ? 'Repetir sorteo' : 'Sortear'}</button>
+          {hayPatron && !s.patron && (
+            <button style={sBtn} onClick={() => setSorteo(x => ({ ...x, preview: crucesPorPatron(x.grupos, x.n), patron: true, exentos: [] }))}>📋 Usar el patrón</button>
+          )}
+          <button style={{...sBtn, marginLeft:'auto'}} onClick={() => setSorteo(null)}>Cancelar</button>
+        </div>
+        {s.preview && (
+          <div style={{marginTop:'.5rem', borderTop:'1px solid var(--borde)', paddingTop:'.4rem'}}>
+            {s.preview.map((x, i) => (
+              <div key={i} style={{padding:'.1rem 0'}}>
+                <strong style={{color:'var(--texto2)'}}>{i + 1}.</strong>{' '}
+                {x.exento ? <><strong>{nom(x.local)}</strong> <em style={{color:'var(--texto2)'}}>exento</em></>
+                          : <><strong>{nom(x.local)}</strong> – <strong>{nom(x.visitante)}</strong></>}
+                {x.desc && <span style={{color:'var(--texto2)'}}> · {x.desc}</span>}
+              </div>
+            ))}
+            <div style={{display:'flex', gap:'.4rem', alignItems:'center', marginTop:'.4rem', flexWrap:'wrap'}}>
+              <button disabled={busy} className="btn-ok" onClick={confirmarSorteo}>Confirmar y publicar</button>
+              <span style={{color:'var(--texto2)'}}>Se crean los cruces y sus partidos y se anuncia en el Tablón{fase.cuadro === 'fijo' ? '. En cuadro fijo, el orden marca el cuadro: el ganador del 1 contra el del 2, el del 3 contra el del 4…' : '.'}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   // ── Partidos ──
@@ -14031,6 +14238,7 @@ function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap
               </div>
             );
           })}
+          {sorteo?.r === r && panelSorteo(r)}
           {huecos > csR.length && (
             <p style={{fontSize:'.76rem', color:'var(--texto2)', margin:'.2rem 0 .4rem'}}>
               {huecos - csR.length} cruce{huecos - csR.length === 1 ? '' : 's'} a la espera de los ganadores de la ronda anterior.
@@ -14038,6 +14246,9 @@ function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap
           )}
           <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
             {!(fase.cuadro === 'fijo' && r > 1) && <button disabled={busy} style={{...sBtn, fontSize:'.76rem'}} onClick={() => anadirCruce(r)}>+ Cruce</button>}
+            {puedeSortear(r) && sorteo?.r !== r && (
+              <button disabled={busy} style={{...sBtn, fontSize:'.76rem'}} onClick={() => abrirSorteo(r)}>🎲 Sorteo / clasificados</button>
+            )}
             {(iv ? [1, 2] : [1]).map(n => ronda.jornadas?.[n - 1] && psR.some(m => m.partido_n === n) ? (
               <button key={n} disabled={busy} style={{...sBtn, fontSize:'.76rem'}} onClick={() => copiar(n)}>
                 {copiadoJ === `e_${r}_${n}` ? '¡Copiado!' : `📋 ${iv ? (n === 1 ? 'Ida' : 'Vuelta') : 'Copiar'}`}

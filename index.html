@@ -12559,7 +12559,167 @@ function TablaGrupoPuntos({ filas, jornadas, nombre, estiloFila }) {
   );
 }
 
-function AdminCompeticiones({ federacion, participantes, actorNombre }) {
+// ── Tandas de penaltis (partidos sueltos de torneos) ────────────
+// Ver reglas en supabase_penaltis_tanda.sql. Se calculan con la jornada ya
+// archivada: alineaciones_snapshot trae, por jugador, sus puntos (sin el
+// doble del capitán), si jugó y su orden de penaltis.
+const POS_ORDEN_PENALTI = { DEL: 0, MED: 1, DEF: 2, POR: 3 };
+const PENALTIS_MAX = 11;
+
+// Lista de 11 lanzadores de un equipo (null = hueco: cuenta como fallo).
+// Titulares que jugaron, por su orden de penaltis (los que no tienen orden,
+// detrás: DEL → MED → DEF → POR y por nombre); los que no jugaron se quitan
+// y el resto sube. Después, los suplentes que entraron, por orden de banquillo.
+// `noJugo` = Set de jornada_no_jugo (un titular sin sustituto sigue con
+// jugo=true en el archivo, pero no lanza).
+function listaLanzadores(datos, noJugo) {
+  const ds = (datos || []).filter(d => d.jugo && !noJugo.has(d.jugador_id));
+  const pos = d => POS_ORDEN_PENALTI[d.posicion_usada || d.posicion] ?? 9;
+  const tit = ds.filter(d => d.es_titular).sort((a, b) =>
+    (a.orden_penalti ?? 99) - (b.orden_penalti ?? 99) || pos(a) - pos(b) || (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+  const sup = ds.filter(d => !d.es_titular).sort((a, b) => (a.orden_suplente ?? 99) - (b.orden_suplente ?? 99));
+  const lista = [...tit, ...sup].slice(0, PENALTIS_MAX).map(d => ({ id: d.jugador_id, nombre: d.nombre, pts: Number(d.pts) || 0 }));
+  while (lista.length < PENALTIS_MAX) lista.push(null);
+  return lista;
+}
+
+// Simula la tanda. lanzL/lanzV: listas de listaLanzadores. ptsEq/acum:
+// { L, V } con los puntos fantasy de la jornada (sin ventaja de campo) y los
+// acumulados en la Liga Fantástica hasta la jornada. sorteoPrevio: 'L'|'V'
+// si un cálculo anterior ya se decidió por sorteo (se mantiene).
+function simularTandaPenaltis({ lanzL, lanzV, n, umbral, ptsEq, acum, sorteoPrevio }) {
+  const tiros = [];
+  let gl = 0, gv = 0;
+  const tirar = (lado, i, turno) => {
+    const p = (lado === 'L' ? lanzL : lanzV)[i];
+    const gol = !!p && p.pts >= umbral;
+    tiros.push({ lado, turno, orden: i + 1, id: p?.id ?? null, nombre: p?.nombre ?? null, pts: p?.pts ?? 0, gol });
+    if (gol) { if (lado === 'L') gl++; else gv++; }
+    return gol;
+  };
+  // Lanzamientos fijos, cortando en cuanto uno ya no puede alcanzar al otro.
+  const decidido = (remL, remV) => gl + remL < gv || gv + remV < gl;
+  for (let i = 0; i < n; i++) {
+    tirar('L', i, i + 1);
+    if (decidido(n - i - 1, n - i)) break;
+    tirar('V', i, i + 1);
+    if (decidido(n - i - 1, n - i - 1)) break;
+  }
+  const res = desempate => ({ gl, gv, ganador: desempate?.ganador || (gl > gv ? 'L' : 'V'), tiros, desempate: desempate || null });
+  if (gl !== gv) return res();
+  // Muerte súbita: del lanzador n+1 al 11 y la lista vuelve a empezar. Como
+  // los puntos no cambian, si las 11 parejas aciertan o fallan a la vez no
+  // acabaría nunca: entonces se desempata.
+  for (let k = 0; k < PENALTIS_MAX; k++) {
+    const i = (n + k) % PENALTIS_MAX;
+    const a = tirar('L', i, n + k + 1), b = tirar('V', i, n + k + 1);
+    if (a !== b) return res();
+  }
+  for (let i = 0; i < PENALTIS_MAX; i++) {
+    const a = lanzL[i]?.pts ?? 0, b = lanzV[i]?.pts ?? 0;
+    if (a !== b) return res({ criterio: 'lanzadores', orden: i + 1, L: a, V: b, ganador: a > b ? 'L' : 'V' });
+  }
+  if (ptsEq.L !== ptsEq.V) return res({ criterio: 'puntos', L: ptsEq.L, V: ptsEq.V, ganador: ptsEq.L > ptsEq.V ? 'L' : 'V' });
+  if (acum.L !== acum.V) return res({ criterio: 'liga', L: acum.L, V: acum.V, ganador: acum.L > acum.V ? 'L' : 'V' });
+  return res({ criterio: 'sorteo', ganador: sorteoPrevio || (Math.random() < 0.5 ? 'L' : 'V') });
+}
+
+// Calcula la tanda de un partido suelto empatado. ptsEq = { pid: pts } de
+// puntosTorneoJornada (sin ventaja de campo). Devuelve las columnas de
+// partidos_competicion, o null si la jornada aún no está archivada.
+async function calcularTandaPartido(fed, m, ptsEq) {
+  const j = m.jornada_fantasy;
+  const L = m.participante_local_id, V = m.participante_visitante_id;
+  const [rS, rN, rC] = await Promise.all([
+    sb.from('alineaciones_snapshot').select('participante_id, datos').eq('federacion_id', fed.id).eq('jornada', j).in('participante_id', [L, V]),
+    sb.from('jornada_no_jugo').select('jugador_id').eq('federacion_id', fed.id).eq('jornada', j),
+    sb.from('clasificacion').select('participante_id, puntos_jornada').in('participante_id', [L, V]).lte('jornada', j),
+  ]);
+  const err = rS.error || rN.error || rC.error;
+  if (err) throw new Error(err.message);
+  if (!rS.data?.length) return null;
+  const noJugo = new Set((rN.data || []).map(r => r.jugador_id));
+  const datos = pid => rS.data.find(s => s.participante_id === pid)?.datos || [];
+  const acum = { L: 0, V: 0 };
+  (rC.data || []).forEach(r => { acum[r.participante_id === L ? 'L' : 'V'] += Number(r.puntos_jornada) || 0; });
+  const n = Math.min(PENALTIS_MAX, Math.max(1, Number(fed.penaltis_lanzamientos) || 5));
+  const umbral = fed.penaltis_umbral != null ? Number(fed.penaltis_umbral) : 6;
+  const t = simularTandaPenaltis({
+    lanzL: listaLanzadores(datos(L), noJugo), lanzV: listaLanzadores(datos(V), noJugo), n, umbral,
+    ptsEq: { L: Number(ptsEq[L]) || 0, V: Number(ptsEq[V]) || 0 }, acum,
+    sorteoPrevio: m.penaltis_detalle?.desempate?.criterio === 'sorteo' ? m.penaltis_ganador : null,
+  });
+  return { penaltis_local: t.gl, penaltis_visitante: t.gv, penaltis_ganador: t.ganador,
+           penaltis_detalle: { n, umbral, tiros: t.tiros, desempate: t.desempate } };
+}
+
+// "(4–3 pen.)" o, si la tanda quedó igualada y decidió un desempate,
+// "(5–5 pen., pasa X)". '' si el partido no tiene tanda.
+function textoPenaltis(m, nombre, sep = '–') {
+  if (m.penaltis_local == null || m.penaltis_visitante == null) return '';
+  const base = `${m.penaltis_local}${sep}${m.penaltis_visitante} pen.`;
+  if (m.penaltis_local !== m.penaltis_visitante || !m.penaltis_ganador) return `(${base})`;
+  return `(${base}, pasa ${nombre(m.penaltis_ganador === 'L' ? m.participante_local_id : m.participante_visitante_id)})`;
+}
+
+// Empate en una fase con penaltis cuya tanda aún no está calculada.
+const penaltisPendientes = (m, fase) =>
+  !!fase?.penaltis && m.goles_local != null && m.goles_local === m.goles_visitante && m.penaltis_local == null;
+
+function textoDesempateTanda(d, ganadorNom, jornada) {
+  if (!d) return '';
+  if (d.criterio === 'lanzadores') return `${ganadorNom} pasa: en la segunda vuelta de la lista, su lanzador n.º ${d.orden} hizo más puntos (${fmtPtsCronica(d.L)} a ${fmtPtsCronica(d.V)}).`;
+  if (d.criterio === 'puntos')     return `${ganadorNom} pasa por más puntos fantasy en la jornada (${fmtPtsCronica(d.L)} a ${fmtPtsCronica(d.V)}).`;
+  if (d.criterio === 'liga')       return `${ganadorNom} pasa por más puntos en la Liga Fantástica hasta la J${jornada} (${fmtPtsCronica(d.L)} a ${fmtPtsCronica(d.V)}).`;
+  return `${ganadorNom} pasa por sorteo (empate en todos los criterios).`;
+}
+
+// Detalle desplegable de la tanda, tiro a tiro.
+function DetalleTanda({ m, nombre }) {
+  const d = m.penaltis_detalle;
+  if (!d || m.penaltis_local == null) return null;
+  const turnos = [];
+  (d.tiros || []).forEach(t => {
+    let r = turnos.find(x => x.turno === t.turno);
+    if (!r) turnos.push(r = { turno: t.turno });
+    r[t.lado] = t;
+  });
+  const gan = m.penaltis_ganador === 'L' ? m.participante_local_id : m.participante_visitante_id;
+  const celda = t => !t ? <span style={{color:'var(--texto2)'}}>—</span> : (
+    <span>{t.gol ? '✅' : '❌'} {t.nombre || <em style={{color:'var(--texto2)'}}>sin lanzador</em>}
+      {t.nombre && <span style={{color:'var(--texto2)'}}> · {fmtPtsCronica(t.pts)} pts</span>}</span>
+  );
+  const td = { padding:'.18rem .4rem', borderTop:'1px solid var(--gris)' };
+  return (
+    <details style={{fontSize:'.78rem', margin:'.1rem 0 .35rem'}}>
+      <summary style={{cursor:'pointer', color:'var(--texto2)'}}>🥅 Tanda de penaltis {m.penaltis_local}–{m.penaltis_visitante}</summary>
+      {d.manual
+        ? <p style={{margin:'.3rem 0', color:'var(--texto2)'}}>Marcador introducido a mano por el admin.</p>
+        : <div style={{overflowX:'auto'}}>
+            <table style={{borderCollapse:'collapse', margin:'.3rem 0', fontSize:'.78rem'}}>
+              <thead><tr>
+                <th style={{textAlign:'left', padding:'.18rem .4rem', color:'var(--texto2)'}}>#</th>
+                <th style={{textAlign:'left', padding:'.18rem .4rem'}}>{nombre(m.participante_local_id)}</th>
+                <th style={{textAlign:'left', padding:'.18rem .4rem'}}>{nombre(m.participante_visitante_id)}</th>
+              </tr></thead>
+              <tbody>{turnos.map(r => (
+                <tr key={r.turno}>
+                  <td style={{...td, color:'var(--texto2)', whiteSpace:'nowrap'}}>{r.turno}{r.turno > d.n ? ' · MS' : ''}</td>
+                  <td style={td}>{celda(r.L)}</td>
+                  <td style={td}>{celda(r.V)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+            <p style={{margin:'.1rem 0', color:'var(--texto2)'}}>
+              Gol con {fmtPtsCronica(d.umbral)} pts o más · {d.n} lanzamientos y después muerte súbita (MS).
+            </p>
+            {d.desempate && <p style={{margin:'.1rem 0', fontWeight:600}}>{textoDesempateTanda(d.desempate, nombre(gan), m.jornada_fantasy)}</p>}
+          </div>}
+    </details>
+  );
+}
+
+function AdminCompeticiones({ federacion, participantes, actorNombre, onFederacionUpdate }) {
   const fedId  = federacion?.id;
   const baremo = useMemo(() => {
     try { return JSON.parse(federacion?.h2h_baremo||'null')||BAREMO_DEFAULT; }
@@ -12820,6 +12980,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
   // ── Calcular resultado de un partido suelto ─────────────────
   const calcularSuelto = async m => {
     if (!m.jornada_fantasy) { flash('Asigna una jornada al partido antes de calcular'); return; }
+    if (m.penaltis_detalle?.manual && faseAct?.penaltis
+        && !confirm('Este partido tiene la tanda de penaltis escrita a mano. Si sigue en empate, se sustituirá por la tanda calculada. ¿Continuar?')) return;
     setBusy(true);
     const pids = [m.participante_local_id, m.participante_visitante_id];
     let ptsMap;
@@ -12830,23 +12992,90 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
     const [gL, gV] = esPuntos
       ? [Math.round((ptsMap[m.participante_local_id]??0) + ptsLocal), Math.round(ptsMap[m.participante_visitante_id]??0)]
       : [ptsToGoles((ptsMap[m.participante_local_id]??0) + ptsLocal, baremo), ptsToGoles(ptsMap[m.participante_visitante_id]??0, baremo)];
+    // Tanda de penaltis: empate en una fase con penaltis y jornada archivada.
+    // Si deja de haber empate (recálculo), la tanda anterior se borra.
+    const SIN_PEN = { penaltis_local: null, penaltis_visitante: null, penaltis_ganador: null, penaltis_detalle: null };
+    let pen = SIN_PEN, penPendiente = false;
+    const conTanda = !!faseAct?.penaltis && gL === gV;
+    if (conTanda) {
+      try { pen = await calcularTandaPartido({ ...federacion, ...penCfgGuardada }, m, ptsMap) || SIN_PEN; }
+      catch (e) { flash('Error: ' + e.message); setBusy(false); return; }
+      penPendiente = pen === SIN_PEN;
+    }
+    const tocaPen = conTanda || m.penaltis_local != null || m.penaltis_detalle != null;
+    const cambiaPen = tocaPen && (pen.penaltis_local !== (m.penaltis_local ?? null) || pen.penaltis_visitante !== (m.penaltis_visitante ?? null)
+      || pen.penaltis_ganador !== (m.penaltis_ganador ?? null) || !!m.penaltis_detalle?.manual);
     // Recalcular: el partido ya tenía resultado (se sobrescribe con los puntos actuales).
     const recalculo = m.goles_local != null;
-    if (recalculo && gL === m.goles_local && gV === m.goles_visitante) {
-      flash(`Sin cambios: ${gL} — ${gV}`); setBusy(false); return;
-    }
-    const { error } = await sb.from('partidos_competicion').update({goles_local:gL,goles_visitante:gV}).eq('id',m.id);
-    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
-    setPartidos(p=>p.map(x=>x.id===m.id?{...x,goles_local:gL,goles_visitante:gV}:x));
+    const nuevo = { ...m, goles_local: gL, goles_visitante: gV, ...(tocaPen ? pen : {}) };
     const nomL = nomMap[m.participante_local_id] || 'Local';
     const nomV = nomMap[m.participante_visitante_id] || 'Visitante';
+    const nomPid = pid => nomMap[pid] || '?';
+    const txtPen = penPendiente ? ` (penaltis pendientes del cierre de la J${m.jornada_fantasy})` : (tocaPen && textoPenaltis(nuevo, nomPid) ? ` ${textoPenaltis(nuevo, nomPid)}` : '');
+    if (recalculo && gL === m.goles_local && gV === m.goles_visitante && !cambiaPen) {
+      flash(`Sin cambios: ${gL} — ${gV}${txtPen}`); setBusy(false); return;
+    }
+    const { error } = await sb.from('partidos_competicion').update({ goles_local: gL, goles_visitante: gV, ...(tocaPen ? pen : {}) }).eq('id', m.id);
+    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+    setPartidos(p => p.map(x => x.id === m.id ? nuevo : x));
     const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomL} vs ${nomV}`;
+    const antes = `${m.goles_local}–${m.goles_visitante}${textoPenaltis(m, nomPid) ? ` ${textoPenaltis(m, nomPid)}` : ''}`;
+    const desemp = pen.penaltis_detalle?.desempate
+      ? ` ${textoDesempateTanda(pen.penaltis_detalle.desempate, nomPid(pen.penaltis_ganador === 'L' ? m.participante_local_id : m.participante_visitante_id), m.jornada_fantasy)}` : '';
     publicar(fedId, 'admin', recalculo
-      ? `Resultado recalculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV} (antes ${m.goles_local}–${m.goles_visitante}).`
-      : `Resultado calculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}.`, actorNombre);
+      ? `Resultado recalculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}${txtPen} (antes ${antes}).${desemp}`
+      : `Resultado calculado — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${gL}–${gV}${txtPen}.${desemp}`, actorNombre);
     resolverQuinielaJornada(federacion, m.jornada_fantasy);
-    flash(`${recalculo ? 'Recalculado' : 'Calculado'}: ${gL} — ${gV}`);
+    flash(`${recalculo ? 'Recalculado' : 'Calculado'}: ${gL} — ${gV}${txtPen}`);
     setBusy(false);
+  };
+
+  // ── Penaltis: marcador a mano (p. ej. si a un jugador le faltan puntos) ──
+  const penaltisManual = async m => {
+    const actual = m.penaltis_local != null ? `${m.penaltis_local}-${m.penaltis_visitante}` : '';
+    const txt = window.prompt(`Marcador de la tanda (local-visitante), p. ej. 4-3.\n${nomMap[m.participante_local_id] || 'Local'} vs ${nomMap[m.participante_visitante_id] || 'Visitante'}`, actual);
+    if (txt == null) return;
+    const mt = txt.trim().match(/^(\d{1,2})\s*[-–]\s*(\d{1,2})$/);
+    if (!mt) { flash('Error: escribe el marcador como 4-3'); return; }
+    const pl = parseInt(mt[1]), pv = parseInt(mt[2]);
+    if (pl === pv) { flash('Error: la tanda no puede acabar en empate'); return; }
+    const pen = { penaltis_local: pl, penaltis_visitante: pv, penaltis_ganador: pl > pv ? 'L' : 'V', penaltis_detalle: { manual: true } };
+    setBusy(true);
+    const { error } = await sb.from('partidos_competicion').update(pen).eq('id', m.id);
+    setBusy(false);
+    if (error) { flash('Error: ' + error.message); return; }
+    setPartidos(p => p.map(x => x.id === m.id ? { ...x, ...pen } : x));
+    const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomMap[m.participante_local_id] || 'Local'} vs ${nomMap[m.participante_visitante_id] || 'Visitante'}`;
+    publicar(fedId, 'admin', `Tanda de penaltis corregida a mano — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${m.goles_local}–${m.goles_visitante} (${pl}–${pv} pen.).`, actorNombre);
+    flash(`Penaltis guardados: ${pl}–${pv}`);
+  };
+
+  // ── Penaltis: activación por fase y configuración de la federación ──
+  const togglePenaltisFase = async () => {
+    const val = !faseAct?.penaltis;
+    const { error } = await sb.from('fases_competicion').update({ penaltis: val }).eq('id', faseSel);
+    if (error) { flash('Error: ' + (/penaltis/.test(error.message) ? 'falta ejecutar supabase_penaltis_tanda.sql en Supabase.' : error.message)); return; }
+    setFases(prev => prev.map(f => f.id === faseSel ? { ...f, penaltis: val } : f));
+    flash(val ? 'Penaltis activados en esta fase' : 'Penaltis desactivados en esta fase');
+  };
+  // Lo guardado (para calcular aunque el padre aún no tenga la federación nueva) y lo que se edita.
+  const [penCfgGuardada, setPenCfgGuardada] = useState({});
+  const [penCfg, setPenCfg] = useState({ n: '', umbral: '' });
+  useEffect(() => {
+    setPenCfgGuardada({});
+    setPenCfg({ n: String(federacion?.penaltis_lanzamientos ?? 5), umbral: String(federacion?.penaltis_umbral ?? 6) });
+  }, [federacion?.penaltis_lanzamientos, federacion?.penaltis_umbral]);
+  const guardarPenCfg = async () => {
+    const n = parseInt(penCfg.n), umbral = Number(String(penCfg.umbral).replace(',', '.'));
+    if (!(n >= 1 && n <= PENALTIS_MAX)) { flash(`Error: los lanzamientos van de 1 a ${PENALTIS_MAX}`); return; }
+    if (!Number.isFinite(umbral)) { flash('Error: umbral no válido'); return; }
+    const { data, error } = await sb.from('federaciones').update({ penaltis_lanzamientos: n, penaltis_umbral: umbral })
+      .eq('id', fedId).select('id');
+    if (error) { flash('Error: ' + (/penaltis/.test(error.message) ? 'falta ejecutar supabase_penaltis_tanda.sql en Supabase.' : error.message)); return; }
+    if (!data?.length) { flash('Error: solo el admin de la liga puede cambiar esta configuración'); return; }
+    setPenCfgGuardada({ penaltis_lanzamientos: n, penaltis_umbral: umbral });
+    onFederacionUpdate?.({ ...federacion, penaltis_lanzamientos: n, penaltis_umbral: umbral });
+    flash(`Penaltis: ${n} lanzamientos, gol con ${fmtPtsCronica(umbral)} pts o más`);
   };
 
   // ── Copiar resultados de una jornada (partidos sueltos) ──────
@@ -12874,10 +13103,12 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
       const nV = nomMap[m.participante_visitante_id] || '—';
       const gL = m.goles_local ?? '?';
       const gV = m.goles_visitante ?? '?';
-      if (esPuntos) { lineas.push(`${i + 1}. ${nL} ${gL} - ${gV} ${nV}`); return; }
+      const pen = textoPenaltis(m, pid => nomMap[pid] || '—', '-');
+      const tPen = pen ? ` ${pen}` : penaltisPendientes(m, faseAct) ? ' (penaltis pendientes)' : '';
+      if (esPuntos) { lineas.push(`${i + 1}. ${nL} ${gL} - ${gV} ${nV}${tPen}`); return; }
       const pL = ptsMap[m.participante_local_id]    != null ? Math.round(ptsMap[m.participante_local_id] + ptsLocal) : '?';
       const pV = ptsMap[m.participante_visitante_id] != null ? Math.round(ptsMap[m.participante_visitante_id]) : '?';
-      lineas.push(`${i + 1}. ${nL} ${gL} (${pL}) - ${gV} (${pV}) ${nV}`);
+      lineas.push(`${i + 1}. ${nL} ${gL} (${pL}) - ${gV} (${pV}) ${nV}${tPen}`);
     });
     setBusy(false);
     try {
@@ -12937,7 +13168,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
             <span style={{flex:1}}>
               <strong>{f.nombre}</strong>
               <span style={{marginLeft:'.5rem', fontSize:'.78rem', color:'var(--texto2)'}}>
-                {f.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{f.modo==='puntos' ? ' · Liga Fantástica' : ''}
+                {f.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{f.modo==='puntos' ? ' · Liga Fantástica' : ''}{f.penaltis && f.tipo==='sueltos' ? ' · 🥅 Penaltis' : ''}
               </span>
             </span>
             <button style={sBtn} onClick={()=>setFaseSel(f.id)}>Gestionar</button>
@@ -13123,6 +13354,34 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
 
       {/* Fase de partidos sueltos */}
       {faseSel && faseAct?.tipo==='sueltos' && (<>
+        <div style={{padding:'.55rem .75rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)', marginBottom:'.75rem'}}>
+          <label style={{display:'flex', alignItems:'center', gap:'.45rem', fontSize:'.85rem', fontWeight:600, cursor:'pointer'}}>
+            <input type="checkbox" checked={!!faseAct?.penaltis} onChange={togglePenaltisFase} />
+            🥅 Tanda de penaltis si el partido acaba en empate
+          </label>
+          {faseAct?.penaltis && (<>
+            <div style={{fontSize:'.78rem', color:'var(--texto2)', margin:'.35rem 0 .45rem'}}>
+              Se calcula con ▶ Calcular / ↻ cuando la jornada está cerrada y archivada. Lanza primero el local; gol si el lanzador
+              hace los puntos indicados (sin el doble del capitán). Orden: el de penaltis de cada equipo (los titulares que no jugaron
+              se quitan), después los suplentes que entraron. Tras los lanzamientos fijos, muerte súbita hasta el 11.º y vuelta a empezar.
+              Si no se puede decidir: puntos de cada pareja de lanzadores, puntos fantasy de la jornada, puntos en la Liga Fantástica y sorteo.
+              El 1·X·2 de la quiniela no cambia (un empate es X). ✎ permite escribir el marcador a mano.
+            </div>
+            <div style={{display:'flex', alignItems:'center', gap:'.45rem', flexWrap:'wrap', fontSize:'.82rem'}}>
+              <span>Lanzamientos antes de muerte súbita:</span>
+              <input type="number" min="1" max={PENALTIS_MAX} value={penCfg.n} onChange={e => setPenCfg(c => ({ ...c, n: e.target.value }))}
+                     style={{...inp, width:58, textAlign:'center', padding:'.26rem .35rem'}} />
+              <span>Gol con</span>
+              <input type="number" step="0.5" value={penCfg.umbral} onChange={e => setPenCfg(c => ({ ...c, umbral: e.target.value }))}
+                     style={{...inp, width:62, textAlign:'center', padding:'.26rem .35rem'}} />
+              <span>pts o más</span>
+              <button style={{...sBtn, marginLeft:'auto'}} onClick={guardarPenCfg}>Guardar</button>
+            </div>
+            <div style={{fontSize:'.74rem', color:'var(--texto2)', fontStyle:'italic', marginTop:'.3rem'}}>
+              Común a todos los torneos de la liga; solo lo cambia el admin. Las tandas ya calculadas no cambian hasta pulsar ↻.
+            </div>
+          </>)}
+        </div>
         {partidos.length===0 && <p style={{color:'var(--texto2)', marginBottom:'.75rem'}}>Sin partidos aún.</p>}
         {jornadasSueltos.length>0 && (
           <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.6rem'}}>
@@ -13152,6 +13411,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                     <span style={{fontWeight:600}}>{nomMap[m.participante_local_id]}</span>
                     <span style={{color:'var(--texto2)',margin:'0 .3rem'}}>vs</span>
                     <span style={{fontWeight:600}}>{nomMap[m.participante_visitante_id]}</span>
+                    <DetalleTanda m={m} nombre={pid => nomMap[pid] || '?'} />
                   </td>
                   <td style={{textAlign:'center',padding:'.35rem .5rem'}}>
                     <input type="number" min="1" placeholder="—" defaultValue={m.jornada_fantasy||''}
@@ -13162,9 +13422,21 @@ function AdminCompeticiones({ federacion, participantes, actorNombre }) {
                     {m.goles_local!=null
                       ? <span style={{display:'inline-flex',alignItems:'center',gap:'.4rem'}}>
                           <span style={{fontWeight:700,fontSize:'.88rem'}}>{m.goles_local}—{m.goles_visitante}</span>
+                          {m.penaltis_local != null && (
+                            <span style={{fontSize:'.76rem', fontWeight:600}} title={m.penaltis_detalle?.manual ? 'Marcador escrito a mano' : 'Tanda de penaltis'}>
+                              {textoPenaltis(m, pid => nomMap[pid] || '?')}{m.penaltis_detalle?.manual ? ' ✎' : ''}
+                            </span>
+                          )}
+                          {penaltisPendientes(m, faseAct) && (
+                            <span style={{fontSize:'.74rem', color:'var(--texto2)'}} title="Se calculan con ↻ cuando la jornada esté cerrada y archivada">pen. pendientes</span>
+                          )}
                           <button disabled={busy||!m.jornada_fantasy} title="Recalcular el resultado con los puntos actuales"
                             style={{...sBtn,fontSize:'.72rem',padding:'.15rem .45rem',opacity:m.jornada_fantasy?1:.45}}
                             onClick={()=>calcularSuelto(m)}>↻</button>
+                          {faseAct?.penaltis && m.goles_local === m.goles_visitante && (
+                            <button disabled={busy} title="Escribir a mano el marcador de la tanda de penaltis"
+                              style={{...sBtn,fontSize:'.72rem',padding:'.15rem .45rem'}} onClick={()=>penaltisManual(m)}>✎</button>
+                          )}
                         </span>
                       : <button disabled={busy||!m.jornada_fantasy} style={{...sBtn,fontSize:'.75rem',opacity:m.jornada_fantasy?1:.45}} onClick={()=>calcularSuelto(m)}>▶ Calcular</button>
                     }
@@ -14008,7 +14280,7 @@ function AdminPanel({ participantes, federacion, onFederacionUpdate, onParticipa
       {subtab === 'mercado'     && <AdminMercadoGroup participantes={participantes} federacion={federacion} actorNombre={actorNombre} />}
       {subtab === 'jugadores'   && <AdminJugadores participantes={participantes} federacion={federacion} actorNombre={actorNombre} esAdminPlataforma={esAdminPlataforma} />}
       {subtab === 'h2h'         && <AdminLigaH2H federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} isModerador={isModerador} actorNombre={actorNombre} />}
-      {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} actorNombre={actorNombre} />}
+      {subtab === 'torneos'     && <AdminCompeticiones federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
       {subtab === 'quiniela'    && <AdminQuiniela federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
       {subtab === 'plataforma'  && esAdminPlataforma && <AdminPlataforma actorNombre={actorNombre} />}
       {subtab === 'palmares'    && <AdminPalmares federacion={federacion} participantes={participantes} onFederacionUpdate={onFederacionUpdate} actorNombre={actorNombre} />}
@@ -14232,7 +14504,9 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
       } else {
         secciones.push({ titulo: fase.nombre, lineas: partidos.filter(p => p.fase_id === fase.id).map(m => {
           const res = resPartido(m);
-          return `${m.nombre ? `${m.nombre}: ` : ''}${nom(m.participante_local_id)} ${res ? `*${fmtNumWA(res.gL)}-${fmtNumWA(res.gV)}*` : 'vs'} ${nom(m.participante_visitante_id)}${!res && m.jornada_fantasy ? ` _(J${m.jornada_fantasy})_` : ''}`;
+          const pen = textoPenaltis(m, nom, '-');
+          const tPen = pen ? ` ${pen}` : penaltisPendientes(m, fase) ? ' _(penaltis pendientes)_' : '';
+          return `${m.nombre ? `${m.nombre}: ` : ''}${nom(m.participante_local_id)} ${res ? `*${fmtNumWA(res.gL)}-${fmtNumWA(res.gV)}*` : 'vs'} ${nom(m.participante_visitante_id)}${tPen}${!res && m.jornada_fantasy ? ` _(J${m.jornada_fantasy})_` : ''}`;
         }) });
       }
     });
@@ -14248,7 +14522,10 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
         </button>
         {isAdmin && <button onClick={() => {
           // ── Hoja Calendario ──
-          const calHeader = ['Fase', 'Grupo', 'Ronda', 'J. Fantasy', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante'];
+          const calHeader = ['Fase', 'Grupo', 'Ronda', 'J. Fantasy', 'Local', 'Goles Local', 'Goles Visitante', 'Visitante', 'Penaltis'];
+          const penXls = m => m.penaltis_local == null ? '' : `${m.penaltis_local}-${m.penaltis_visitante}${
+            m.penaltis_local === m.penaltis_visitante && m.penaltis_ganador
+              ? ` (pasa ${nomMap[m.penaltis_ganador === 'L' ? m.participante_local_id : m.participante_visitante_id]?.nombre || '?'})` : ''}`;
           const calRows = [];
           fases.forEach(fase => {
             if (fase.tipo === 'grupos') {
@@ -14271,6 +14548,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                   nomMap[m.participante_local_id]?.nombre || '?',
                   m.goles_local ?? '', m.goles_visitante ?? '',
                   nomMap[m.participante_visitante_id]?.nombre || '?',
+                  penXls(m),
                 ]);
               });
             }
@@ -14326,7 +14604,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
             <span>{fase.nombre}</span>
             <span style={{fontSize:'.74rem',color:'var(--texto2)',fontWeight:400}}>
-              {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{fase.modo==='puntos' ? ' · Liga Fantástica' : ''}
+              {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{fase.modo==='puntos' ? ' · Liga Fantástica' : ''}{fase.penaltis && fase.tipo==='sueltos' ? ' · 🥅 Penaltis si hay empate' : ''}
             </span>
             {(fase.pts_local??0)>0 && (
               <span style={{fontSize:'.72rem',background:'rgba(15,80,180,0.15)',
@@ -14433,22 +14711,29 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                 ? <p style={{color:'var(--texto2)',fontSize:'.85rem'}}>Sin partidos.</p>
                 : partidos.filter(p=>p.fase_id===fase.id).map(m=>{
                   const res=resPartido(m);
+                  const nomPid = pid => nomMap[pid]?.nombre || '?';
+                  const pen = textoPenaltis(m, nomPid);
                   return (
-                    <div key={m.id} style={{display:'flex',alignItems:'center',gap:'.4rem',
-                      padding:'.38rem .5rem',borderRadius:7,border:'1px solid var(--gris)',
-                      marginBottom:'.3rem',fontSize:'.85rem',
-                      background:res?'var(--fondo-med)':'var(--fondo-sub)'}}>
-                      {m.nombre&&<span style={{fontSize:'.74rem',color:'var(--texto2)',minWidth:70,flexShrink:0}}>{m.nombre}</span>}
-                      <span style={{flex:1,textAlign:'right',fontWeight:600}}><Equipo pid={m.participante_local_id} /></span>
-                      <span style={{fontWeight:800,fontSize:res?'.92rem':'.85rem',minWidth:60,textAlign:'center',
-                        color:res?'var(--texto)':'var(--texto2)'}}>
-                        {res?`${res.gL} — ${res.gV}`:'vs'}
-                      </span>
-                      <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
-                      <span style={{fontSize:'.74rem',fontWeight:700,
-                        color:m.jornada_fantasy?'var(--verde)':'var(--texto2)',whiteSpace:'nowrap'}}>
-                        {m.jornada_fantasy?`J${m.jornada_fantasy}`:'TBD'}
-                      </span>
+                    <div key={m.id} style={{marginBottom:'.3rem'}}>
+                      <div style={{display:'flex',alignItems:'center',gap:'.4rem',
+                        padding:'.38rem .5rem',borderRadius:7,border:'1px solid var(--gris)',
+                        fontSize:'.85rem',
+                        background:res?'var(--fondo-med)':'var(--fondo-sub)'}}>
+                        {m.nombre&&<span style={{fontSize:'.74rem',color:'var(--texto2)',minWidth:70,flexShrink:0}}>{m.nombre}</span>}
+                        <span style={{flex:1,textAlign:'right',fontWeight:600}}><Equipo pid={m.participante_local_id} /></span>
+                        <span style={{fontWeight:800,fontSize:res?'.92rem':'.85rem',minWidth:60,textAlign:'center',
+                          color:res?'var(--texto)':'var(--texto2)'}}>
+                          {res?`${res.gL} — ${res.gV}`:'vs'}
+                          {pen && <span style={{display:'block',fontSize:'.72rem',fontWeight:600,color:'var(--texto2)'}}>{pen}</span>}
+                          {penaltisPendientes(m, fase) && <span style={{display:'block',fontSize:'.7rem',fontWeight:500,color:'var(--texto2)'}}>pen. pendientes</span>}
+                        </span>
+                        <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
+                        <span style={{fontSize:'.74rem',fontWeight:700,
+                          color:m.jornada_fantasy?'var(--verde)':'var(--texto2)',whiteSpace:'nowrap'}}>
+                          {m.jornada_fantasy?`J${m.jornada_fantasy}`:'TBD'}
+                        </span>
+                      </div>
+                      <div style={{paddingLeft:'.5rem'}}><DetalleTanda m={m} nombre={nomPid} /></div>
                     </div>
                   );
                 })}
@@ -15569,9 +15854,12 @@ function resumenPalmares(datos, federacion, participantes) {
 }
 
 // ── Cálculo automático al cerrar la temporada ──────────────────
-const ganadorPartidoTorneo = m =>
-  m.goles_local == null || m.goles_visitante == null || m.goles_local === m.goles_visitante ? null
-    : m.goles_local > m.goles_visitante ? m.participante_local_id : m.participante_visitante_id;
+// Empate con tanda de penaltis: gana penaltis_ganador ('L' | 'V').
+const ganadorPartidoTorneo = m => {
+  if (m.goles_local == null || m.goles_visitante == null) return null;
+  if (m.goles_local !== m.goles_visitante) return m.goles_local > m.goles_visitante ? m.participante_local_id : m.participante_visitante_id;
+  return m.penaltis_ganador === 'L' ? m.participante_local_id : m.penaltis_ganador === 'V' ? m.participante_visitante_id : null;
+};
 
 // Ronda alcanzada por cada equipo de un torneo: la de la fase más avanzada que
 // jugó. En la fase final (una final suelta o un único grupo) se decide campeón
@@ -15725,7 +16013,7 @@ async function calcularPalmaresTemporada(federacion, participantes) {
       const [rG, rP] = await Promise.all([
         sb.from('grupos_competicion').select('id, fase_id').in('fase_id', faseIds),
         obtenerTodasLasFilas(() => sb.from('partidos_competicion')
-          .select('id, fase_id, participante_local_id, participante_visitante_id, goles_local, goles_visitante').in('fase_id', faseIds).order('id')),
+          .select('id, fase_id, participante_local_id, participante_visitante_id, goles_local, goles_visitante, penaltis_ganador').in('fase_id', faseIds).order('id')),
       ]);
       if (rG.error || rP.error) throw rG.error || rP.error;
       gs = rG.data || []; ps = rP.data || [];
@@ -20318,7 +20606,8 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Posiciones', 'Puedes colocar a cualquier jugador en cualquier posición dentro de tu alineación fantasy (no hay restricciones tácticas). Los puntos se calculan según el rendimiento real del jugador, no su posición en tu equipo.'],
         ['Jugadores con doble posición', 'Si un jugador tiene una posición alternativa asignada por el admin, verás dos badges pulsables junto a su nombre cuando sea titular. Pulsa el que prefieras para elegir en qué posición computa ese jugador en tu formación. Los suplentes muestran ambas posiciones como referencia pero sin toggle.'],
         ['Guardar', 'La alineación se guarda por jornada. Puedes modificarla hasta que el admin cierre el plazo.'],
-        ['Lanzadores de penaltis', 'Debajo de la alineación puedes elegir en qué orden lanzarían los penaltis tus titulares (hasta los 11, por si hay muerte súbita): pulsa los jugadores en orden, ajústalo con ▲ ▼ y guarda la alineación. Es solo informativo: no afecta a los puntos ni a ningún resultado. Se guarda por jornada, se hereda como la alineación y todos los equipos pueden verlo en Equipos. Si un lanzador deja de ser titular, sale del orden y los siguientes suben un puesto.'],
+        ['Lanzadores de penaltis', 'Debajo de la alineación puedes elegir en qué orden lanzarían los penaltis tus titulares (hasta los 11, por si hay muerte súbita): pulsa los jugadores en orden, ajústalo con ▲ ▼ y guarda la alineación. No afecta a los puntos; se usa en las tandas de penaltis de los torneos (ver "Tandas de penaltis"). Se guarda por jornada, se hereda como la alineación y todos los equipos pueden verlo en Equipos. Si un lanzador deja de ser titular, sale del orden y los siguientes suben un puesto.'],
+        ['Tandas de penaltis', 'En las fases de partidos sueltos de un torneo con penaltis activados, un empate se decide en una tanda cuando la jornada está cerrada y archivada. Lanza primero el local; un lanzador marca si hace al menos los puntos que fija la liga (6 por defecto, sin el doble del capitán). Lanzan tus titulares que jugaron en tu orden de penaltis (los que no jugaron se quitan y los demás suben; los que no tienen orden van detrás) y después los suplentes que entraron. Tras los lanzamientos fijos (5 por defecto) hay muerte súbita hasta el 11.º y la lista vuelve a empezar. Si aun así no hay ganador, pasa el equipo cuyo lanzador hace más puntos en la primera pareja distinta, después el de más puntos fantasy en la jornada, después el de más puntos en la Liga Fantástica hasta esa jornada y, por último, sorteo. En la quiniela el empate sigue siendo X.'],
         ['Copia de jornada anterior', 'Si no has guardado alineación para la jornada actual, el sistema muestra la última registrada como referencia.'],
         ['Sustituciones automáticas', 'Si un jugador titular disputa 0 minutos, el sistema entra automáticamente al suplente disponible más prioritario (según el orden en que los colocaste en el banquillo) cuya posición sea compatible con alguna de las formaciones permitidas. Un suplente que también haya disputado 0 minutos nunca entra como sustituto. Si el suplente tiene doble posición, puede entrar en cualquiera de sus dos posiciones siempre que una encaje con la formación. Los porteros no participan en este mecanismo.'],
         ['Partidos aplazados', 'Si el partido de un equipo real queda aplazado, el admin lo marca y los jugadores afectados muestran el indicador ⏸ APL en tu alineación. Puedes cambiar esos jugadores aunque la jornada ya esté cerrada.'],

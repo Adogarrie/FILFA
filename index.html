@@ -12662,9 +12662,88 @@ function textoPenaltis(m, nombre, sep = '–') {
   return `(${base}, pasa ${nombre(m.penaltis_ganador === 'L' ? m.participante_local_id : m.participante_visitante_id)})`;
 }
 
-// Empate en una fase con penaltis cuya tanda aún no está calculada.
-const penaltisPendientes = (m, fase) =>
-  !!fase?.penaltis && m.goles_local != null && m.goles_local === m.goles_visitante && m.penaltis_local == null;
+// Empate que pide tanda y aún no la tiene. En eliminatorias depende de la
+// ronda (y en ida y vuelta, del global), por eso necesita sus partidos.
+const penaltisPendientes = (m, fase, partidos = []) => {
+  if (m.goles_local == null || m.goles_visitante == null || m.penaltis_local != null) return false;
+  if (fase?.tipo === 'eliminatoria') return requiereTandaElim(m, m.goles_local, m.goles_visitante, fase, partidos);
+  return !!fase?.penaltis && m.goles_local === m.goles_visitante;
+};
+
+// ── Eliminatorias ───────────────────────────────────────────────
+// Ver supabase_eliminatorias.sql. Una fase 'eliminatoria' tiene rondas
+// (fases_competicion.rondas) y cada ronda, cruces (cruces_competicion) con
+// uno (único) o dos partidos (ida y vuelta: la vuelta invierte la localía).
+const TIPOS_FASE = { grupos: 'Fase de grupos', sueltos: 'Partidos sueltos', eliminatoria: 'Eliminatoria' };
+const nombreRondaPorCruces = c => c <= 1 ? 'Final' : c === 2 ? 'Semifinales' : c <= 4 ? 'Cuartos de final'
+  : c <= 8 ? 'Octavos de final' : c <= 16 ? 'Dieciseisavos de final' : `Ronda de ${c * 2}`;
+const rondaElim = (fase, r) => (fase?.rondas || [])[r - 1] || null;
+const partidoJugado = m => !!m && m.goles_local != null && m.goles_visitante != null;
+const penGanadorId = m => m?.penaltis_ganador === 'L' ? m.participante_local_id : m?.penaltis_ganador === 'V' ? m.participante_visitante_id : null;
+// Goles (o puntos) de un equipo en un partido.
+const golesDe = (m, pid) => Number(pid === m.participante_local_id ? m.goles_local : m.goles_visitante);
+// Cruces que hay (o habrá, en cuadro fijo) en una ronda.
+const crucesEnRonda = (cruces, r) => Math.max(0, ...cruces.filter(c => c.ronda === r).map(c => c.posicion));
+
+// ¿Este partido de eliminatoria, con este resultado, se decide en penaltis?
+// Único: empate. Ida y vuelta: solo la vuelta, con el global empatado (y los
+// goles fuera, si cuentan). Siempre que la ronda tenga penaltis.
+function requiereTandaElim(m, gL, gV, fase, partidos) {
+  const ronda = rondaElim(fase, m.ronda);
+  if (!ronda?.penaltis) return false;
+  if (ronda.formato !== 'ida_vuelta') return gL === gV;
+  if (m.partido_n !== 2) return false;
+  const ida = partidos.find(x => x.cruce_id === m.cruce_id && x.partido_n === 1);
+  if (!partidoJugado(ida)) return false;
+  // En la vuelta el local es el visitante de la ida.
+  const totIda = Number(ida.goles_local) + Number(gV), totVuelta = Number(ida.goles_visitante) + Number(gL);
+  if (totIda !== totVuelta) return false;
+  if (fase.goles_fuera && fase.modo !== 'puntos' && Number(gV) !== Number(ida.goles_visitante)) return false;
+  return true;
+}
+
+// Resultado de un cruce con sus partidos actuales:
+// { estado: 'sin_equipos'|'pendiente'|'jugando'|'empate'|'decidido', ganador, via, global: [A, B] }
+// A = local del cruce (local en la ida), B = visitante.
+function resultadoCruce(c, partidos, fase) {
+  const A = c.local_id, B = c.visitante_id;
+  if (c.exento) return { estado: 'decidido', ganador: A, via: 'exento' };
+  if (c.ganador_manual && c.ganador_id) return { estado: 'decidido', ganador: c.ganador_id, via: 'manual' };
+  if (!A || !B) return { estado: 'sin_equipos', ganador: null };
+  const iv = rondaElim(fase, c.ronda)?.formato === 'ida_vuelta';
+  const ms = partidos.filter(m => m.cruce_id === c.id);
+  const p1 = ms.find(m => m.partido_n === 1), p2 = ms.find(m => m.partido_n === 2);
+  if (!iv) {
+    if (!partidoJugado(p1)) return { estado: 'pendiente', ganador: null };
+    const global = [golesDe(p1, A), golesDe(p1, B)];
+    if (global[0] !== global[1]) return { estado: 'decidido', ganador: global[0] > global[1] ? A : B, via: 'goles', global };
+    const pg = penGanadorId(p1);
+    return pg ? { estado: 'decidido', ganador: pg, via: 'penaltis', global } : { estado: 'empate', ganador: null, global };
+  }
+  const jugados = [p1, p2].filter(partidoJugado);
+  const global = [jugados.reduce((t, m) => t + golesDe(m, A), 0), jugados.reduce((t, m) => t + golesDe(m, B), 0)];
+  if (jugados.length < 2) return { estado: jugados.length ? 'jugando' : 'pendiente', ganador: null, global };
+  if (global[0] !== global[1]) return { estado: 'decidido', ganador: global[0] > global[1] ? A : B, via: 'goles', global };
+  if (fase.goles_fuera && fase.modo !== 'puntos') {
+    const fA = golesDe(p2, A), fB = golesDe(p1, B);
+    if (fA !== fB) return { estado: 'decidido', ganador: fA > fB ? A : B, via: 'fuera', global };
+  }
+  const pg = penGanadorId(p2);
+  return pg ? { estado: 'decidido', ganador: pg, via: 'penaltis', global } : { estado: 'empate', ganador: null, global };
+}
+
+// Texto corto del desenlace: "global 3–3, pasa X por penaltis".
+function textoCruce(c, res, fase, nombre, sep = '–') {
+  const iv = rondaElim(fase, c.ronda)?.formato === 'ida_vuelta';
+  const gl = res.global && iv ? `global ${fmtPtsCronica(res.global[0])}${sep}${fmtPtsCronica(res.global[1])}` : '';
+  if (res.via === 'exento') return `${nombre(c.local_id)} pasa exento`;
+  if (res.estado !== 'decidido') {
+    if (res.estado === 'empate') return [gl, 'empate: pendiente de decidir'].filter(Boolean).join(', ');
+    return gl;
+  }
+  const por = { penaltis: 'por penaltis', fuera: 'por los goles fuera', manual: '(decidido por el admin)' }[res.via];
+  return [gl, `pasa ${nombre(res.ganador)}${por ? ` ${por}` : ''}`].filter(Boolean).join(', ');
+}
 
 function textoDesempateTanda(d, ganadorNom, jornada) {
   if (!d) return '';
@@ -12719,6 +12798,84 @@ function DetalleTanda({ m, nombre }) {
   );
 }
 
+// Cuadro de una fase eliminatoria: una columna por ronda. En cuadro fijo se
+// dibujan también los cruces que aún esperan ganadores ("Ganador C3").
+function CuadroEliminatoria({ fase, cruces, partidos, nombre }) {
+  const rondas = fase.rondas || [];
+  const cs = cruces.filter(c => c.fase_id === fase.id);
+  if (!rondas.length) return <p style={{color:'var(--texto2)', fontSize:'.85rem'}}>Rondas pendientes.</p>;
+  const n1 = crucesEnRonda(cs, 1);
+  const cols = rondas.map((ronda, i) => {
+    const r = i + 1;
+    let total = crucesEnRonda(cs, r);
+    if (fase.cuadro === 'fijo' && r > 1) total = Math.max(total, Math.ceil(n1 / 2 ** (r - 1)));
+    const slots = Array.from({ length: total }, (_, k) => cs.find(c => c.ronda === r && c.posicion === k + 1) || { id: `v_${r}_${k}`, ronda: r, posicion: k + 1, _vacio: true });
+    return { ronda, r, slots };
+  });
+  return (
+    <div style={{overflowX:'auto', paddingBottom:'.3rem'}}>
+      <div style={{display:'flex', gap:'.6rem', minWidth: cols.length * 205}}>
+        {cols.map(({ ronda, r, slots }) => (
+          <div key={r} style={{flex:'1 0 195px', display:'flex', flexDirection:'column'}}>
+            <div style={{fontWeight:700, fontSize:'.82rem', marginBottom:'.35rem'}}>
+              {ronda.nombre}
+              <span style={{display:'block', fontWeight:400, fontSize:'.7rem', color:'var(--texto2)'}}>
+                {ronda.formato === 'ida_vuelta' ? `Ida y vuelta${ronda.jornadas?.some(Boolean) ? ` · J${ronda.jornadas.map(j => j ?? '?').join(' / J')}` : ''}`
+                  : `Partido único${ronda.jornadas?.[0] ? ` · J${ronda.jornadas[0]}` : ''}`}{ronda.penaltis ? ' · 🥅' : ''}
+              </span>
+            </div>
+            <div style={{flex:1, display:'flex', flexDirection:'column', justifyContent:'space-around', gap:'.5rem'}}>
+              {slots.length ? slots.map(c => <TarjetaCruce key={c.id} c={c} fase={fase} partidos={partidos} nombre={nombre} />)
+                : <p style={{color:'var(--texto2)', fontSize:'.78rem', margin:0}}>Por emparejar</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TarjetaCruce({ c, fase, partidos, nombre }) {
+  const iv = rondaElim(fase, c.ronda)?.formato === 'ida_vuelta';
+  const ms = c._vacio ? [] : partidos.filter(m => m.cruce_id === c.id).sort((a, b) => a.partido_n - b.partido_n);
+  const res = c._vacio ? { estado: 'sin_equipos', ganador: null } : resultadoCruce(c, partidos, fase);
+  const huecoAnt = k => fase.cuadro === 'fijo' && c.ronda > 1 ? `Ganador C${2 * c.posicion - 1 + k}` : 'Por decidir';
+  const fila = (pid, k) => {
+    const gana = res.ganador && res.ganador === pid, pierde = res.ganador && pid && res.ganador !== pid;
+    return (
+      <div style={{display:'flex', alignItems:'center', gap:'.35rem', padding:'.2rem .4rem', opacity: pierde ? .55 : 1,
+                   fontWeight: gana ? 800 : 600, borderTop: k ? '1px solid var(--gris)' : 'none'}}>
+        <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                      color: pid ? 'var(--texto)' : 'var(--texto2)', fontStyle: pid ? 'normal' : 'italic', fontWeight: pid ? undefined : 400}}>
+          {pid ? nombre(pid) : k && c.exento ? 'exento' : huecoAnt(k)}{gana ? ' ✓' : ''}
+        </span>
+        {ms.map(m => <span key={m.id} style={{minWidth:18, textAlign:'center'}}>{partidoJugado(m) ? fmtPtsCronica(golesDe(m, pid)) : '·'}</span>)}
+        {iv && res.global && ms.length === 2 && ms.some(partidoJugado) && <span style={{minWidth:22, textAlign:'center', color:'var(--texto2)'}}>({fmtPtsCronica(res.global[k])})</span>}
+      </div>
+    );
+  };
+  const decisivo = ms.find(m => m.penaltis_local != null);
+  const nota = c.exento ? 'Pasa sin jugar'
+    : res.via === 'penaltis' && decisivo ? `${textoPenaltis(decisivo, nombre)}`
+    : res.via === 'fuera' ? 'Pasa por los goles fuera'
+    : res.via === 'manual' ? 'Decidido por el admin'
+    : res.estado === 'empate' ? 'Empate: pendiente de decidir'
+    : ms.some(m => penaltisPendientes(m, fase, partidos)) ? 'Penaltis pendientes' : '';
+  return (
+    <div style={{border:'1.5px solid var(--borde)', borderRadius:8, background: res.estado === 'decidido' ? 'var(--fondo-med)' : 'var(--fondo-sub)', fontSize:'.8rem'}}>
+      {fila(c.local_id, 0)}
+      {fila(c.visitante_id, 1)}
+      {(nota || (iv && ms.length)) && (
+        <div style={{fontSize:'.7rem', color:'var(--texto2)', padding:'.15rem .4rem .25rem', borderTop:'1px dashed var(--gris)'}}>
+          {iv && ms.length ? <span>Ida J{ms[0]?.jornada_fantasy ?? '?'}{ms[1] ? ` · Vuelta J${ms[1].jornada_fantasy ?? '?'}` : ''}{nota ? ' · ' : ''}</span> : null}
+          {nota}
+        </div>
+      )}
+      {ms.filter(m => m.penaltis_detalle).map(m => <div key={m.id} style={{padding:'0 .4rem'}}><DetalleTanda m={m} nombre={nombre} /></div>)}
+    </div>
+  );
+}
+
 function AdminCompeticiones({ federacion, participantes, actorNombre, onFederacionUpdate }) {
   const fedId  = federacion?.id;
   const baremo = useMemo(() => {
@@ -12730,6 +12887,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
   const [grupos, setGrupos]       = useState([]);
   const [gMiembros, setGMiembros] = useState({});
   const [partidos, setPartidos]   = useState([]);
+  const [cruces, setCruces]       = useState([]); // fase eliminatoria
   const [compSel, setCompSel]     = useState(null);
   const [faseSel, setFaseSel]     = useState(null);
   const [showNewComp, setShowNewComp]   = useState(false);
@@ -12767,7 +12925,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
       loadFaseDetail(faseSel);
       setPtsLocalFase(fases.find(f => f.id === faseSel)?.pts_local ?? 0);
     } else {
-      setGrupos([]); setGMiembros({}); setPartidos([]);
+      setGrupos([]); setGMiembros({}); setPartidos([]); setCruces([]);
     }
   }, [faseSel]);
 
@@ -12783,10 +12941,15 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
   };
   const loadFaseDetail = async fid => {
     const tipo = fases.find(f => f.id === fid)?.tipo;
-    const [{ data: ps }] = await Promise.all([
+    const [{ data: ps }, { data: cs, error: errC }] = await Promise.all([
       sb.from('partidos_competicion').select('*').eq('fase_id', fid).order('ronda'),
+      tipo === 'eliminatoria'
+        ? sb.from('cruces_competicion').select('*').eq('fase_id', fid).order('ronda').order('posicion')
+        : Promise.resolve({ data: [], error: null }),
     ]);
+    if (errC) flash('Error: ' + errC.message);
     setPartidos(ps || []);
+    setCruces(cs || []);
     if (tipo === 'grupos') {
       const { data: gs } = await sb.from('grupos_competicion').select('*').eq('fase_id', fid).order('nombre');
       setGrupos(gs || []);
@@ -12829,7 +12992,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
       ...(newFaseModo === 'puntos' ? { modo: 'puntos' } : {}),
     }).select().single();
     if (!error) { setFases(p => [...p, data]); setNewFaseName(''); setNewFaseModo('goles'); setShowNewFase(false); }
-    else flash('Error: ' + (/modo/.test(error.message) ? 'falta ejecutar supabase_torneos_puntos.sql en Supabase.' : error.message));
+    else flash('Error: ' + (/modo/.test(error.message) ? 'falta ejecutar supabase_torneos_puntos.sql en Supabase.'
+      : newFaseTipo === 'eliminatoria' && /tipo|check/i.test(error.message) ? 'falta ejecutar supabase_eliminatorias.sql en Supabase.' : error.message));
     setBusy(false);
   };
   const borrarFase = async id => {
@@ -12978,15 +13142,18 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
   };
 
   // ── Calcular resultado de un partido suelto ─────────────────
-  const calcularSuelto = async m => {
-    if (!m.jornada_fantasy) { flash('Asigna una jornada al partido antes de calcular'); return; }
-    if (m.penaltis_detalle?.manual && faseAct?.penaltis
-        && !confirm('Este partido tiene la tanda de penaltis escrita a mano. Si sigue en empate, se sustituirá por la tanda calculada. ¿Continuar?')) return;
+  // `decideTanda(gL, gV)`: si con ese resultado hay tanda (por defecto, la
+  // regla de los partidos sueltos; las eliminatorias pasan la suya).
+  // Devuelve el partido actualizado (o el mismo si no cambia), o null si falla.
+  const calcularSuelto = async (m, decideTanda = (gL, gV) => !!faseAct?.penaltis && gL === gV) => {
+    if (!m.jornada_fantasy) { flash('Asigna una jornada al partido antes de calcular'); return null; }
+    if (m.penaltis_detalle?.manual
+        && !confirm('Este partido tiene la tanda de penaltis escrita a mano. Si sigue en empate, se sustituirá por la tanda calculada. ¿Continuar?')) return null;
     setBusy(true);
     const pids = [m.participante_local_id, m.participante_visitante_id];
     let ptsMap;
     try { ptsMap = await puntosTorneoJornada(federacion, compSel, pids, m.jornada_fantasy); }
-    catch (e) { flash('Error: ' + e.message); setBusy(false); return; }
+    catch (e) { flash('Error: ' + e.message); setBusy(false); return null; }
     const ptsLocal = faseAct?.pts_local ?? 0;
     // Modo Liga Fantástica: el "resultado" son los puntos (sin baremo); gana quien hace más.
     const [gL, gV] = esPuntos
@@ -12996,10 +13163,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
     // Si deja de haber empate (recálculo), la tanda anterior se borra.
     const SIN_PEN = { penaltis_local: null, penaltis_visitante: null, penaltis_ganador: null, penaltis_detalle: null };
     let pen = SIN_PEN, penPendiente = false;
-    const conTanda = !!faseAct?.penaltis && gL === gV;
+    const conTanda = decideTanda(gL, gV);
     if (conTanda) {
       try { pen = await calcularTandaPartido({ ...federacion, ...penCfgGuardada }, m, ptsMap) || SIN_PEN; }
-      catch (e) { flash('Error: ' + e.message); setBusy(false); return; }
+      catch (e) { flash('Error: ' + e.message); setBusy(false); return null; }
       penPendiente = pen === SIN_PEN;
     }
     const tocaPen = conTanda || m.penaltis_local != null || m.penaltis_detalle != null;
@@ -13013,10 +13180,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
     const nomPid = pid => nomMap[pid] || '?';
     const txtPen = penPendiente ? ` (penaltis pendientes del cierre de la J${m.jornada_fantasy})` : (tocaPen && textoPenaltis(nuevo, nomPid) ? ` ${textoPenaltis(nuevo, nomPid)}` : '');
     if (recalculo && gL === m.goles_local && gV === m.goles_visitante && !cambiaPen) {
-      flash(`Sin cambios: ${gL} — ${gV}${txtPen}`); setBusy(false); return;
+      flash(`Sin cambios: ${gL} — ${gV}${txtPen}`); setBusy(false); return m;
     }
     const { error } = await sb.from('partidos_competicion').update({ goles_local: gL, goles_visitante: gV, ...(tocaPen ? pen : {}) }).eq('id', m.id);
-    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+    if (error) { flash('Error: ' + error.message); setBusy(false); return null; }
     setPartidos(p => p.map(x => x.id === m.id ? nuevo : x));
     const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomL} vs ${nomV}`;
     const antes = `${m.goles_local}–${m.goles_visitante}${textoPenaltis(m, nomPid) ? ` ${textoPenaltis(m, nomPid)}` : ''}`;
@@ -13028,26 +13195,28 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
     resolverQuinielaJornada(federacion, m.jornada_fantasy);
     flash(`${recalculo ? 'Recalculado' : 'Calculado'}: ${gL} — ${gV}${txtPen}`);
     setBusy(false);
+    return nuevo;
   };
 
   // ── Penaltis: marcador a mano (p. ej. si a un jugador le faltan puntos) ──
   const penaltisManual = async m => {
     const actual = m.penaltis_local != null ? `${m.penaltis_local}-${m.penaltis_visitante}` : '';
     const txt = window.prompt(`Marcador de la tanda (local-visitante), p. ej. 4-3.\n${nomMap[m.participante_local_id] || 'Local'} vs ${nomMap[m.participante_visitante_id] || 'Visitante'}`, actual);
-    if (txt == null) return;
+    if (txt == null) return null;
     const mt = txt.trim().match(/^(\d{1,2})\s*[-–]\s*(\d{1,2})$/);
-    if (!mt) { flash('Error: escribe el marcador como 4-3'); return; }
+    if (!mt) { flash('Error: escribe el marcador como 4-3'); return null; }
     const pl = parseInt(mt[1]), pv = parseInt(mt[2]);
-    if (pl === pv) { flash('Error: la tanda no puede acabar en empate'); return; }
+    if (pl === pv) { flash('Error: la tanda no puede acabar en empate'); return null; }
     const pen = { penaltis_local: pl, penaltis_visitante: pv, penaltis_ganador: pl > pv ? 'L' : 'V', penaltis_detalle: { manual: true } };
     setBusy(true);
     const { error } = await sb.from('partidos_competicion').update(pen).eq('id', m.id);
     setBusy(false);
-    if (error) { flash('Error: ' + error.message); return; }
+    if (error) { flash('Error: ' + error.message); return null; }
     setPartidos(p => p.map(x => x.id === m.id ? { ...x, ...pen } : x));
     const etiqueta = m.nombre ? `"${m.nombre}"` : `${nomMap[m.participante_local_id] || 'Local'} vs ${nomMap[m.participante_visitante_id] || 'Visitante'}`;
     publicar(fedId, 'admin', `Tanda de penaltis corregida a mano — ${compAct?.nombre || 'Competición'}: ${etiqueta} → ${m.goles_local}–${m.goles_visitante} (${pl}–${pv} pen.).`, actorNombre);
     flash(`Penaltis guardados: ${pl}–${pv}`);
+    return { ...m, ...pen };
   };
 
   // ── Penaltis: activación por fase y configuración de la federación ──
@@ -13104,7 +13273,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
       const gL = m.goles_local ?? '?';
       const gV = m.goles_visitante ?? '?';
       const pen = textoPenaltis(m, pid => nomMap[pid] || '—', '-');
-      const tPen = pen ? ` ${pen}` : penaltisPendientes(m, faseAct) ? ' (penaltis pendientes)' : '';
+      const tPen = pen ? ` ${pen}` : penaltisPendientes(m, faseAct, partidos) ? ' (penaltis pendientes)' : '';
       if (esPuntos) { lineas.push(`${i + 1}. ${nL} ${gL} - ${gV} ${nV}${tPen}`); return; }
       const pL = ptsMap[m.participante_local_id]    != null ? Math.round(ptsMap[m.participante_local_id] + ptsLocal) : '?';
       const pV = ptsMap[m.participante_visitante_id] != null ? Math.round(ptsMap[m.participante_visitante_id]) : '?';
@@ -13168,7 +13337,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
             <span style={{flex:1}}>
               <strong>{f.nombre}</strong>
               <span style={{marginLeft:'.5rem', fontSize:'.78rem', color:'var(--texto2)'}}>
-                {f.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{f.modo==='puntos' ? ' · Liga Fantástica' : ''}{f.penaltis && f.tipo==='sueltos' ? ' · 🥅 Penaltis' : ''}
+                · {TIPOS_FASE[f.tipo] || f.tipo}{f.modo==='puntos' ? ' · Liga Fantástica' : ''}{f.penaltis && f.tipo==='sueltos' ? ' · 🥅 Penaltis' : ''}
               </span>
             </span>
             <button style={sBtn} onClick={()=>setFaseSel(f.id)}>Gestionar</button>
@@ -13182,6 +13351,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
             <select value={newFaseTipo} onChange={e=>setNewFaseTipo(e.target.value)} style={inp}>
               <option value="grupos">Fase de grupos</option>
               <option value="sueltos">Partidos sueltos</option>
+              <option value="eliminatoria">Eliminatoria</option>
             </select>
             <select value={newFaseModo} onChange={e=>setNewFaseModo(e.target.value)} style={inp}
                     title="H2H: los puntos se convierten en goles con el baremo. Liga Fantástica: cuentan los puntos tal cual">
@@ -13470,8 +13640,415 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
           <button disabled={busy} className="btn-ok" onClick={crearSuelto} style={{alignSelf:'flex-end'}}>Añadir</button>
         </div>
       </>)}
+
+      {/* Fase eliminatoria */}
+      {faseSel && faseAct?.tipo==='eliminatoria' && (
+        <AdminEliminatoria federacion={federacion} fase={faseAct} compNombre={compAct?.nombre || 'Competición'}
+          participantes={participantes} nomMap={nomMap} partidos={partidos} setPartidos={setPartidos}
+          cruces={cruces} setCruces={setCruces} setFases={setFases} busy={busy} setBusy={setBusy} flash={flash}
+          actorNombre={actorNombre} calcularPartido={calcularSuelto} penaltisManual={penaltisManual}
+          copiarResultadosJornada={copiarResultadosJornada} copiadoJ={copiadoJ} estilos={{ sBtn, dBtn, inp }} />
+      )}
     </div>
   );
+}
+
+// ── ADMIN — FASE ELIMINATORIA ──────────────────────────────────
+// Rondas (nombre, formato, jornadas, penaltis) y sus cruces. Los partidos de
+// cada cruce se crean y se rehacen solos según la ronda; el cálculo de cada
+// partido es el de los partidos sueltos (calcularPartido) con la regla de
+// tanda de la eliminatoria. Tras calcular se actualiza el ganador del cruce
+// y, en cuadro fijo, se coloca en la ronda siguiente.
+function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap, partidos, setPartidos, cruces, setCruces,
+                             setFases, busy, setBusy, flash, actorNombre, calcularPartido, penaltisManual,
+                             copiarResultadosJornada, copiadoJ, estilos }) {
+  const { sBtn, dBtn, inp } = estilos;
+  const faseProp = fase; // las funciones que reciben otra versión de la fase la llaman `fase`
+  const fedId = federacion?.id;
+  const rondas = fase.rondas || [];
+  const esPuntos = fase.modo === 'puntos';
+  const [drafts, setDrafts] = useState({}); // ronda (1..) → cambios sin guardar
+  useEffect(() => { setDrafts({}); }, [fase.id]);
+  const nom = pid => nomMap[pid] || '?';
+  const conResultado = ms => ms.some(partidoJugado);
+
+  const guardarFase = async cambios => {
+    const { error } = await sb.from('fases_competicion').update(cambios).eq('id', fase.id);
+    if (error) { flash('Error: ' + (/rondas|cuadro|goles_fuera/.test(error.message) ? 'falta ejecutar supabase_eliminatorias.sql en Supabase.' : error.message)); return false; }
+    setFases(prev => prev.map(f => f.id === fase.id ? { ...f, ...cambios } : f));
+    return true;
+  };
+
+  // Partidos que debe tener un cruce según su ronda.
+  const deseados = (c, ronda) => {
+    if (!ronda || c.exento || !c.local_id || !c.visitante_id) return [];
+    const iv = ronda.formato === 'ida_vuelta';
+    const js = ronda.jornadas || [];
+    const base = { fase_id: fase.id, federacion_id: fedId, grupo_id: null, cruce_id: c.id, ronda: c.ronda };
+    const d = [{ ...base, partido_n: 1, participante_local_id: c.local_id, participante_visitante_id: c.visitante_id,
+                 jornada_fantasy: js[0] ?? null, nombre: `${ronda.nombre}${iv ? ' · Ida' : ''}` }];
+    if (iv) d.push({ ...base, partido_n: 2, participante_local_id: c.visitante_id, participante_visitante_id: c.local_id,
+                     jornada_fantasy: js[1] ?? null, nombre: `${ronda.nombre} · Vuelta` });
+    return d;
+  };
+  const mismoPartido = (a, b) => a.partido_n === b.partido_n && a.participante_local_id === b.participante_local_id
+                                 && a.participante_visitante_id === b.participante_visitante_id;
+
+  // Deja los partidos de los cruces `cs` como pide su ronda: borra los que
+  // sobran (o cambiaron de equipos) y crea los que faltan. `ps` = partidos
+  // actuales. Devuelve los partidos nuevos, o null si falla.
+  const sincronizarPartidos = async (cs, ps, rondasAct = rondas) => {
+    const ids = new Set(cs.map(c => c.id));
+    const actuales = ps.filter(m => ids.has(m.cruce_id));
+    const want = cs.flatMap(c => deseados(c, rondasAct[c.ronda - 1]));
+    const borrar = actuales.filter(m => !want.some(w => w.cruce_id === m.cruce_id && mismoPartido(w, m)));
+    const crear = want.filter(w => !actuales.some(m => m.cruce_id === w.cruce_id && mismoPartido(w, m)));
+    if (borrar.length) {
+      const { error } = await sb.from('partidos_competicion').delete().in('id', borrar.map(m => m.id));
+      if (error) { flash('Error: ' + error.message); return null; }
+    }
+    let creados = [];
+    if (crear.length) {
+      const { data, error } = await sb.from('partidos_competicion').insert(crear).select();
+      if (error) { flash('Error: ' + (/cruce_id|partido_n/.test(error.message) ? 'falta ejecutar supabase_eliminatorias.sql en Supabase.' : error.message)); return null; }
+      creados = data || [];
+    }
+    const borrados = new Set(borrar.map(m => m.id));
+    const nuevos = [...ps.filter(m => !borrados.has(m.id)), ...creados];
+    setPartidos(prev => [...prev.filter(m => !borrados.has(m.id)), ...creados]);
+    if (borrar.some(partidoJugado) || crear.length) {
+      const js = [...new Set([...borrar, ...crear].map(m => m.jornada_fantasy).filter(Boolean))];
+      js.forEach(j => resolverQuinielaJornada(federacion, j));
+    }
+    return nuevos;
+  };
+
+  // Ganador del cruce según sus partidos; si cambia se guarda y, en cuadro
+  // fijo, se coloca en el cruce que le toca de la ronda siguiente.
+  const actualizarCruce = async (c, ps, cs, fase = faseProp) => {
+    const res = resultadoCruce(c, ps, fase);
+    const g = res.ganador ?? null;
+    let c2 = c;
+    if (g !== (c.ganador_id ?? null)) {
+      const { error } = await sb.from('cruces_competicion').update({ ganador_id: g }).eq('id', c.id);
+      if (error) { flash('Error: ' + error.message); return; }
+      c2 = { ...c, ganador_id: g };
+      cs = cs.map(x => x.id === c.id ? c2 : x);
+      setCruces(prev => prev.map(x => x.id === c.id ? c2 : x));
+      if (g) {
+        const sig = rondaElim(fase, c.ronda + 1);
+        publicar(fedId, 'admin', `${compNombre} · ${rondaElim(fase, c.ronda)?.nombre || `Ronda ${c.ronda}`}: ${textoCruce(c2, res, fase, nom)}${sig ? ` → ${sig.nombre}` : rondas.length === c.ronda ? ' 🏆' : ''}.`, actorNombre);
+      }
+    }
+    if (fase.cuadro === 'fijo' && rondaElim(fase, c.ronda + 1)) await colocarEnSiguiente(c2, g, ps, cs, fase);
+  };
+
+  const colocarEnSiguiente = async (c, g, ps, cs, fase = faseProp) => {
+    const r = c.ronda + 1, pos = Math.ceil(c.posicion / 2);
+    const lado = c.posicion % 2 ? 'local_id' : 'visitante_id';
+    let sig = cs.find(x => x.ronda === r && x.posicion === pos);
+    if ((sig?.[lado] ?? null) === g) return;
+    if (!sig && !g) return;
+    if (sig && conResultado(ps.filter(m => m.cruce_id === sig.id))) {
+      flash(`Aviso: el cruce ${pos} de ${rondaElim(fase, r)?.nombre} ya tiene resultados; cambia sus equipos a mano si hace falta.`);
+      return;
+    }
+    if (sig) {
+      const { data, error } = await sb.from('cruces_competicion').update({ [lado]: g, ganador_id: null, ganador_manual: false }).eq('id', sig.id).select().single();
+      if (error) { flash('Error: ' + error.message); return; }
+      sig = data;
+      setCruces(prev => prev.map(x => x.id === sig.id ? sig : x));
+    } else {
+      const { data, error } = await sb.from('cruces_competicion').insert({ federacion_id: fedId, fase_id: fase.id, ronda: r, posicion: pos, [lado]: g }).select().single();
+      if (error) { flash('Error: ' + error.message); return; }
+      sig = data;
+      setCruces(prev => [...prev, sig]);
+    }
+    await sincronizarPartidos([sig], ps, fase.rondas || []);
+  };
+
+  // ── Rondas ──
+  const valorRonda = (r, campo) => drafts[r]?.[campo] !== undefined ? drafts[r][campo] : rondas[r - 1]?.[campo];
+  const setDraft = (r, campo, v) => setDrafts(d => ({ ...d, [r]: { ...(d[r] || {}), [campo]: v } }));
+  const anadirRonda = async () => {
+    const ult = rondas[rondas.length - 1];
+    const nCr = crucesEnRonda(cruces, rondas.length);
+    const nombre = !ult ? 'Ronda 1' : nCr ? nombreRondaPorCruces(Math.ceil(nCr / 2)) : `Ronda ${rondas.length + 1}`;
+    if (await guardarFase({ rondas: [...rondas, { nombre, formato: 'unico', jornadas: [null], penaltis: ult ? !!ult.penaltis : true }] }))
+      flash(`Ronda añadida: ${nombre}`);
+  };
+  const guardarRonda = async r => {
+    const ant = rondas[r - 1];
+    const d = { ...ant, ...(drafts[r] || {}) };
+    const nombre = String(d.nombre || '').trim().slice(0, 40) || `Ronda ${r}`;
+    const iv = d.formato === 'ida_vuelta';
+    const jn = v => { const n = parseInt(v); return n >= 1 && n <= 38 ? n : null; };
+    const jornadas = iv ? [jn(d.jornadas?.[0]), jn(d.jornadas?.[1])] : [jn(d.jornadas?.[0])];
+    const nueva = { nombre, formato: iv ? 'ida_vuelta' : 'unico', jornadas, penaltis: !!d.penaltis };
+    const csR = cruces.filter(c => c.ronda === r);
+    const psR = partidos.filter(m => m.ronda === r && m.cruce_id);
+    if (nueva.formato !== ant.formato && conResultado(psR)
+        && !confirm(`Cambiar el formato rehace los partidos de ${ant.nombre} y borra sus resultados. ¿Continuar?`)) return;
+    setBusy(true);
+    const rondasN = rondas.map((x, i) => i === r - 1 ? nueva : x);
+    if (!(await guardarFase({ rondas: rondasN }))) { setBusy(false); return; }
+    if (nueva.formato !== ant.formato) {
+      // Otro formato: se borran los partidos de la ronda y se crean los nuevos.
+      const viejos = psR.map(m => m.id);
+      if (viejos.length) {
+        const { error } = await sb.from('partidos_competicion').delete().in('id', viejos);
+        if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+        setPartidos(prev => prev.filter(m => !viejos.includes(m.id)));
+        [...new Set(psR.map(m => m.jornada_fantasy).filter(Boolean))].forEach(j => resolverQuinielaJornada(federacion, j));
+      }
+      const faseN = { ...fase, rondas: rondasN };
+      const ps = await sincronizarPartidos(csR, partidos.filter(m => !viejos.includes(m.id)), rondasN);
+      // Sin resultados, los ganadores de la ronda vuelven a quedar pendientes.
+      if (ps) for (const c of csR) await actualizarCruce(c, ps, cruces, faseN);
+    } else {
+      // Mismo formato: jornadas y nombre de los partidos, en una petición por ida/vuelta.
+      for (const n of (iv ? [1, 2] : [1])) {
+        const cambios = { jornada_fantasy: jornadas[n - 1], nombre: iv ? `${nombre} · ${n === 1 ? 'Ida' : 'Vuelta'}` : nombre };
+        const afectados = psR.filter(m => m.partido_n === n);
+        if (!afectados.some(m => m.jornada_fantasy !== cambios.jornada_fantasy || m.nombre !== cambios.nombre)) continue;
+        const { error } = await sb.from('partidos_competicion').update(cambios).eq('fase_id', fase.id).eq('ronda', r).eq('partido_n', n).not('cruce_id', 'is', null);
+        if (error) { flash('Error: ' + error.message); break; }
+        setPartidos(prev => prev.map(m => m.cruce_id && m.ronda === r && m.partido_n === n ? { ...m, ...cambios } : m));
+        [...new Set([...afectados.map(m => m.jornada_fantasy), cambios.jornada_fantasy].filter(Boolean))].forEach(j => resolverQuinielaJornada(federacion, j));
+      }
+    }
+    setDrafts(dd => { const x = { ...dd }; delete x[r]; return x; });
+    setBusy(false);
+    flash(`${nombre} guardada`);
+  };
+  const borrarRonda = async () => {
+    const r = rondas.length;
+    const csR = cruces.filter(c => c.ronda === r);
+    if (conResultado(partidos.filter(m => m.ronda === r && m.cruce_id))) { flash('Error: la ronda tiene partidos con resultado; bórralos antes'); return; }
+    if (!confirm(`¿Borrar ${rondas[r - 1].nombre}${csR.length ? ` y sus ${csR.length} cruces` : ''}?`)) return;
+    if (csR.length) {
+      const { error } = await sb.from('cruces_competicion').delete().in('id', csR.map(c => c.id));
+      if (error) { flash('Error: ' + error.message); return; }
+      setCruces(prev => prev.filter(c => c.ronda !== r));
+      setPartidos(prev => prev.filter(m => !(m.cruce_id && m.ronda === r)));
+    }
+    await guardarFase({ rondas: rondas.slice(0, -1) });
+  };
+
+  // ── Cruces ──
+  const anadirCruce = async r => {
+    const pos = crucesEnRonda(cruces, r) + 1;
+    const { data, error } = await sb.from('cruces_competicion').insert({ federacion_id: fedId, fase_id: fase.id, ronda: r, posicion: pos }).select().single();
+    if (error) { flash('Error: ' + (/cruces_competicion/.test(error.message) ? 'falta ejecutar supabase_eliminatorias.sql en Supabase.' : error.message)); return; }
+    setCruces(prev => [...prev, data]);
+  };
+  // Cambia los equipos (o el exento) de un cruce y rehace sus partidos.
+  const editarCruce = async (c, cambios) => {
+    const ms = partidos.filter(m => m.cruce_id === c.id);
+    if (conResultado(ms) && !confirm('Este cruce ya tiene resultados: se borrarán sus partidos y se crearán de nuevo. ¿Continuar?')) return;
+    setBusy(true);
+    const { data, error } = await sb.from('cruces_competicion').update({ ...cambios, ganador_manual: false }).eq('id', c.id).select().single();
+    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+    const cs = cruces.map(x => x.id === c.id ? data : x);
+    setCruces(cs);
+    const ps = await sincronizarPartidos([data], partidos);
+    if (ps) await actualizarCruce(data, ps, cs);
+    setBusy(false);
+  };
+  const borrarCruce = async c => {
+    if (conResultado(partidos.filter(m => m.cruce_id === c.id))) { flash('Error: el cruce tiene resultados'); return; }
+    if (!confirm(`¿Borrar el cruce ${c.posicion}?`)) return;
+    const { error } = await sb.from('cruces_competicion').delete().eq('id', c.id);
+    if (error) { flash('Error: ' + error.message); return; }
+    setCruces(prev => prev.filter(x => x.id !== c.id));
+    setPartidos(prev => prev.filter(m => m.cruce_id !== c.id));
+  };
+  // "Pasa X" (pid) o quitar la decisión manual (null).
+  const decidirManual = async (c, pid) => {
+    if (pid && !confirm(`¿Decidir el cruce a mano: pasa ${nom(pid)}?`)) return;
+    setBusy(true);
+    // Solo se marca como manual: actualizarCruce guarda el ganador (y lo
+    // anuncia y lo coloca en la ronda siguiente). Al quitarlo, el ganador
+    // vuelve a salir de los resultados.
+    const { data, error } = await sb.from('cruces_competicion').update(pid ? { ganador_id: pid, ganador_manual: true } : { ganador_manual: false }).eq('id', c.id).select().single();
+    if (error) { flash('Error: ' + error.message); setBusy(false); return; }
+    const cs = cruces.map(x => x.id === c.id ? data : x);
+    setCruces(cs);
+    // (con el ganador anterior, para que actualizarCruce vea el cambio)
+    await actualizarCruce(pid ? { ...data, ganador_id: c.ganador_id } : data, partidos, cs);
+    setBusy(false);
+  };
+
+  // ── Partidos ──
+  const calcular = async m => {
+    const nuevo = await calcularPartido(m, (gL, gV) => requiereTandaElim(m, gL, gV, fase, partidos));
+    if (!nuevo) return;
+    const ps = partidos.map(x => x.id === nuevo.id ? nuevo : x);
+    const c = cruces.find(x => x.id === m.cruce_id);
+    if (c) await actualizarCruce(c, ps, cruces);
+    // La ida cambia el global: si la vuelta ya estaba calculada, su tanda puede cambiar.
+    const vuelta = m.partido_n === 1 && ps.find(x => x.cruce_id === m.cruce_id && x.partido_n === 2);
+    if (vuelta && partidoJugado(vuelta) && rondaElim(fase, m.ronda)?.penaltis) flash('Ida calculada. Recalcula la vuelta (↻) para revisar el global y la tanda de penaltis.');
+  };
+  const penManual = async m => {
+    const nuevo = await penaltisManual(m);
+    if (!nuevo) return;
+    const ps = partidos.map(x => x.id === nuevo.id ? nuevo : x);
+    const c = cruces.find(x => x.id === m.cruce_id);
+    if (c) await actualizarCruce(c, ps, cruces);
+  };
+
+  const selEquipo = (c, lado, usados) => (
+    <select value={c[lado] || ''} disabled={busy} onChange={e => editarCruce(c, { [lado]: e.target.value || null })}
+            style={{...inp, flex:1, minWidth:120, padding:'.28rem .4rem'}}>
+      <option value="">{lado === 'local_id' ? '— Local —' : '— Visitante —'}</option>
+      {participantes.filter(p => p.id === c[lado] || !usados.has(p.id)).map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+    </select>
+  );
+
+  return (<>
+    {/* Configuración de la fase */}
+    <div style={{padding:'.55rem .75rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)', marginBottom:'.75rem',
+                 display:'flex', flexWrap:'wrap', gap:'.6rem 1.2rem', alignItems:'center', fontSize:'.84rem'}}>
+      <label style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
+        <span style={{fontWeight:600}}>Cuadro:</span>
+        <select value={fase.cuadro || 'libre'} onChange={e => guardarFase({ cuadro: e.target.value })} style={{...inp, padding:'.26rem .4rem'}}>
+          <option value="fijo">Fijo (el ganador pasa solo a la ronda siguiente)</option>
+          <option value="libre">Por ronda (cada ronda se empareja aparte)</option>
+        </select>
+      </label>
+      {!esPuntos && (
+        <label style={{display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer'}}>
+          <input type="checkbox" checked={!!fase.goles_fuera} onChange={() => guardarFase({ goles_fuera: !fase.goles_fuera })} />
+          Valor doble de los goles fuera (ida y vuelta)
+        </label>
+      )}
+      <div style={{flexBasis:'100%', fontSize:'.76rem', color:'var(--texto2)'}}>
+        {fase.cuadro === 'fijo'
+          ? 'Cuadro fijo: empareja la primera ronda; el ganador del cruce 1 y el del 2 se cruzan en la siguiente, el del 3 y el del 4, etc.'
+          : 'Por ronda: crea los cruces de cada ronda cuando termine la anterior.'}
+        {' '}Ida y vuelta: se suman los dos partidos{fase.goles_fuera && !esPuntos ? ', después cuentan los goles fuera' : ''} y, si sigue el empate y la ronda tiene penaltis, tanda tras la vuelta (con la jornada archivada). Sin penaltis, el admin decide con "Pasa".
+      </div>
+    </div>
+
+    {rondas.length === 0 && <p style={{color:'var(--texto2)', marginBottom:'.75rem'}}>Sin rondas. Añade la primera.</p>}
+    {rondas.map((ronda, i) => {
+      const r = i + 1;
+      const formato = valorRonda(r, 'formato');
+      const jornadas = valorRonda(r, 'jornadas') || [];
+      const iv = formato === 'ida_vuelta';
+      const csR = cruces.filter(c => c.ronda === r).sort((a, b) => a.posicion - b.posicion);
+      const usados = new Set(csR.flatMap(c => [c.local_id, c.visitante_id]).filter(Boolean));
+      const psR = partidos.filter(m => m.ronda === r && m.cruce_id);
+      const pendienteGuardar = !!drafts[r];
+      const copiar = n => {
+        const j = ronda.jornadas?.[n - 1];
+        const ms = psR.filter(m => m.partido_n === n).sort((a, b) =>
+          (csR.find(c => c.id === a.cruce_id)?.posicion ?? 0) - (csR.find(c => c.id === b.cruce_id)?.posicion ?? 0));
+        copiarResultadosJornada(ms, j, `e_${r}_${n}`, ronda.formato === 'ida_vuelta' ? `${ronda.nombre} · ${n === 1 ? 'Ida' : 'Vuelta'}` : ronda.nombre);
+      };
+      // En cuadro fijo, de la ronda 2 en adelante los cruces salen de la anterior.
+      const huecos = fase.cuadro === 'fijo' && r > 1 ? Math.ceil(crucesEnRonda(cruces, r - 1) / 2) : 0;
+      return (
+        <div key={r} style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.7rem', marginBottom:'.75rem', background:'var(--fondo-sub)'}}>
+          <div style={{display:'flex', alignItems:'center', gap:'.4rem', flexWrap:'wrap', marginBottom:'.5rem', fontSize:'.82rem'}}>
+            <strong style={{color:'var(--texto2)'}}>R{r}</strong>
+            <input value={valorRonda(r, 'nombre') ?? ''} onChange={e => setDraft(r, 'nombre', e.target.value)} maxLength={40}
+                   style={{...inp, width:150, fontWeight:600, padding:'.28rem .45rem'}} />
+            <select value={formato} onChange={e => setDraft(r, 'formato', e.target.value)} style={{...inp, padding:'.28rem .4rem'}}>
+              <option value="unico">Partido único</option>
+              <option value="ida_vuelta">Ida y vuelta</option>
+            </select>
+            <span>{iv ? 'J ida' : 'Jornada'}</span>
+            <input type="number" min="1" max="38" value={jornadas[0] ?? ''} placeholder="—"
+                   onChange={e => setDraft(r, 'jornadas', [e.target.value, jornadas[1] ?? null])}
+                   style={{...inp, width:56, textAlign:'center', padding:'.28rem .3rem'}} />
+            {iv && <>
+              <span>J vuelta</span>
+              <input type="number" min="1" max="38" value={jornadas[1] ?? ''} placeholder="—"
+                     onChange={e => setDraft(r, 'jornadas', [jornadas[0] ?? null, e.target.value])}
+                     style={{...inp, width:56, textAlign:'center', padding:'.28rem .3rem'}} />
+            </>}
+            <label style={{display:'flex', alignItems:'center', gap:'.25rem', cursor:'pointer'}}>
+              <input type="checkbox" checked={!!valorRonda(r, 'penaltis')} onChange={e => setDraft(r, 'penaltis', e.target.checked)} />
+              🥅 Penaltis
+            </label>
+            <button disabled={busy || !pendienteGuardar} onClick={() => guardarRonda(r)}
+                    style={{...sBtn, marginLeft:'auto', fontWeight: pendienteGuardar ? 700 : 400, opacity: pendienteGuardar ? 1 : .5}}>Guardar</button>
+            {r === rondas.length && <button disabled={busy} style={dBtn} onClick={borrarRonda}>Borrar</button>}
+          </div>
+
+          {csR.map(c => {
+            const ms = partidos.filter(m => m.cruce_id === c.id).sort((a, b) => a.partido_n - b.partido_n);
+            const res = resultadoCruce(c, partidos, fase);
+            const color = res.estado === 'decidido' ? 'var(--verde)' : res.estado === 'empate' ? '#c77700' : 'var(--texto2)';
+            return (
+              <div key={c.id} style={{border:'1px solid var(--borde)', borderRadius:7, padding:'.4rem .5rem', marginBottom:'.4rem', background:'var(--fondo-alt)'}}>
+                <div style={{display:'flex', alignItems:'center', gap:'.35rem', flexWrap:'wrap', fontSize:'.82rem'}}>
+                  <span style={{color:'var(--texto2)', fontWeight:700, minWidth:22}}>{c.posicion}</span>
+                  {selEquipo(c, 'local_id', usados)}
+                  {c.exento ? <span style={{flex:1, color:'var(--texto2)', fontStyle:'italic'}}>exento</span> : <>
+                    <span style={{color:'var(--texto2)'}}>vs</span>
+                    {selEquipo(c, 'visitante_id', usados)}
+                  </>}
+                  <label style={{display:'flex', alignItems:'center', gap:'.2rem', fontSize:'.76rem', cursor:'pointer'}} title="El local pasa a la ronda siguiente sin jugar">
+                    <input type="checkbox" checked={!!c.exento} disabled={busy}
+                           onChange={() => editarCruce(c, c.exento ? { exento: false } : { exento: true, visitante_id: null })} />
+                    Exento
+                  </label>
+                  <button disabled={busy} style={{...dBtn, fontSize:'.7rem', padding:'.1rem .35rem'}} onClick={() => borrarCruce(c)}>×</button>
+                </div>
+                {ms.map(m => {
+                  const posibleTanda = partidoJugado(m) && requiereTandaElim(m, m.goles_local, m.goles_visitante, fase, partidos);
+                  return (
+                    <div key={m.id} style={{display:'flex', alignItems:'center', gap:'.4rem', flexWrap:'wrap', fontSize:'.8rem', padding:'.25rem 0 0 1.6rem'}}>
+                      <span style={{color:'var(--texto2)', minWidth:62}}>{iv ? (m.partido_n === 1 ? 'Ida' : 'Vuelta') : 'Partido'} · {m.jornada_fantasy ? `J${m.jornada_fantasy}` : 'sin J'}</span>
+                      <span style={{flex:1, minWidth:150}}>
+                        {nom(m.participante_local_id)} <strong>{partidoJugado(m) ? `${m.goles_local}—${m.goles_visitante}` : 'vs'}</strong> {nom(m.participante_visitante_id)}
+                        {m.penaltis_local != null && <span style={{fontWeight:600}}> {textoPenaltis(m, nom)}{m.penaltis_detalle?.manual ? ' ✎' : ''}</span>}
+                        {posibleTanda && m.penaltis_local == null && <span style={{color:'var(--texto2)'}}> · pen. pendientes</span>}
+                      </span>
+                      <button disabled={busy || !m.jornada_fantasy} style={{...sBtn, fontSize:'.72rem', padding:'.15rem .45rem', opacity: m.jornada_fantasy ? 1 : .45}}
+                              title={partidoJugado(m) ? 'Recalcular con los puntos actuales' : 'Calcular el resultado'} onClick={() => calcular(m)}>
+                        {partidoJugado(m) ? '↻' : '▶ Calcular'}
+                      </button>
+                      {posibleTanda && <button disabled={busy} title="Escribir a mano el marcador de la tanda de penaltis"
+                                               style={{...sBtn, fontSize:'.72rem', padding:'.15rem .45rem'}} onClick={() => penManual(m)}>✎</button>}
+                      <div style={{flexBasis:'100%'}}><DetalleTanda m={m} nombre={nom} /></div>
+                    </div>
+                  );
+                })}
+                {(c.local_id && (c.visitante_id || c.exento)) && (
+                  <div style={{display:'flex', alignItems:'center', gap:'.4rem', flexWrap:'wrap', fontSize:'.78rem', padding:'.3rem 0 0 1.6rem', color}}>
+                    <span style={{fontWeight:600}}>{textoCruce(c, res, fase, nom) || (res.estado === 'pendiente' ? 'Pendiente' : '')}</span>
+                    {!c.exento && !c.ganador_manual && (res.estado === 'empate' || res.estado === 'pendiente' || res.estado === 'jugando') && <>
+                      <button disabled={busy} style={{...sBtn, fontSize:'.7rem', padding:'.12rem .4rem'}} onClick={() => decidirManual(c, c.local_id)}>Pasa {nom(c.local_id)}</button>
+                      <button disabled={busy} style={{...sBtn, fontSize:'.7rem', padding:'.12rem .4rem'}} onClick={() => decidirManual(c, c.visitante_id)}>Pasa {nom(c.visitante_id)}</button>
+                    </>}
+                    {c.ganador_manual && <button disabled={busy} style={{...sBtn, fontSize:'.7rem', padding:'.12rem .4rem'}} onClick={() => decidirManual(c, null)}>Quitar decisión manual</button>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {huecos > csR.length && (
+            <p style={{fontSize:'.76rem', color:'var(--texto2)', margin:'.2rem 0 .4rem'}}>
+              {huecos - csR.length} cruce{huecos - csR.length === 1 ? '' : 's'} a la espera de los ganadores de la ronda anterior.
+            </p>
+          )}
+          <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
+            {!(fase.cuadro === 'fijo' && r > 1) && <button disabled={busy} style={{...sBtn, fontSize:'.76rem'}} onClick={() => anadirCruce(r)}>+ Cruce</button>}
+            {(iv ? [1, 2] : [1]).map(n => ronda.jornadas?.[n - 1] && psR.some(m => m.partido_n === n) ? (
+              <button key={n} disabled={busy} style={{...sBtn, fontSize:'.76rem'}} onClick={() => copiar(n)}>
+                {copiadoJ === `e_${r}_${n}` ? '¡Copiado!' : `📋 ${iv ? (n === 1 ? 'Ida' : 'Vuelta') : 'Copiar'}`}
+              </button>
+            ) : null)}
+          </div>
+        </div>
+      );
+    })}
+    <button disabled={busy} style={sBtn} onClick={anadirRonda}>+ Añadir ronda</button>
+  </>);
 }
 
 // ── ADMIN — QUINIELA ──────────────────────────────────────────
@@ -14418,6 +14995,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
   const [grupos, setGrupos]     = useState([]);
   const [gMiembros, setGMiembros] = useState({});
   const [partidos, setPartidos] = useState([]);
+  const [cruces, setCruces]     = useState([]);
   const [cargando, setCargando] = useState(false);
 
   const nomMap = Object.fromEntries(participantes.map(p => [p.id, p]));
@@ -14445,8 +15023,13 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
         (gps||[]).forEach(r=>{(gm[r.grupo_id]=gm[r.grupo_id]||[]).push(r.participante_id);});
       }
       setGMiembros(gm);
-      const {data:ps} = await sb.from('partidos_competicion').select('*').in('fase_id',faseIds).order('ronda');
+      const elimIds = (fs||[]).filter(f=>f.tipo==='eliminatoria').map(f=>f.id);
+      const [{data:ps}, {data:cs}] = await Promise.all([
+        sb.from('partidos_competicion').select('*').in('fase_id',faseIds).order('ronda'),
+        elimIds.length ? sb.from('cruces_competicion').select('*').in('fase_id',elimIds) : Promise.resolve({ data: [] }),
+      ]);
       setPartidos(ps||[]);
+      setCruces(cs||[]);
       setCargando(false);
     })();
   }, [compSel, fedId]);
@@ -14501,11 +15084,25 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
               });
           secciones.push({ titulo: `${fase.nombre} · ${grupo.nombre}`, lineas: lineasClasificacionWA(filas) });
         });
+      } else if (fase.tipo === 'eliminatoria') {
+        (fase.rondas || []).forEach((ronda, i) => {
+          const csR = cruces.filter(c => c.fase_id === fase.id && c.ronda === i + 1).sort((a, b) => a.posicion - b.posicion);
+          if (!csR.length) return;
+          secciones.push({ titulo: `${fase.nombre} · ${ronda.nombre}`, lineas: csR.map(c => {
+            const res = resultadoCruce(c, partidos, fase);
+            if (c.exento) return `${nom(c.local_id)} _(exento)_`;
+            const ms = partidos.filter(m => m.cruce_id === c.id).sort((a, b) => a.partido_n - b.partido_n);
+            const marc = ms.filter(partidoJugado).map(m => `${fmtNumWA(golesDe(m, c.local_id))}-${fmtNumWA(golesDe(m, c.visitante_id))}`).join(' / ');
+            const pen = ms.map(m => textoPenaltis(m, nom, '-')).filter(Boolean).join(' ');
+            const fin = res.estado === 'decidido' ? ` → pasa *${nom(res.ganador)}*` : res.estado === 'empate' ? ' _(pendiente de decidir)_' : '';
+            return `${nom(c.local_id)} ${marc ? `*${marc}*` : 'vs'} ${nom(c.visitante_id)}${pen ? ` ${pen}` : ''}${fin}`;
+          }) });
+        });
       } else {
         secciones.push({ titulo: fase.nombre, lineas: partidos.filter(p => p.fase_id === fase.id).map(m => {
           const res = resPartido(m);
           const pen = textoPenaltis(m, nom, '-');
-          const tPen = pen ? ` ${pen}` : penaltisPendientes(m, fase) ? ' _(penaltis pendientes)_' : '';
+          const tPen = pen ? ` ${pen}` : penaltisPendientes(m, fase, partidos) ? ' _(penaltis pendientes)_' : '';
           return `${m.nombre ? `${m.nombre}: ` : ''}${nom(m.participante_local_id)} ${res ? `*${fmtNumWA(res.gL)}-${fmtNumWA(res.gV)}*` : 'vs'} ${nom(m.participante_visitante_id)}${tPen}${!res && m.jornada_fantasy ? ` _(J${m.jornada_fantasy})_` : ''}`;
         }) });
       }
@@ -14544,7 +15141,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             } else {
               partidos.filter(p => p.fase_id === fase.id).forEach(m => {
                 calRows.push([
-                  fase.nombre, '', m.ronda, m.jornada_fantasy || '',
+                  fase.nombre, fase.tipo === 'eliminatoria' ? `${rondaElim(fase, m.ronda)?.nombre || ''}${m.partido_n === 2 ? ' · Vuelta' : rondaElim(fase, m.ronda)?.formato === 'ida_vuelta' ? ' · Ida' : ''}` : '', m.ronda, m.jornada_fantasy || '',
                   nomMap[m.participante_local_id]?.nombre || '?',
                   m.goles_local ?? '', m.goles_visitante ?? '',
                   nomMap[m.participante_visitante_id]?.nombre || '?',
@@ -14584,9 +15181,22 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             });
           });
 
+          // ── Hoja Cuadro (fases eliminatorias) ──
+          const sheetCuadro = [['Fase', 'Ronda', 'Cruce', 'Local', 'Visitante', 'Resultado', 'Pasa']];
+          fases.filter(f => f.tipo === 'eliminatoria').forEach(fase => {
+            cruces.filter(c => c.fase_id === fase.id).sort((a, b) => a.ronda - b.ronda || a.posicion - b.posicion).forEach(c => {
+              const res = resultadoCruce(c, partidos, fase);
+              const nomX = pid => nomMap[pid]?.nombre || '';
+              const ms = partidos.filter(m => m.cruce_id === c.id).sort((a, b) => a.partido_n - b.partido_n).filter(partidoJugado);
+              sheetCuadro.push([fase.nombre, rondaElim(fase, c.ronda)?.nombre || c.ronda, c.posicion, nomX(c.local_id), c.exento ? 'exento' : nomX(c.visitante_id),
+                ms.map(m => `${golesDe(m, c.local_id)}-${golesDe(m, c.visitante_id)}${textoPenaltis(m, nomX, '-') ? ` ${textoPenaltis(m, nomX, '-')}` : ''}`).join(' / '),
+                res.estado === 'decidido' ? nomX(res.ganador) : '']);
+            });
+          });
           descargarExcel(compNombre || 'Torneo', [
             { nombre: 'Calendario', datos: sheetCalendario },
             { nombre: 'Clasificación', datos: sheetClasif },
+            ...(sheetCuadro.length > 1 ? [{ nombre: 'Cuadro', datos: sheetCuadro }] : []),
           ]);
         }}
         style={{padding:'.28rem .85rem',borderRadius:7,fontSize:'.82rem',
@@ -14604,7 +15214,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
             <span>{fase.nombre}</span>
             <span style={{fontSize:'.74rem',color:'var(--texto2)',fontWeight:400}}>
-              {fase.tipo==='grupos' ? '· Fase de grupos' : '· Partidos sueltos'}{fase.modo==='puntos' ? ' · Liga Fantástica' : ''}{fase.penaltis && fase.tipo==='sueltos' ? ' · 🥅 Penaltis si hay empate' : ''}
+              · {TIPOS_FASE[fase.tipo] || fase.tipo}{fase.modo==='puntos' ? ' · Liga Fantástica' : ''}{fase.penaltis && fase.tipo==='sueltos' ? ' · 🥅 Penaltis si hay empate' : ''}{fase.tipo==='eliminatoria' && fase.goles_fuera && fase.modo!=='puntos' ? ' · Goles fuera' : ''}
             </span>
             {(fase.pts_local??0)>0 && (
               <span style={{fontSize:'.72rem',background:'rgba(15,80,180,0.15)',
@@ -14704,6 +15314,13 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
             );
           })}
 
+          {/* Eliminatoria */}
+          {fase.tipo==='eliminatoria' && (
+            <div className="card" style={{marginBottom:'.5rem'}}>
+              <CuadroEliminatoria fase={fase} cruces={cruces} partidos={partidos} nombre={pid => nomMap[pid]?.nombre || '?'} />
+            </div>
+          )}
+
           {/* Partidos sueltos */}
           {fase.tipo==='sueltos' && (
             <div className="card" style={{marginBottom:'.5rem'}}>
@@ -14725,7 +15342,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                           color:res?'var(--texto)':'var(--texto2)'}}>
                           {res?`${res.gL} — ${res.gV}`:'vs'}
                           {pen && <span style={{display:'block',fontSize:'.72rem',fontWeight:600,color:'var(--texto2)'}}>{pen}</span>}
-                          {penaltisPendientes(m, fase) && <span style={{display:'block',fontSize:'.7rem',fontWeight:500,color:'var(--texto2)'}}>pen. pendientes</span>}
+                          {penaltisPendientes(m, fase, partidos) && <span style={{display:'block',fontSize:'.7rem',fontWeight:500,color:'var(--texto2)'}}>pen. pendientes</span>}
                         </span>
                         <span style={{flex:1,fontWeight:600}}><Equipo pid={m.participante_visitante_id} /></span>
                         <span style={{fontSize:'.74rem',fontWeight:700,
@@ -15865,7 +16482,10 @@ const ganadorPartidoTorneo = m => {
 // jugó. En la fase final (una final suelta o un único grupo) se decide campeón
 // y subcampeón; en el resto, por el nº de partidos de la fase (2 → semis, 4 →
 // cuartos…). `dudoso` = no se pudo deducir con seguridad (el admin lo revisa).
-function rondasTorneo(fases, grupos, gMiembros, partidos) {
+// Eliminatoria: cada equipo, por la última ronda que jugó (su nº de cruces);
+// si es la última fase y la final está decidida, campeón y subcampeón.
+const puestoPorCruces = n => n <= 1 ? 2 : n <= 2 ? 3 : n <= 4 ? 4 : n <= 8 ? 5 : n <= 16 ? 6 : 8;
+function rondasTorneo(fases, grupos, gMiembros, partidos, cruces = []) {
   const res = {};
   let dudoso = false;
   const asignar = (pid, puesto) => { if (pid && res[pid] == null) res[pid] = puesto; };
@@ -15876,9 +16496,28 @@ function rondasTorneo(fases, grupos, gMiembros, partidos) {
       if (m.participante_local_id) eq.add(m.participante_local_id);
       if (m.participante_visitante_id) eq.add(m.participante_visitante_id);
     });
+    cruces.filter(c => c.fase_id === f.id).forEach(c => { if (c.local_id) eq.add(c.local_id); if (c.visitante_id) eq.add(c.visitante_id); });
     return { f, eq, ms: partidos.filter(m => m.fase_id === f.id) };
   }).filter(x => x.eq.size);
   conEquipos.reverse().forEach(({ f, eq, ms }, i) => {
+    if (f.tipo === 'eliminatoria') {
+      const cs = cruces.filter(c => c.fase_id === f.id);
+      const nR = Math.max(0, ...cs.map(c => c.ronda));
+      if (i === 0) {
+        const final = cs.filter(c => c.ronda === nR);
+        if (nR && nR === (f.rondas || []).length && final.length === 1 && final[0].ganador_id) asignar(final[0].ganador_id, 1);
+        else dudoso = true;
+      }
+      for (let r = nR; r >= 1; r--) {
+        const csR = cs.filter(c => c.ronda === r);
+        const puesto = puestoPorCruces(crucesEnRonda(cs, r));
+        csR.forEach(c => {
+          if (!c.exento && !c.ganador_id && r === nR) dudoso = true;
+          asignar(c.local_id, puesto); asignar(c.visitante_id, puesto);
+        });
+      }
+      return;
+    }
     if (i === 0) {
       if (f.tipo === 'sueltos' && ms.length === 1) {
         const m = ms[0], g = ganadorPartidoTorneo(m);
@@ -16008,15 +16647,17 @@ async function calcularPalmaresTemporada(federacion, participantes) {
     const { data: fs, error: eF } = await sb.from('fases_competicion').select('*').in('competicion_id', compIds);
     if (eF) throw eF;
     const faseIds = (fs || []).map(f => f.id);
-    let gs = [], gm = {}, ps = [];
+    let gs = [], gm = {}, ps = [], cs = [];
     if (faseIds.length) {
-      const [rG, rP] = await Promise.all([
+      const elimIds = (fs || []).filter(f => f.tipo === 'eliminatoria').map(f => f.id);
+      const [rG, rP, rC] = await Promise.all([
         sb.from('grupos_competicion').select('id, fase_id').in('fase_id', faseIds),
         obtenerTodasLasFilas(() => sb.from('partidos_competicion')
           .select('id, fase_id, participante_local_id, participante_visitante_id, goles_local, goles_visitante, penaltis_ganador').in('fase_id', faseIds).order('id')),
+        elimIds.length ? sb.from('cruces_competicion').select('fase_id, ronda, posicion, local_id, visitante_id, exento, ganador_id').in('fase_id', elimIds) : vacio,
       ]);
-      if (rG.error || rP.error) throw rG.error || rP.error;
-      gs = rG.data || []; ps = rP.data || [];
+      if (rG.error || rP.error || rC.error) throw rG.error || rP.error || rC.error;
+      gs = rG.data || []; ps = rP.data || []; cs = rC.data || [];
       if (gs.length) {
         const { data: gps, error: eG } = await sb.from('grupos_participantes').select('grupo_id, participante_id').in('grupo_id', gs.map(g => g.id));
         if (eG) throw eG;
@@ -16025,7 +16666,7 @@ async function calcularPalmaresTemporada(federacion, participantes) {
     }
     comps.data.forEach(co => {
       const fasesC = (fs || []).filter(f => f.competicion_id === co.id);
-      const { res, dudoso } = rondasTorneo(fasesC, gs, gm, ps);
+      const { res, dudoso } = rondasTorneo(fasesC, gs, gm, ps, cs);
       const pids = Object.keys(res).filter(pid => partIds.includes(pid));
       if (!pids.length) return;
       competiciones.push({ tipo: 'torneo', nombre: co.nombre.slice(0, 60), participantes: pids.length,
@@ -20685,6 +21326,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
+        ['Eliminatorias', 'Una fase eliminatoria se muestra como un cuadro, con una columna por ronda. Cada ronda puede ser a partido único o a ida y vuelta (se suman los dos partidos; si la liga lo activa, después cuentan los goles fuera). Si sigue el empate y la ronda tiene penaltis, se decide en una tanda tras el partido (en ida y vuelta, tras la vuelta). Si no, el admin decide quién pasa. Los equipos exentos pasan de ronda sin jugar. En cuadro fijo, los cruces de las rondas siguientes se ven desde el principio ("Ganador C1") y se rellenan solos.'],
         ['Torneos en modo Liga Fantástica', 'Cada fase de un torneo puede jugarse en modo H2H (los puntos fantasy se convierten en goles con el baremo) o en modo Liga Fantástica (cuentan los puntos tal cual). En los partidos sueltos en modo Liga Fantástica gana quien hace más puntos en la jornada del partido. En las fases de grupos en modo Liga Fantástica no hay partidos: cada grupo se ordena por la suma de puntos de sus equipos en las jornadas de la fase (J = puntos de cada jornada). Si empatan, va delante quien ha ganado más jornadas dentro del grupo (JG) y después quien tiene la mejor jornada. Los comodines cuentan en un torneo solo si el admin los ha asignado a ese torneo.'],
         ['Copiar para WhatsApp', 'En Competiciones, el botón "📋 WhatsApp" copia en texto la clasificación que estás viendo (Liga Fantástica total o de una jornada, Liga FILFA con todas sus divisiones, o un torneo con sus grupos y partidos) para pegarla en un grupo de WhatsApp, con las negritas y medallas ya puestas.'],
         ['🎯 Quiniela', 'Si el admin la activa, en Competiciones → 🎯 Quiniela tienes cada jornada una quiniela con los partidos de la Liga FILFA y de los torneos que se juegan con esa jornada de la Liga Fantástica. En cada partido eliges 1, X o 2 (o el resultado exacto en goles, si el admin lo marca así) y pulsas "Enviar quiniela". Puedes cambiarla hasta el cierre de alineaciones (o, si no hay cierre, hasta que se cierre la jornada). Hasta entonces nadie más ve tus pronósticos, salvo el admin y los delegados de quinielas; después se hacen públicos.'],

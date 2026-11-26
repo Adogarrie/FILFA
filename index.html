@@ -12674,7 +12674,7 @@ const penaltisPendientes = (m, fase, partidos = []) => {
 // Ver supabase_eliminatorias.sql. Una fase 'eliminatoria' tiene rondas
 // (fases_competicion.rondas) y cada ronda, cruces (cruces_competicion) con
 // uno (único) o dos partidos (ida y vuelta: la vuelta invierte la localía).
-const TIPOS_FASE = { grupos: 'Fase de grupos', sueltos: 'Partidos sueltos', eliminatoria: 'Eliminatoria' };
+const TIPOS_FASE = { grupos: 'Fase de grupos', sueltos: 'Partidos sueltos', eliminatoria: 'Eliminatoria', suiza: 'Formato suizo' };
 const nombreRondaPorCruces = c => c <= 1 ? 'Final' : c === 2 ? 'Semifinales' : c <= 4 ? 'Cuartos de final'
   : c <= 8 ? 'Octavos de final' : c <= 16 ? 'Dieciseisavos de final' : `Ronda de ${c * 2}`;
 const rondaElim = (fase, r) => (fase?.rondas || [])[r - 1] || null;
@@ -12742,6 +12742,105 @@ function sortearGrupos(ids, nGrupos) {
     return { id, grupo: g.nombre };
   });
   return { grupos, bolas };
+}
+
+// ── Formato suizo ──
+// Ver supabase_suizo.sql. Descanso = partido sin visitante (cuenta como
+// victoria cuando el resto de la ronda está jugada).
+const esDescanso = m => !m.participante_visitante_id;
+
+// Clasificación: puntos, goles a favor, Buchholz (suma de los puntos de los
+// rivales a los que se ha enfrentado) y diferencia de goles.
+function clasificacionSuiza(partidos, equipos) {
+  const t = {};
+  const fila = pid => t[pid] || (t[pid] = { pid, pj: 0, g: 0, e: 0, p: 0, gf: 0, gc: 0, pts: 0, desc: 0, bh: 0, rivales: [] });
+  (equipos || []).forEach(fila);
+  const rondaCompleta = {};
+  partidos.forEach(m => { if (!esDescanso(m)) rondaCompleta[m.ronda] = (rondaCompleta[m.ronda] ?? true) && partidoJugado(m); });
+  partidos.forEach(m => {
+    if (esDescanso(m)) {
+      if (rondaCompleta[m.ronda] !== false) { const r = fila(m.participante_local_id); r.desc++; r.pts += 3; }
+      return;
+    }
+    if (!partidoJugado(m)) return;
+    const gL = Number(m.goles_local), gV = Number(m.goles_visitante);
+    const L = fila(m.participante_local_id), V = fila(m.participante_visitante_id);
+    L.pj++; V.pj++; L.gf += gL; L.gc += gV; V.gf += gV; V.gc += gL;
+    L.rivales.push(V.pid); V.rivales.push(L.pid);
+    if (gL > gV) { L.g++; L.pts += 3; V.p++; } else if (gV > gL) { V.g++; V.pts += 3; L.p++; } else { L.e++; V.e++; L.pts++; V.pts++; }
+  });
+  const filas = Object.values(t);
+  filas.forEach(r => { r.bh = r.rivales.reduce((s, pid) => s + (t[pid]?.pts || 0), 0); });
+  return filas.sort((a, b) => b.pts - a.pts || b.gf - a.gf || b.bh - a.bh || (b.gf - b.gc) - (a.gf - a.gc));
+}
+
+// Rivales ya emparejados (jugado o no) y equipos que ya descansaron.
+function historialSuizo(partidos) {
+  const rivales = new Map(), descansaron = new Set(), enCasa = {};
+  const add = (a, b) => { if (!rivales.has(a)) rivales.set(a, new Set()); rivales.get(a).add(b); };
+  partidos.forEach(m => {
+    if (esDescanso(m)) { descansaron.add(m.participante_local_id); return; }
+    add(m.participante_local_id, m.participante_visitante_id); add(m.participante_visitante_id, m.participante_local_id);
+    enCasa[m.participante_local_id] = (enCasa[m.participante_local_id] || 0) + 1;
+  });
+  return { rivales, descansaron, enCasa };
+}
+
+// Empareja `orden` (de mejor a peor) sin repetir rival: cada equipo con el
+// siguiente disponible (vuelta atrás si hace falta). Con nº impar descansa
+// el peor clasificado que no haya descansado. Devuelve { pares, descansa } o null.
+function emparejarSuizo(orden, hist) {
+  const candidatosDescanso = orden.length % 2
+    ? [...[...orden].reverse().filter(x => !hist.descansaron.has(x)), ...[...orden].reverse().filter(x => hist.descansaron.has(x))]
+    : [null];
+  for (const descansa of candidatosDescanso) {
+    const lista = orden.filter(x => x !== descansa);
+    const usado = new Set(), pares = [];
+    let pasos = 0;
+    const dfs = () => {
+      if (++pasos > 200000) return false;
+      const i = lista.findIndex(x => !usado.has(x));
+      if (i < 0) return true;
+      const a = lista[i]; usado.add(a);
+      for (let j = i + 1; j < lista.length; j++) {
+        const b = lista[j];
+        if (usado.has(b) || hist.rivales.get(a)?.has(b)) continue;
+        usado.add(b); pares.push([a, b]);
+        if (dfs()) return true;
+        pares.pop(); usado.delete(b);
+      }
+      usado.delete(a);
+      return false;
+    };
+    if (dfs()) return { pares, descansa };
+  }
+  return null;
+}
+
+// Localía: juega en casa quien menos partidos lleva como local (empate: al azar).
+function asignarLocaliaSuizo(pares, enCasa) {
+  return pares.map(([a, b]) => {
+    const ca = enCasa[a] || 0, cb = enCasa[b] || 0;
+    const aLocal = ca !== cb ? ca < cb : Math.random() < 0.5;
+    const [l, v] = aLocal ? [a, b] : [b, a];
+    enCasa[l] = (enCasa[l] || 0) + 1;
+    return [l, v];
+  });
+}
+
+// Nº máximo de rondas sin repetir rival.
+const maxRondasSuizo = n => n < 2 ? 0 : n % 2 ? n : n - 1;
+
+// Sorteo previo: todas las rondas a la vez (método del círculo sobre un
+// orden al azar: nadie repite rival ni descansa dos veces).
+function calendarioSuizoPrevio(equipos, nRondas) {
+  const rr = generarRoundRobin(barajar(equipos));
+  const enCasa = {};
+  return barajar(rr).slice(0, nRondas).map((r, k) => {
+    const juegan = new Set(r.partidos.flatMap(p => [p.localId, p.visitId]));
+    return { ronda: k + 1, pares: asignarLocaliaSuizo(r.partidos.map(p => [p.localId, p.visitId]), enCasa),
+             descansa: equipos.find(e => !juegan.has(e)) ?? null };
+  });
 }
 
 // Panel del sorteo de una fase de grupos. onConfirmar(sorteo, generarCalendario).
@@ -13119,7 +13218,8 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
     }).select().single();
     if (!error) { setFases(p => [...p, data]); setNewFaseName(''); setNewFaseModo('goles'); setShowNewFase(false); }
     else flash('Error: ' + (/modo/.test(error.message) ? 'falta ejecutar supabase_torneos_puntos.sql en Supabase.'
-      : newFaseTipo === 'eliminatoria' && /tipo|check/i.test(error.message) ? 'falta ejecutar supabase_eliminatorias.sql en Supabase.' : error.message));
+      : newFaseTipo === 'eliminatoria' && /tipo|check/i.test(error.message) ? 'falta ejecutar supabase_eliminatorias.sql en Supabase.'
+      : newFaseTipo === 'suiza' && /tipo|check/i.test(error.message) ? 'falta ejecutar supabase_suizo.sql en Supabase.' : error.message));
     setBusy(false);
   };
   const borrarFase = async id => {
@@ -13522,6 +13622,7 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
               <option value="grupos">Fase de grupos</option>
               <option value="sueltos">Partidos sueltos</option>
               <option value="eliminatoria">Eliminatoria</option>
+              <option value="suiza">Formato suizo</option>
             </select>
             <select value={newFaseModo} onChange={e=>setNewFaseModo(e.target.value)} style={inp}
                     title="H2H: los puntos se convierten en goles con el baremo. Liga Fantástica: cuentan los puntos tal cual">
@@ -13827,6 +13928,14 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
           cruces={cruces} setCruces={setCruces} setFases={setFases} busy={busy} setBusy={setBusy} flash={flash}
           actorNombre={actorNombre} calcularPartido={calcularSuelto} penaltisManual={penaltisManual} fasesComp={fases}
           copiarResultadosJornada={copiarResultadosJornada} copiadoJ={copiadoJ} estilos={{ sBtn, dBtn, inp }} />
+      )}
+
+      {/* Fase en formato suizo */}
+      {faseSel && faseAct?.tipo==='suiza' && (
+        <AdminSuiza federacion={federacion} fase={faseAct} compId={compSel} compNombre={compAct?.nombre || 'Competición'}
+          participantes={participantes} nomMap={nomMap} partidos={partidos} setPartidos={setPartidos} setFases={setFases}
+          busy={busy} setBusy={setBusy} flash={flash} actorNombre={actorNombre} copiarResultadosJornada={copiarResultadosJornada}
+          copiadoJ={copiadoJ} baremo={baremo} estilos={{ sBtn, dBtn, inp }} />
       )}
     </div>
   );
@@ -14393,6 +14502,328 @@ function AdminEliminatoria({ federacion, fase, compNombre, participantes, nomMap
       );
     })}
     <button disabled={busy} style={sBtn} onClick={anadirRonda}>+ Añadir ronda</button>
+  </>);
+}
+
+// Clasificación de una fase suiza.
+function TablaSuiza({ filas, nombre, estiloFila }) {
+  const th = { textAlign:'right', padding:'.38rem .45rem', color:'var(--texto2)' };
+  const td = { textAlign:'right', padding:'.38rem .45rem' };
+  const conDesc = filas.some(r => r.desc);
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{fontSize:'.82rem', borderCollapse:'collapse', minWidth:380}}>
+        <thead><tr>
+          <th style={{...th, textAlign:'left'}}>#</th>
+          <th style={{...th, textAlign:'left'}}>Equipo</th>
+          {['PJ','G','E','P'].map(h => <th key={h} style={th}>{h}</th>)}
+          {conDesc && <th style={th} title="Descansos (cuentan como victoria)">Des</th>}
+          {['GF','GC','Dif'].map(h => <th key={h} style={th}>{h}</th>)}
+          <th style={th} title="Buchholz: suma de los puntos de los rivales">Bh</th>
+          <th style={th}>Pts</th>
+        </tr></thead>
+        <tbody>
+          {filas.map((r, i) => (
+            <tr key={r.pid} style={{borderTop:'1px solid var(--gris)', ...(estiloFila ? estiloFila(i) : {})}}>
+              <td style={{...td, textAlign:'left', color:'var(--texto2)'}}>{i + 1}</td>
+              <td style={{...td, textAlign:'left', fontWeight: i === 0 ? 700 : 400}}>{nombre(r.pid)}</td>
+              <td style={{...td, color:'var(--texto2)'}}>{r.pj}</td>
+              <td style={td}>{r.g}</td><td style={td}>{r.e}</td><td style={td}>{r.p}</td>
+              {conDesc && <td style={{...td, color:'var(--texto2)'}}>{r.desc || ''}</td>}
+              <td style={td}>{fmtPtsCronica(r.gf)}</td><td style={td}>{fmtPtsCronica(r.gc)}</td>
+              <td style={{...td, fontWeight:600}}>{r.gf - r.gc >= 0 ? '+' : ''}{fmtPtsCronica(r.gf - r.gc)}</td>
+              <td style={{...td, color:'var(--texto2)'}}>{r.bh}</td>
+              <td style={{...td, fontWeight:800, fontSize:'.98rem'}}>{r.pts}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p style={{fontSize:'.74rem', color:'var(--texto2)', margin:'.4rem 0 0'}}>
+        Desempate: goles a favor, Buchholz (Bh, suma de los puntos de los rivales) y diferencia de goles.{conDesc ? ' Un descanso cuenta como victoria (3 pts, sin goles).' : ''}
+      </p>
+    </div>
+  );
+}
+
+// Partidos de una fase suiza por ronda (vista pública y admin).
+function RondasSuiza({ partidos, nombre, accion }) {
+  const rondas = [...new Set(partidos.map(m => m.ronda))].sort((a, b) => a - b);
+  return rondas.map(r => {
+    const ms = partidos.filter(m => m.ronda === r);
+    const j = ms.find(m => m.jornada_fantasy)?.jornada_fantasy;
+    return (
+      <div key={r} style={{marginBottom:'.55rem'}}>
+        <div style={{display:'flex', alignItems:'center', gap:'.4rem', flexWrap:'wrap', fontSize:'.76rem', fontWeight:700, color:'var(--texto2)', marginBottom:'.2rem'}}>
+          <span>Ronda {r}{j ? ` · J${j}` : ' · Jornada por asignar'}</span>
+          {accion && accion(r, ms, j)}
+        </div>
+        {ms.filter(m => !esDescanso(m)).map(m => (
+          <div key={m.id} style={{display:'flex', alignItems:'center', gap:'.4rem', padding:'.26rem .4rem', borderRadius:6, marginBottom:'.15rem',
+                                  fontSize:'.83rem', background: partidoJugado(m) ? 'var(--fondo-med)' : 'var(--fondo-sub)'}}>
+            <span style={{flex:1, textAlign:'right', fontWeight:600}}>{nombre(m.participante_local_id)}</span>
+            <span style={{minWidth:55, textAlign:'center', fontWeight:800, color: partidoJugado(m) ? 'var(--texto)' : 'var(--texto2)'}}>
+              {partidoJugado(m) ? `${m.goles_local} — ${m.goles_visitante}` : 'vs'}
+            </span>
+            <span style={{flex:1, fontWeight:600}}>{nombre(m.participante_visitante_id)}</span>
+          </div>
+        ))}
+        {ms.filter(esDescanso).map(m => (
+          <div key={m.id} style={{fontSize:'.78rem', color:'var(--texto2)', padding:'.1rem .4rem', fontStyle:'italic'}}>Descansa: {nombre(m.participante_local_id)}</div>
+        ))}
+      </div>
+    );
+  });
+}
+
+// ── ADMIN — FASE SUIZA ─────────────────────────────────────────
+// Equipos, nº de rondas y modo (sorteo previo o suizo clásico). Los partidos
+// se crean al confirmar cada sorteo; se calculan por ronda (una consulta de
+// puntos por ronda) igual que las rondas de grupos.
+function AdminSuiza({ federacion, fase, compId, compNombre, participantes, nomMap, partidos, setPartidos, setFases,
+                      busy, setBusy, flash, actorNombre, copiarResultadosJornada, copiadoJ, baremo, estilos }) {
+  const { sBtn, dBtn, inp } = estilos;
+  const fedId = federacion?.id;
+  const esPuntos = fase.modo === 'puntos';
+  const equipos = fase.equipos || [];
+  const nR = fase.suizo_rondas ?? 3;
+  const modo = fase.suizo_modo || 'clasico';
+  const nom = pid => nomMap[pid] || '?';
+  const rondasHechas = [...new Set(partidos.map(m => m.ronda))].sort((a, b) => a - b);
+  const ultima = rondasHechas.length ? rondasHechas[rondasHechas.length - 1] : 0;
+  const hayResultados = partidos.some(partidoJugado);
+  const [selEq, setSelEq] = useState(null);       // edición de equipos (null = cerrada)
+  const [rondasTxt, setRondasTxt] = useState(String(nR));
+  const [preview, setPreview] = useState(null);   // [{ ronda, pares, descansa }]
+  const [jNueva, setJNueva] = useState('');
+  const [jRonda, setJRonda] = useState({});
+  useEffect(() => { setRondasTxt(String(nR)); setPreview(null); setSelEq(null); }, [fase.id, nR]);
+
+  const guardarFase = async cambios => {
+    const { error } = await sb.from('fases_competicion').update(cambios).eq('id', fase.id);
+    if (error) { flash('Error: ' + (/equipos|suizo/.test(error.message) ? 'falta ejecutar supabase_suizo.sql en Supabase.' : error.message)); return false; }
+    setFases(prev => prev.map(f => f.id === fase.id ? { ...f, ...cambios } : f));
+    return true;
+  };
+  const guardarRondas = async () => {
+    const n = parseInt(rondasTxt);
+    const max = maxRondasSuizo(equipos.length);
+    if (!(n >= 1 && n <= 30)) { flash('Error: rondas de 1 a 30'); return; }
+    if (equipos.length >= 2 && n > max) { flash(`Error: con ${equipos.length} equipos caben como mucho ${max} rondas sin repetir rival`); return; }
+    if (n < ultima) { flash(`Error: ya hay ${ultima} rondas creadas`); return; }
+    if (await guardarFase({ suizo_rondas: n })) flash(`Rondas: ${n}`);
+  };
+  const guardarEquipos = async () => {
+    if (selEq.length < 2) { flash('Error: elige al menos dos equipos'); return; }
+    if (await guardarFase({ equipos: selEq })) { setSelEq(null); flash(`${selEq.length} equipos en la fase`); }
+  };
+
+  // ── Sorteos ──
+  const hist = historialSuizo(partidos);
+  const rondaCompleta = r => partidos.filter(m => m.ronda === r && !esDescanso(m)).every(partidoJugado);
+  const siguiente = ultima + 1;
+  const puedeGenerar = modo === 'previo'
+    ? ultima === 0
+    : siguiente <= nR && (ultima === 0 || rondaCompleta(ultima));
+  const generar = () => {
+    if (equipos.length < 2) { flash('Error: elige primero los equipos'); return; }
+    if (nR > maxRondasSuizo(equipos.length)) { flash(`Error: con ${equipos.length} equipos caben como mucho ${maxRondasSuizo(equipos.length)} rondas`); return; }
+    if (modo === 'previo') { setPreview(calendarioSuizoPrevio(equipos, nR)); return; }
+    // Ronda 1 al azar; después, por la clasificación actual (empates al azar).
+    const orden = siguiente === 1 ? barajar(equipos)
+      : (() => { const filas = clasificacionSuiza(partidos, equipos); const az = new Map(barajar(equipos).map((p, i) => [p, i]));
+                 return [...filas].sort((a, b) => (b.pts - a.pts || b.gf - a.gf || b.bh - a.bh || (b.gf - b.gc) - (a.gf - a.gc)) || az.get(a.pid) - az.get(b.pid)).map(r => r.pid); })();
+    const em = emparejarSuizo(orden, hist);
+    if (!em) { flash('Error: no hay emparejamiento posible sin repetir rival'); return; }
+    setPreview([{ ronda: siguiente, pares: asignarLocaliaSuizo(em.pares, { ...hist.enCasa }), descansa: em.descansa, orden }]);
+  };
+  const confirmar = async () => {
+    const j = parseInt(jNueva);
+    const jornada = modo === 'clasico' && j >= 1 && j <= 38 ? j : null;
+    const rows = preview.flatMap(r => [
+      ...r.pares.map(([l, v]) => ({ fase_id: fase.id, federacion_id: fedId, grupo_id: null, ronda: r.ronda,
+                                    participante_local_id: l, participante_visitante_id: v, jornada_fantasy: jornada })),
+      ...(r.descansa ? [{ fase_id: fase.id, federacion_id: fedId, grupo_id: null, ronda: r.ronda,
+                          participante_local_id: r.descansa, participante_visitante_id: null, jornada_fantasy: jornada }] : []),
+    ]);
+    setBusy(true);
+    const { data, error } = await sb.from('partidos_competicion').insert(rows).select();
+    setBusy(false);
+    if (error) { flash('Error: ' + error.message); return; }
+    setPartidos(prev => [...prev, ...(data || [])]);
+    // Puesto de cada equipo antes de la ronda (solo suizo clásico, desde la ronda 2).
+    const puestos = modo === 'clasico' && siguiente > 1 ? Object.fromEntries(clasificacionSuiza(partidos, equipos).map((f, i) => [f.pid, i + 1])) : {};
+    const lineas = preview.flatMap(r => {
+      const pos = puestos;
+      const et = pid => pos[pid] ? `${nom(pid)} (${pos[pid]}.º)` : nom(pid);
+      return [`${preview.length > 1 ? `Ronda ${r.ronda}: ` : ''}${r.pares.map(([l, v]) => `${et(l)} – ${et(v)}`).join(', ')}${r.descansa ? `; descansa ${nom(r.descansa)}` : ''}.`];
+    });
+    const titulo = modo === 'previo' ? `🎲 Sorteo del calendario (formato suizo, ${preview.length} rondas)`
+      : siguiente === 1 ? '🎲 Sorteo de la ronda 1 (formato suizo)' : `Ronda ${siguiente} (formato suizo): emparejamientos por clasificación`;
+    publicar(fedId, 'admin', `${titulo} — ${compNombre} · ${fase.nombre}\n${lineas.join('\n')}`, actorNombre);
+    if (jornada) resolverQuinielaJornada(federacion, jornada);
+    setPreview(null); setJNueva('');
+    flash(modo === 'previo' ? 'Calendario creado' : `Ronda ${siguiente} creada`);
+  };
+  const borrarUltima = async () => {
+    const r = ultima;
+    const ids = modo === 'previo' ? partidos.map(m => m.id) : partidos.filter(m => m.ronda === r).map(m => m.id);
+    if (partidos.filter(m => ids.includes(m.id)).some(partidoJugado)) { flash('Error: hay partidos con resultado'); return; }
+    if (!confirm(modo === 'previo' ? '¿Borrar el calendario para volver a sortearlo?' : `¿Borrar la ronda ${r}?`)) return;
+    const { error } = await sb.from('partidos_competicion').delete().in('id', ids);
+    if (error) { flash('Error: ' + error.message); return; }
+    setPartidos(prev => prev.filter(m => !ids.includes(m.id)));
+  };
+
+  // ── Jornada y cálculo por ronda ──
+  const asignarJornada = async r => {
+    const j = parseInt(jRonda[r]);
+    if (!(j >= 1 && j <= 38)) { flash('Jornada inválida'); return; }
+    const { error } = await sb.from('partidos_competicion').update({ jornada_fantasy: j }).eq('fase_id', fase.id).eq('ronda', r);
+    if (error) { flash('Error: ' + error.message); return; }
+    setPartidos(prev => prev.map(m => m.ronda === r ? { ...m, jornada_fantasy: j } : m));
+    resolverQuinielaJornada(federacion, j);
+    flash(`J${j} asignada a la ronda ${r}`);
+  };
+  const calcularRonda = async (r, j) => {
+    const ms = partidos.filter(m => m.ronda === r && !esDescanso(m));
+    if (!ms.length || !j) return;
+    setBusy(true);
+    try {
+      const pids = [...new Set(ms.flatMap(m => [m.participante_local_id, m.participante_visitante_id]))];
+      const pts = await puntosTorneoJornada(federacion, compId, pids, j);
+      if (!Object.keys(pts).length) { flash(`Aún no hay puntos de la J${j}`); return; }
+      const ventaja = fase.pts_local ?? 0;
+      const ups = ms.map(m => {
+        const pL = (pts[m.participante_local_id] ?? 0) + ventaja, pV = pts[m.participante_visitante_id] ?? 0;
+        return { id: m.id, goles_local: esPuntos ? Math.round(pL) : ptsToGoles(pL, baremo), goles_visitante: esPuntos ? Math.round(pV) : ptsToGoles(pV, baremo) };
+      });
+      const res = await Promise.all(ups.map(u => sb.from('partidos_competicion').update({ goles_local: u.goles_local, goles_visitante: u.goles_visitante }).eq('id', u.id)));
+      const err = res.find(x => x.error)?.error;
+      const ok = new Set(ups.filter((u, i) => !res[i].error).map(u => u.id));
+      setPartidos(prev => prev.map(m => { const u = ups.find(x => x.id === m.id); return u && ok.has(m.id) ? { ...m, ...u } : m; }));
+      if (err) { flash(`Error en ${ups.length - ok.size} partidos: ${err.message}`); return; }
+      publicar(fedId, 'admin', `Resultados calculados — ${compNombre}, ${fase.nombre}, ronda ${r}.`, actorNombre);
+      resolverQuinielaJornada(federacion, j);
+      flash(`Ronda ${r} calculada`);
+    } catch (e) { flash('Error: ' + e.message); }
+    finally { setBusy(false); }
+  };
+
+  const filas = clasificacionSuiza(partidos, equipos);
+  const chip = on => ({ padding:'.15rem .45rem', borderRadius:10, cursor:'pointer', fontSize:'.76rem',
+    border:`1.5px solid ${on ? 'var(--verde)' : 'var(--borde)'}`, background: on ? 'rgba(40,167,69,.1)' : 'var(--fondo-alt)' });
+
+  return (<>
+    {/* Configuración */}
+    <div style={{padding:'.55rem .75rem', borderRadius:8, border:'1.5px solid var(--borde)', background:'var(--fondo-sub)', marginBottom:'.75rem', fontSize:'.84rem'}}>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem 1.2rem', alignItems:'center'}}>
+        <label style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
+          <span style={{fontWeight:600}}>Emparejamientos:</span>
+          <select value={modo} disabled={partidos.length > 0} onChange={e => guardarFase({ suizo_modo: e.target.value })} style={{...inp, padding:'.26rem .4rem'}}>
+            <option value="clasico">Suizo clásico (cada ronda, por clasificación)</option>
+            <option value="previo">Sorteo previo (todas las rondas al principio)</option>
+          </select>
+        </label>
+        <span style={{display:'flex', alignItems:'center', gap:'.35rem'}}>
+          <span style={{fontWeight:600}}>Rondas:</span>
+          <input type="number" min="1" max="30" value={rondasTxt} onChange={e => setRondasTxt(e.target.value)} disabled={modo === 'previo' && partidos.length > 0}
+                 style={{...inp, width:56, textAlign:'center', padding:'.26rem .3rem'}} />
+          {String(nR) !== rondasTxt && <button style={sBtn} onClick={guardarRondas}>Guardar</button>}
+        </span>
+      </div>
+      <div style={{fontSize:'.76rem', color:'var(--texto2)', marginTop:'.35rem'}}>
+        {modo === 'clasico'
+          ? 'La ronda 1 se sortea; cada ronda siguiente empareja a equipos con puntuación parecida (1.º contra 2.º…, sin repetir rival) cuando la anterior está calculada.'
+          : 'Todas las rondas se sortean a la vez, sin repetir rival: el calendario se conoce desde el principio.'}
+        {' '}Con nº impar de equipos, cada ronda descansa uno (cuenta como victoria y nadie descansa dos veces).
+      </div>
+    </div>
+
+    {/* Equipos */}
+    <div style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.6rem .7rem', marginBottom:'.75rem', background:'var(--fondo-sub)', fontSize:'.82rem'}}>
+      <div style={{display:'flex', alignItems:'center', gap:'.4rem', flexWrap:'wrap', marginBottom:'.35rem'}}>
+        <strong>Equipos ({(selEq || equipos).length})</strong>
+        {selEq == null && partidos.length === 0 && <button style={{...sBtn, fontSize:'.74rem'}} onClick={() => setSelEq([...equipos])}>Editar</button>}
+        {selEq != null && <>
+          <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => setSelEq(participantes.map(p => p.id))}>Todos</button>
+          <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => setSelEq([])}>Ninguno</button>
+          <button disabled={busy} className="btn-ok" onClick={guardarEquipos}>Guardar</button>
+          <button className="btn-cancel" onClick={() => setSelEq(null)}>Cancelar</button>
+        </>}
+        {partidos.length > 0 && <span style={{color:'var(--texto2)', fontSize:'.74rem'}}>(no se pueden cambiar con partidos creados)</span>}
+      </div>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem'}}>
+        {selEq != null
+          ? [...participantes].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(p => {
+              const on = selEq.includes(p.id);
+              return <span key={p.id} style={chip(on)} onClick={() => setSelEq(s => on ? s.filter(x => x !== p.id) : [...s, p.id])}>{on ? '✓ ' : ''}{p.nombre}</span>;
+            })
+          : equipos.length ? equipos.map(pid => <span key={pid} style={{...chip(false), cursor:'default'}}>{nom(pid)}</span>)
+          : <span style={{color:'var(--texto2)'}}>Sin equipos: pulsa Editar.</span>}
+      </div>
+      {equipos.length >= 2 && <div style={{fontSize:'.74rem', color:'var(--texto2)', marginTop:'.3rem'}}>Como mucho {maxRondasSuizo(equipos.length)} rondas sin repetir rival.</div>}
+    </div>
+
+    {/* Generar */}
+    {equipos.length >= 2 && (puedeGenerar || preview) && (
+      <div style={{border:'1.5px dashed var(--borde)', borderRadius:8, padding:'.55rem', marginBottom:'.75rem', background:'var(--fondo-alt)', fontSize:'.8rem'}}>
+        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
+          <button disabled={busy} style={{...sBtn, fontWeight:700}} onClick={generar}>
+            🎲 {preview ? 'Repetir' : modo === 'previo' ? `Sortear el calendario (${nR} rondas)` : siguiente === 1 ? 'Sortear la ronda 1' : `Emparejar la ronda ${siguiente}`}
+          </button>
+          {preview && <button style={{...sBtn, marginLeft:'auto'}} onClick={() => setPreview(null)}>Cancelar</button>}
+        </div>
+        {preview && (
+          <div style={{marginTop:'.45rem', borderTop:'1px solid var(--borde)', paddingTop:'.4rem'}}>
+            {preview.map(r => (
+              <div key={r.ronda} style={{marginBottom:'.3rem'}}>
+                <strong>Ronda {r.ronda}:</strong> {r.pares.map(([l, v]) => `${nom(l)} – ${nom(v)}`).join(' · ')}
+                {r.descansa && <em style={{color:'var(--texto2)'}}> · descansa {nom(r.descansa)}</em>}
+              </div>
+            ))}
+            <div style={{display:'flex', gap:'.4rem', alignItems:'center', flexWrap:'wrap', marginTop:'.35rem'}}>
+              {modo === 'clasico' && <>
+                <span>Jornada</span>
+                <input type="number" min="1" max="38" placeholder="—" value={jNueva} onChange={e => setJNueva(e.target.value)}
+                       style={{...inp, width:56, textAlign:'center', padding:'.24rem .3rem'}} />
+              </>}
+              <button disabled={busy} className="btn-ok" onClick={confirmar}>Confirmar y publicar</button>
+            </div>
+          </div>
+        )}
+      </div>
+    )}
+    {modo === 'clasico' && ultima > 0 && ultima < nR && !rondaCompleta(ultima) && (
+      <p style={{fontSize:'.78rem', color:'var(--texto2)'}}>La ronda {ultima + 1} se empareja cuando la ronda {ultima} esté calculada.</p>
+    )}
+
+    {/* Clasificación y rondas */}
+    {equipos.length > 0 && (
+      <div style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.7rem', marginBottom:'.75rem', background:'var(--fondo-sub)'}}>
+        <TablaSuiza filas={filas} nombre={nom} />
+      </div>
+    )}
+    {partidos.length > 0 && (
+      <div style={{border:'1.5px solid var(--borde)', borderRadius:9, padding:'.7rem', background:'var(--fondo-sub)'}}>
+        <RondasSuiza partidos={partidos} nombre={nom} accion={(r, ms, j) => (
+          <span style={{display:'inline-flex', gap:'.3rem', alignItems:'center', marginLeft:'auto', fontWeight:400}}>
+            <input type="number" min="1" max="38" placeholder="J" value={jRonda[r] ?? ''} onChange={e => setJRonda(x => ({ ...x, [r]: e.target.value }))}
+                   style={{...inp, width:52, textAlign:'center', padding:'.22rem .3rem'}} />
+            <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => asignarJornada(r)}>Asignar</button>
+            <button disabled={busy || !j} style={{...sBtn, fontSize:'.72rem', opacity: j ? 1 : .45}} onClick={() => calcularRonda(r, j)}>
+              {ms.filter(m => !esDescanso(m)).some(partidoJugado) ? '↻ Recalcular' : '▶ Calcular'}
+            </button>
+            <button disabled={busy || !j} style={{...sBtn, fontSize:'.72rem', opacity: j ? 1 : .45}}
+                    onClick={() => copiarResultadosJornada(ms.filter(m => !esDescanso(m)), j, `sz_${r}`, `Ronda ${r}`)}>
+              {copiadoJ === `sz_${r}` ? '¡Copiado!' : '📋'}
+            </button>
+            {(modo === 'previo' ? r === 1 : r === ultima) && !(modo === 'previo' ? hayResultados : ms.some(partidoJugado)) && (
+              <button style={{...dBtn, fontSize:'.7rem'}} onClick={borrarUltima}>{modo === 'previo' ? 'Borrar calendario' : 'Borrar ronda'}</button>
+            )}
+          </span>
+        )} />
+      </div>
+    )}
   </>);
 }
 
@@ -15429,6 +15860,10 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
               });
           secciones.push({ titulo: `${fase.nombre} · ${grupo.nombre}`, lineas: lineasClasificacionWA(filas) });
         });
+      } else if (fase.tipo === 'suiza') {
+        const filas = clasificacionSuiza(partidos.filter(m => m.fase_id === fase.id), fase.equipos || [])
+          .map(r => ({ nombre: nom(r.pid), pts: r.pts, extra: `${r.pj} PJ · ${r.gf} GF · Bh ${r.bh}` }));
+        secciones.push({ titulo: `${fase.nombre} (formato suizo)`, lineas: lineasClasificacionWA(filas) });
       } else if (fase.tipo === 'eliminatoria') {
         (fase.rondas || []).forEach((ronda, i) => {
           const csR = cruces.filter(c => c.fase_id === fase.id && c.ronda === i + 1).sort((a, b) => a.posicion - b.posicion);
@@ -15489,7 +15924,7 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
                   fase.nombre, fase.tipo === 'eliminatoria' ? `${rondaElim(fase, m.ronda)?.nombre || ''}${m.partido_n === 2 ? ' · Vuelta' : rondaElim(fase, m.ronda)?.formato === 'ida_vuelta' ? ' · Ida' : ''}` : '', m.ronda, m.jornada_fantasy || '',
                   nomMap[m.participante_local_id]?.nombre || '?',
                   m.goles_local ?? '', m.goles_visitante ?? '',
-                  nomMap[m.participante_visitante_id]?.nombre || '?',
+                  m.participante_visitante_id ? (nomMap[m.participante_visitante_id]?.nombre || '?') : '(descansa)',
                   penXls(m),
                 ]);
               });
@@ -15502,6 +15937,14 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
           const clasHeader = ['Grupo', 'Pos', 'Equipo', 'PJ', 'G', 'E', 'P', 'GF', 'GC', 'DIF', 'PTS'];
           sheetClasif.push(clasHeader);
           fases.forEach(fase => {
+            if (fase.tipo === 'suiza') {
+              sheetClasif.push([]);
+              sheetClasif.push([`${fase.nombre} — formato suizo`]);
+              sheetClasif.push(['', 'Pos', 'Equipo', 'PJ', 'G', 'E', 'P', 'Desc', 'GF', 'GC', 'DIF', 'Buchholz', 'PTS']);
+              clasificacionSuiza(partidos.filter(m => m.fase_id === fase.id), fase.equipos || []).forEach((r, i) => sheetClasif.push(
+                ['', i + 1, nomMap[r.pid]?.nombre || r.pid, r.pj, r.g, r.e, r.p, r.desc, r.gf, r.gc, r.gf - r.gc, r.bh, r.pts]));
+              return;
+            }
             if (fase.tipo !== 'grupos') return;
             grupos.filter(g => g.fase_id === fase.id).forEach(grupo => {
               sheetClasif.push([]);
@@ -15658,6 +16101,25 @@ function TorneosVista({ federacion, participantes, isAdmin }) {
               </div>
             );
           })}
+
+          {/* Formato suizo */}
+          {fase.tipo==='suiza' && (() => {
+            const ms = partidos.filter(m => m.fase_id === fase.id);
+            const nombre = pid => nomMap[pid]?.nombre || '?';
+            return (
+              <div className="card" style={{marginBottom:'.5rem'}}>
+                <TablaSuiza filas={clasificacionSuiza(ms, fase.equipos || [])} nombre={nombre}
+                            estiloFila={i => getClasifColor(federacion?.clasif_colores?.['grupos_' + compSel] || federacion?.clasif_colores?.grupos, i + 1)} />
+                <div style={{marginTop:'.75rem'}}>
+                  {ms.length ? <RondasSuiza partidos={ms} nombre={nombre} />
+                    : <p style={{color:'var(--texto2)', fontSize:'.85rem'}}>Emparejamientos pendientes.</p>}
+                  <p style={{fontSize:'.74rem', color:'var(--texto2)', margin:'.2rem 0 0'}}>
+                    {fase.suizo_rondas ?? 3} rondas · {fase.suizo_modo === 'previo' ? 'calendario sorteado al principio' : 'cada ronda se empareja por la clasificación'}.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Eliminatoria */}
           {fase.tipo==='eliminatoria' && (
@@ -16845,6 +17307,15 @@ function rondasTorneo(fases, grupos, gMiembros, partidos, cruces = []) {
     return { f, eq, ms: partidos.filter(m => m.fase_id === f.id) };
   }).filter(x => x.eq.size);
   conEquipos.reverse().forEach(({ f, eq, ms }, i) => {
+    if (f.tipo === 'suiza') {
+      const filas = clasificacionSuiza(ms, f.equipos || []);
+      if (i === 0) {
+        const rondas = new Set(ms.map(m => m.ronda)).size;
+        if (rondas < (f.suizo_rondas ?? 3) || ms.some(m => !esDescanso(m) && !partidoJugado(m))) dudoso = true;
+        filas.forEach((r, k) => asignar(r.pid, k === 0 ? 1 : k === 1 ? 2 : 7));
+      } else filas.forEach(r => asignar(r.pid, 7));
+      return;
+    }
     if (f.tipo === 'eliminatoria') {
       const cs = cruces.filter(c => c.fase_id === f.id);
       const nR = Math.max(0, ...cs.map(c => c.ronda));
@@ -16998,7 +17469,7 @@ async function calcularPalmaresTemporada(federacion, participantes) {
       const [rG, rP, rC] = await Promise.all([
         sb.from('grupos_competicion').select('id, fase_id').in('fase_id', faseIds),
         obtenerTodasLasFilas(() => sb.from('partidos_competicion')
-          .select('id, fase_id, participante_local_id, participante_visitante_id, goles_local, goles_visitante, penaltis_ganador').in('fase_id', faseIds).order('id')),
+          .select('id, fase_id, ronda, participante_local_id, participante_visitante_id, goles_local, goles_visitante, penaltis_ganador').in('fase_id', faseIds).order('id')),
         elimIds.length ? sb.from('cruces_competicion').select('fase_id, ronda, posicion, local_id, visitante_id, exento, ganador_id').in('fase_id', elimIds) : vacio,
       ]);
       if (rG.error || rP.error || rC.error) throw rG.error || rP.error || rC.error;
@@ -21671,6 +22142,7 @@ function Ayuda({ isAdmin, maxJugadores = 14, pctVenta = 100 }) {
         ['Liga FILFA — Estadísticas', 'Contador de jornadas en cada posición de la clasificación H2H: cuántas veces lideró cada equipo, cuántas estuvo en el podio o en el farolillo.'],
         ['Liga FILFA — 🔮 Predicción', 'Probabilidad de que cada equipo termine en cada puesto de la Liga FILFA, por división. Se simulan 10.000 veces todos los partidos pendientes del calendario: los puntos fantasy de cada equipo se sortean según su nivel estimado (con sus puntos de la Liga Fantástica, igual que en la predicción de la Liga Fantástica), el local suma su bonus de esa vuelta y se pasan a goles con el baremo de la liga; se tienen en cuenta los enfrentamientos directos que quedan y los criterios de desempate configurados. Verás el puesto esperado, la probabilidad de ser campeón y de terminar en el podio y, si el admin ha configurado colores de clasificación, la probabilidad de terminar en cada zona (por ejemplo, la de descenso). Pulsa un equipo para ver sus puntos esperados al final y su probabilidad en cada puesto. Debajo verás la clasificación final estimada (puntos más probables de cada equipo con su rango en 8 de cada 10 simulaciones, y goles a favor, en contra y diferencia esperados) y "¿Cuántos puntos hacen falta?": por ejemplo, con 25 puntos un 90% de bajar y con 28 un 5%, o con 51 un 50% de ser campeón (incluye los desempates). La calcula el admin; es una estimación, no tiene en cuenta fichajes, lesiones, alineaciones ni comodines futuros.'],
         ['Torneos', 'Muestra las competiciones creadas por el admin. En las fases de grupos verás la tabla de clasificación de cada grupo y el calendario de partidos por ronda.'],
+        ['Formato suizo', 'Una clasificación única en la que cada equipo juega unas pocas rondas (3 por defecto) sin repetir rival. Según el torneo, todas las rondas se sortean al principio o cada ronda empareja a equipos con puntuación parecida según la clasificación del momento. Victoria 3 puntos, empate 1. Desempate: goles a favor, Buchholz (suma de los puntos de los rivales a los que te enfrentaste) y diferencia de goles. Con nº impar de equipos, en cada ronda descansa uno: cuenta como victoria y nadie descansa dos veces.'],
         ['Eliminatorias', 'Una fase eliminatoria se muestra como un cuadro, con una columna por ronda. Cada ronda puede ser a partido único o a ida y vuelta (se suman los dos partidos; si la liga lo activa, después cuentan los goles fuera). Si sigue el empate y la ronda tiene penaltis, se decide en una tanda tras el partido (en ida y vuelta, tras la vuelta). Si no, el admin decide quién pasa. Los equipos exentos pasan de ronda sin jugar. En cuadro fijo, los cruces de las rondas siguientes se ven desde el principio ("Ganador C1") y se rellenan solos.'],
         ['Torneos en modo Liga Fantástica', 'Cada fase de un torneo puede jugarse en modo H2H (los puntos fantasy se convierten en goles con el baremo) o en modo Liga Fantástica (cuentan los puntos tal cual). En los partidos sueltos en modo Liga Fantástica gana quien hace más puntos en la jornada del partido. En las fases de grupos en modo Liga Fantástica no hay partidos: cada grupo se ordena por la suma de puntos de sus equipos en las jornadas de la fase (J = puntos de cada jornada). Si empatan, va delante quien ha ganado más jornadas dentro del grupo (JG) y después quien tiene la mejor jornada. Los comodines cuentan en un torneo solo si el admin los ha asignado a ese torneo.'],
         ['Copiar para WhatsApp', 'En Competiciones, el botón "📋 WhatsApp" copia en texto la clasificación que estás viendo (Liga Fantástica total o de una jornada, Liga FILFA con todas sus divisiones, o un torneo con sus grupos y partidos) para pegarla en un grupo de WhatsApp, con las negritas y medallas ya puestas.'],

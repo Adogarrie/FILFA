@@ -12730,6 +12730,87 @@ function crucesPorPatron(grupos, n) {
   return [...arriba, ...abajo];
 }
 
+// Sorteo de grupos: las bolas salen al azar y se reparten por turnos
+// (A, B, C, A, B…), así los grupos quedan equilibrados (como mucho, uno de
+// diferencia). Devuelve { grupos: [{ nombre, ids }], bolas: [{ id, grupo }] }.
+const nombreGrupo = i => `Grupo ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
+function sortearGrupos(ids, nGrupos) {
+  const grupos = Array.from({ length: nGrupos }, (_, i) => ({ nombre: nombreGrupo(i), ids: [] }));
+  const bolas = barajar(ids).map((id, k) => {
+    const g = grupos[k % nGrupos];
+    g.ids.push(id);
+    return { id, grupo: g.nombre };
+  });
+  return { grupos, bolas };
+}
+
+// Panel del sorteo de una fase de grupos. onConfirmar(sorteo, generarCalendario).
+function SorteoGrupos({ participantes, nombre, esPuntos, busy, estilos, onConfirmar, onCancelar }) {
+  const { sBtn, inp } = estilos;
+  const [sel, setSel] = useState([]);
+  const [nG, setNG] = useState(2);
+  const [res, setRes] = useState(null);
+  const [conCal, setConCal] = useState(!esPuntos);
+  const n = Math.max(1, parseInt(nG) || 1);
+  const ordenados = [...participantes].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const tam = sel.length ? (sel.length % n ? `${Math.floor(sel.length / n)}-${Math.ceil(sel.length / n)}` : `${sel.length / n}`) : '—';
+  const valido = sel.length >= 2 * n;
+  const tog = id => { setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]); setRes(null); };
+  return (
+    <div style={{border:'1.5px dashed var(--borde)', borderRadius:8, padding:'.6rem', margin:'.5rem 0', background:'var(--fondo-alt)', fontSize:'.8rem'}}>
+      <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center', marginBottom:'.4rem'}}>
+        <strong>Equipos: {sel.length}</strong>
+        <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => { setSel(participantes.map(p => p.id)); setRes(null); }}>Todos</button>
+        <button style={{...sBtn, fontSize:'.72rem'}} onClick={() => { setSel([]); setRes(null); }}>Ninguno</button>
+        <span style={{marginLeft:'.6rem'}}>Grupos:</span>
+        <input type="number" min="1" max="26" value={nG} onChange={e => { setNG(e.target.value); setRes(null); }}
+               style={{...inp, width:52, textAlign:'center', padding:'.22rem .3rem'}} />
+        <span style={{color:'var(--texto2)'}}>({tam} equipos por grupo)</span>
+      </div>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'.3rem', marginBottom:'.45rem'}}>
+        {ordenados.map(p => {
+          const on = sel.includes(p.id);
+          return (
+            <span key={p.id} onClick={() => tog(p.id)}
+                  style={{padding:'.15rem .45rem', borderRadius:10, cursor:'pointer', fontSize:'.76rem',
+                          border:`1.5px solid ${on ? 'var(--verde)' : 'var(--borde)'}`, background: on ? 'rgba(40,167,69,.1)' : 'var(--fondo-alt)'}}>
+              {on ? '✓ ' : ''}{p.nombre}
+            </span>
+          );
+        })}
+      </div>
+      <div style={{display:'flex', gap:'.35rem', flexWrap:'wrap', alignItems:'center'}}>
+        <button disabled={busy || !valido} style={{...sBtn, fontWeight:700, opacity: valido ? 1 : .5}}
+                title={valido ? '' : 'Hacen falta al menos 2 equipos por grupo'}
+                onClick={() => setRes(sortearGrupos(sel, n))}>🎲 {res ? 'Repetir sorteo' : 'Sortear'}</button>
+        {!valido && sel.length > 0 && <span style={{color:'var(--texto2)'}}>Hacen falta al menos 2 equipos por grupo.</span>}
+        <button style={{...sBtn, marginLeft:'auto'}} onClick={onCancelar}>Cancelar</button>
+      </div>
+      {res && (
+        <div style={{marginTop:'.5rem', borderTop:'1px solid var(--borde)', paddingTop:'.45rem'}}>
+          <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem'}}>
+            {res.grupos.map(g => (
+              <div key={g.nombre} style={{border:'1px solid var(--borde)', borderRadius:7, padding:'.35rem .5rem', minWidth:130, background:'var(--fondo-sub)'}}>
+                <div style={{fontWeight:700, marginBottom:'.2rem'}}>{g.nombre}</div>
+                {g.ids.map(id => <div key={id}>{nombre(id)}</div>)}
+              </div>
+            ))}
+          </div>
+          <div style={{display:'flex', gap:'.5rem', alignItems:'center', marginTop:'.5rem', flexWrap:'wrap'}}>
+            {!esPuntos && (
+              <label style={{display:'flex', alignItems:'center', gap:'.3rem', cursor:'pointer'}}>
+                <input type="checkbox" checked={conCal} onChange={e => setConCal(e.target.checked)} />
+                Generar también el calendario de cada grupo
+              </label>
+            )}
+            <button disabled={busy} className="btn-ok" onClick={() => onConfirmar(res, !esPuntos && conCal)}>Confirmar y publicar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ¿Este partido de eliminatoria, con este resultado, se decide en penaltis?
 // Único: empate. Ida y vuelta: solo la vuelta, con el global empatado (y los
 // goles fuera, si cuentan). Siempre que la ronda tenga penaltis.
@@ -13055,6 +13136,50 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
     }).select().single();
     if (!error) { setGrupos(p => [...p, data]); setNewGrupoName(''); setShowNewGrupo(false); }
     setBusy(false);
+  };
+  // ── Sorteo de grupos ──
+  // Solo con la fase sin equipos ni partidos (los grupos vacíos que haya se sustituyen).
+  const [showSorteoG, setShowSorteoG] = useState(false);
+  useEffect(() => { setShowSorteoG(false); }, [faseSel]);
+  const puedeSortearGrupos = grupos.every(g => !(gMiembros[g.id] || []).length) && !partidos.length;
+  const confirmarSorteoGrupos = async ({ grupos: gs, bolas }, conCal) => {
+    setBusy(true);
+    try {
+      if (grupos.length) {
+        const { error } = await sb.from('grupos_competicion').delete().in('id', grupos.map(g => g.id));
+        if (error) throw error;
+      }
+      const { data: nuevos, error: e1 } = await sb.from('grupos_competicion')
+        .insert(gs.map(g => ({ fase_id: faseSel, federacion_id: fedId, nombre: g.nombre }))).select();
+      if (e1) throw e1;
+      const idDe = Object.fromEntries((nuevos || []).map(g => [g.nombre, g.id]));
+      const { error: e2 } = await sb.from('grupos_participantes')
+        .insert(gs.flatMap(g => g.ids.map(pid => ({ grupo_id: idDe[g.nombre], federacion_id: fedId, participante_id: pid }))));
+      if (e2) throw e2;
+      let ps = [];
+      if (conCal) {
+        const rows = gs.flatMap(g => generarRoundRobin(g.ids).flatMap(({ ronda, partidos: pp }) => pp.map(({ localId, visitId }) => ({
+          fase_id: faseSel, federacion_id: fedId, grupo_id: idDe[g.nombre],
+          participante_local_id: localId, participante_visitante_id: visitId, ronda }))));
+        const { data, error: e3 } = await sb.from('partidos_competicion').insert(rows).select();
+        if (e3) throw e3;
+        ps = data || [];
+      }
+      setGrupos([...(nuevos || [])].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es', { numeric: true })));
+      setGMiembros(Object.fromEntries(gs.map(g => [idDe[g.nombre], [...g.ids]])));
+      setPartidos(ps);
+      const nom = pid => nomMap[pid] || '?';
+      publicar(fedId, 'admin', [
+        `🎲 Sorteo de grupos — ${compAct?.nombre || 'Competición'} · ${faseAct?.nombre || 'Fase de grupos'}`,
+        ...bolas.map((b, i) => `${i + 1}.ª bola: ${nom(b.id)} → ${b.grupo}`),
+        '',
+        ...gs.map(g => `${g.nombre}: ${g.ids.map(nom).join(', ')}`),
+      ].join('\n'), actorNombre);
+      setShowSorteoG(false);
+      flash(`${gs.length} grupos sorteados${conCal ? ' con su calendario' : ''}`);
+    } catch (e) {
+      flash('Error: ' + e.message + ' (recarga la fase para ver qué se guardó)');
+    } finally { setBusy(false); }
   };
   const borrarGrupo = async gid => {
     if (!confirm('¿Borrar grupo y sus partidos?')) return;
@@ -13554,6 +13679,10 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
             </div>
           );
         })}
+        {showSorteoG && (
+          <SorteoGrupos participantes={participantes} nombre={pid => nomMap[pid] || '?'} esPuntos={esPuntos} busy={busy}
+                        estilos={{ sBtn, inp }} onConfirmar={confirmarSorteoGrupos} onCancelar={() => setShowSorteoG(false)} />
+        )}
         {showNewGrupo ? (
           <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', alignItems:'center'}}>
             <input placeholder="Nombre del grupo (ej: Grupo A)" value={newGrupoName}
@@ -13563,7 +13692,12 @@ function AdminCompeticiones({ federacion, participantes, actorNombre, onFederaci
             <button className="btn-cancel" onClick={()=>{setShowNewGrupo(false);setNewGrupoName('');}}>Cancelar</button>
           </div>
         ) : (
-          <button style={sBtn} onClick={()=>setShowNewGrupo(true)}>+ Nuevo grupo</button>
+          <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap'}}>
+            <button style={sBtn} onClick={()=>setShowNewGrupo(true)}>+ Nuevo grupo</button>
+            {puedeSortearGrupos && !showSorteoG && (
+              <button style={sBtn} onClick={()=>setShowSorteoG(true)} title="Elige participantes y número de grupos; se reparten al azar">🎲 Sortear grupos</button>
+            )}
+          </div>
         )}
       </>)}
 
